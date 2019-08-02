@@ -92,6 +92,9 @@ public final class ReblockGVCF extends VariantWalker {
 
     private final static int PLOIDY_TWO = 2;  //assume diploid genotypes
 
+    private boolean isInDeletion = false;  //state variable to keep track of whether this locus is covered by a deletion (even a low quality one we'll change), so we don't generate overlapping ref blocks
+    private int homRefStart = 1;  //the next base after the end of the deletion, when we should start outputting ref conf blocks again
+
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="File to which variants should be written")
     private GATKPath outputFile;
@@ -256,15 +259,61 @@ public final class ReblockGVCF extends VariantWalker {
             return null;
         }
 
+        final int oldBlockEnd = homRefStart;
+        boolean isContained = false;
+        boolean trimCurrent = false;
+        //handle overlapping deletions so there are no duplicate bases
+         // this is under the assumption that HaplotypeCaller doesn't give us overlapping bases, which isn't really true
+        if (result.getReference().length() > 1) {  //TODO: could potentially handle incoming GVCFs with overlapping blocks
+            if (homRefStart < result.getStart() + result.getReference().length() - 1) {
+                homRefStart = result.getStart() + result.getReference().length();
+                if (isInDeletion) {
+                    trimCurrent = true;
+                }
+            }
+            else if (isInDeletion){
+                isContained = true;
+            }
+            isInDeletion = true;
+        }
+
         //variants with PL[0] less than threshold get turned to homRef with PL=[0,0,0], shouldn't get INFO attributes
         //make sure we can call het variants with GQ >= rgqThreshold in joint calling downstream
         if(shouldBeReblocked(result)) {
+            if (isContained) {
+                return null;
+            }
+            final VariantContextBuilder builder = new VariantContextBuilder(result);
+            if (trimCurrent) {
+                final Allele trimmedRef = getRefForTrimmedDeletion(result.getReference(), result.getStart());
+                builder.alleles(Arrays.asList(trimmedRef));
+            }
             return lowQualVariantToGQ0HomRef(result, originalVC);
         }
         //high quality variant
         else {
+            //TODO: trouble is when there is a high quality deletion that starts within a low qual deletion that went to ref block because that END tag has already been written
+            if (trimCurrent) {
+                System.out.println("Ooops, we need to trim the previous block.");
+                //Queue the low quality deletions until we hit a high quality variant or the start is past the oldBlockEnd
+                //Oh no, do we have to split the deletion-ref blocks???
+                //For variants inside spanning deletion, * likelihood goes to zero?  Or matches ref?
+            }
             return cleanUpHighQualityVariant(result, originalVC);
         }
+    }
+
+    /**
+     * Gets the reference base to start a new block based on homRefStart
+     * @param originalRef
+     * @param originalStart
+     * @return
+     */
+    private Allele getRefForTrimmedDeletion(final Allele originalRef, final int originalStart) {
+        final byte[] originalBases = originalRef.getBases();
+        final int firstBaseToKeep = homRefStart - (originalStart + originalRef.length() - 1);
+        final byte[] newBases = Arrays.copyOfRange(originalBases, firstBaseToKeep, originalBases.length);
+        return Allele.create(newBases, true);
     }
 
     private boolean isHomRefBlock(final VariantContext result) {

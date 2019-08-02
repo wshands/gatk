@@ -17,6 +17,7 @@ import org.testng.Assert;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -212,5 +213,15 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         Assert.assertEquals(outputVCs.stream().filter(vc -> vc.getGenotype(0).hasGQ()).count(), outputVCs.size());
         //we didn't ask to drop GQ0s, but they might get merged together
         Assert.assertEquals(inputVCs.stream().anyMatch(vc -> vc.getGenotype(0).getGQ() == 0), outputVCs.stream().anyMatch(vc -> vc.getGenotype(0).getGQ() == 0));
+    }
+
+    @Test
+    public void testOverlappingDeletions() throws IOException {
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                "-O %s -R " + hg38_reference_20_21 +
+                        " -V " + getToolTestDataDir() + "overlappingDeletions.hc.g.vcf" +
+                        " --" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE + " false",
+                Arrays.asList(getToolTestDataDir() + "expected.overlappingDeletions.g.vcf"));
+        spec.executeTest("testOverlappingDeletions", this);
     }
 }
