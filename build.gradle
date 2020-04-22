@@ -366,11 +366,9 @@ dependencies {
     compile 'org.broadinstitute:gatk-bwamem-jni:1.0.4'
     compile 'org.broadinstitute:gatk-fermilite-jni:1.2.0'
 
-    compile 'org.broadinstitute:http-nio:0.1.0-rc1'
-
     // Required for COSMIC Funcotator data source:
     compile 'org.xerial:sqlite-jdbc:3.20.1'
-    
+
     // Required for SV Discovery machine learning
     compile group: 'biz.k11i', name: 'xgboost-predictor', version: '0.3.0'
 
@@ -420,9 +418,6 @@ def createGatkSymlinks(destinationDir, archivePath, suffix, baseJarName, seconda
     createSymlinks(archivePath.getAbsolutePath(), symlinkLocation)
     createSymlinks(archivePath.getAbsolutePath(), symlinkLocation2)
 }
-
-// TODO was this added for a reason or was it removed from master
-//version = (isRelease ? gitVersion() : gitVersion() + "-SNAPSHOT").replaceAll(".dirty", "")
 
 logger.info("build for version:" + version)
 group = 'org.broadinstitute'
@@ -928,7 +923,7 @@ install {
             addFilter('gatk', gatkArtifactFilter)
                     .project(basePomConfiguration)
                     .project{ name "GATK4"}
-            
+
             addFilter('gatk-test-utils', gatkTestUtilsArtifactFilter)
                     .project(basePomConfiguration)
                     .project{ name "GATK4 Test Utilities" }
