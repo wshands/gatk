@@ -52,7 +52,7 @@ public class CommonCode {
         return StringUtils.join(gsStrings, separator);
     }
 
-    public static VCFHeader generateRawArrayVcfHeader(Set<String> sampleNames, final SAMSequenceDictionary sequenceDictionary) {       
+    public static VCFHeader generateRawArrayVcfHeader(Set<String> sampleNames, final SAMSequenceDictionary sequenceDictionary) {
         final Set<VCFHeaderLine> lines = new HashSet<>();
 
         lines.add(VCFStandardHeaderLines.getFormatLine(VCFConstants.GENOTYPE_KEY));
