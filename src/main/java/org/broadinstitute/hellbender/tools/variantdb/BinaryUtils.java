@@ -1,15 +1,15 @@
 package org.broadinstitute.hellbender.tools.variantdb;
 
 public class BinaryUtils {
-    // Function to extract k bits from p position (0-based) 
-    // and returns the extracted value as integer 
+    // Function to extract k bits from p position (0-based)
+    // and returns the extracted value as integer
     public static long extractBits(long number, int p, int k) {
         // make a bit-mask of the desired number of bits
         long mask = ((1L << k) - 1L);
-       
+
         // shift desired data to be the lowest ordered bits, and apply mask
-        return (mask) & (number >>> p); 
-    } 
+        return (mask) & (number >>> p);
+    }
 
     // 0xFF (255) is reserved as NULL
     public static long encodeTo8Bits(Float e, float minValue, float maxValue) {
@@ -28,7 +28,7 @@ public class BinaryUtils {
         float range = maxValue - minValue;
         float n = (e - minValue) / range;
         return Math.round(n * 254.0f);
-    } 
+    }
 
 
     // 0xFF (255) is reserved as NULL
@@ -40,7 +40,7 @@ public class BinaryUtils {
         float range = maxValue - minValue;
         float n = (1.0f / 254.0f) * ((float) i);
         return n * range + minValue;
-    } 
+    }
 
     /**
      * Converts an long to a 64-bit binary string
