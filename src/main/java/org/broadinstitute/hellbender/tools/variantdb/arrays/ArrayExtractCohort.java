@@ -136,7 +136,7 @@ public class ArrayExtractCohort extends GATKTool {
         doc = "Filter variants with a call rate less than this value",
         optional = true)
     private float callRateThreshold = 0.95f;
-    
+
     @Argument(
         fullName = "filter-invariants",
         doc = "Filter variants with no called variants in the qc metrics",

@@ -29,7 +29,7 @@ import static org.broadinstitute.hellbender.tools.variantdb.arrays.ExtractCohort
 public class ArrayExtractCohortEngine {
     private final DecimalFormat df = new DecimalFormat();
     private final String DOT = ".";
-    
+
     private static final Logger logger = LogManager.getLogger(ArrayExtractCohortEngine.class);
 
     private final VariantContextWriter vcfWriter;
@@ -90,7 +90,7 @@ public class ArrayExtractCohortEngine {
 
         this.df.setMaximumFractionDigits(3);
         this.df.setGroupingSize(0);
-                                
+
         this.localSortMaxRecordsInRam = localSortMaxRecordsInRam;
 
         this.readProjectId = readProjectId;
@@ -283,7 +283,7 @@ public class ArrayExtractCohortEngine {
             if (probeQcMetrics.invariant && filterInvariants) {
                 builder.filter("INVARIANT");
             }
-            
+
 
             // TODO: implement "remove-filtered-variants"
             finalVC = builder.make();

@@ -23,7 +23,7 @@ import java.util.Set;
  *     NORMY, // intensity
  *     BAF // b allele fraction --> AD proxy
  *     LRR // Log R ratio --> intensity value instead of DP
- * 
+ *
  */
 
 public enum RawArrayFieldEnum {
