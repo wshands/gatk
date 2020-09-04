@@ -85,7 +85,7 @@ public class ProbeInfo {
 
                 // use comma as separator
                 final String[] fields = line.split(",");
-                
+
                 // ProbeId,Name,GenomeBuild,Chr,Position,Ref,AlleleA,AlleleB,build37Flag
                 // 6,ilmnseq_rs9651229_F2BT,37,1,567667,,,,PROBE_SEQUENCE_MISMATCH
                 final ProbeInfo p = new ProbeInfo(
@@ -118,7 +118,7 @@ public class ProbeInfo {
         long start = System.currentTimeMillis();
 
         try (final StorageAPIAvroReader reader = new StorageAPIAvroReader(tableRef, readProjectId)) {
-            for ( final GenericRecord row : reader ) {                
+            for ( final GenericRecord row : reader ) {
                 ProbeInfo p = new ProbeInfo(
                     (Long) row.get(ProbeInfoSchema.PROBE_ID),
                     getOptionalString(row, ProbeInfoSchema.NAME),
@@ -155,12 +155,12 @@ public class ProbeInfo {
 
     @Override
     public String toString() {
-        return "ProbeInfo [contig=" + contig 
+        return "ProbeInfo [contig=" + contig
                 + ", name=" + name + ", position=" + position + ", probeId=" + probeId + ", ref=" + ref + ", refBuild="
                 + refBuild + ", alleleA=" + alleleA + ", alleleB=" + alleleB + ", flag=" + flag + "]";
     }
 
 
-    
+
 
 }
