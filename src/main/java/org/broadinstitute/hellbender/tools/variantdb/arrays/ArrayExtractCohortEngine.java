@@ -10,7 +10,6 @@ import org.broadinstitute.hellbender.engine.ProgressMeter;
 import org.broadinstitute.hellbender.engine.ReferenceDataSource;
 import org.broadinstitute.hellbender.tools.variantdb.SampleList;
 import org.broadinstitute.hellbender.tools.variantdb.arrays.BasicArrayData.ArrayGenotype;
-import org.broadinstitute.hellbender.tools.variantdb.CommonCode;
 import org.broadinstitute.hellbender.tools.variantdb.SchemaUtils;
 import org.broadinstitute.hellbender.tools.variantdb.arrays.tables.ProbeInfo;
 import org.broadinstitute.hellbender.tools.variantdb.arrays.tables.ProbeQcMetrics;
