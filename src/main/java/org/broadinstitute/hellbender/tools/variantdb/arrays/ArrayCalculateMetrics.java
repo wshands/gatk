@@ -45,7 +45,7 @@ public class ArrayCalculateMetrics extends GATKTool {
 
     public enum HeaderFieldEnum {
         probe_id,
-        hwe_pval,
+        excess_het,
         call_rate,
         invariant
     }
