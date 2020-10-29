@@ -80,7 +80,7 @@ public enum VetFieldEnum {
             }
             if (out != null) {
                 if(!out.endsWith("|0.00")) {
-// KC: we are seeing a TON of these!                    
+// KC: we are seeing a TON of these!
 //                    logger.warn("Expected AS_RAW_MQ value to end in |0.00. value is: " + out + " for variant " + variant.toString());
                 }
                 out = out.substring(0, out.lastIndexOf("|"));
@@ -129,12 +129,12 @@ public enum VetFieldEnum {
                 // TODO: it looks like the AS_RAW version also trims to a single decimal point??
                 // e.g. MQRankSum=1.465 and turn it into |1.465,1|
                 String outNotAlleleSpecific = getAttribute(variant, GATKVCFConstants.READ_POS_RANK_SUM_KEY, null);
-                
-                
+
+
                 if ( outNotAlleleSpecific == null || "".equals(outNotAlleleSpecific) || outNotAlleleSpecific.contentEquals("||") || outNotAlleleSpecific.contentEquals("|||") ) {
                     return "";
                 }
-                
+
                 if (variant.getAlleles().size() == 3) { // GT 0/1 1/1
                     out = "|" + outNotAlleleSpecific + ",1|";
 
@@ -143,7 +143,7 @@ public enum VetFieldEnum {
                     out = "|" + outNotAlleleSpecific + ",1|" + outNotAlleleSpecific + ",1|";
                 } else {
                     throw new UserException("Expected diploid sample to either have 3 alleles (ref, alt, non-ref) or 4 alleles (ref, alt 1, alt 2, non-ref)");
-                }               
+                }
             }
 
             if ( out == null || out.contentEquals("||") || out.contentEquals("|||") ) {
@@ -231,7 +231,7 @@ public enum VetFieldEnum {
                     out = "|" + outNotAlleleSpecific + ",1|" + outNotAlleleSpecific + ",1|";
                 } else {
                     throw new UserException("Expected diploid sample to either have 3 alleles (ref, alt, non-ref) or 4 alleles (ref, alt 1, alt 2, non-ref)");
-                }               
+                }
             }
 
             if (out == null || out.contentEquals("||") || out.contentEquals("|||") ) {
