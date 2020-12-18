@@ -38,7 +38,7 @@ public final class PetTsvCreator {
     private GenomeLocSortedSet coverageLocSortedSet;
     private static String PET_FILETYPE_PREFIX = "pet_";
 
-    public PetTsvCreator(String sampleName, String sampleId, String tableNumberPrefix, SAMSequenceDictionary seqDictionary, GQStateEnum gqStateToIgnore, final boolean dropAboveGqThreshold, final File outputDirectory, final CommonCode.OutputType outputType) {
+    public PetTsvCreator(String sampleName, String sampleId, String tableNumberPrefix, SAMSequenceDictionary seqDictionary, GQStateEnum gqStateToIgnore, final boolean dropAboveGqThreshold, final File outputDirectory, final CommonCode.OutputType outputType, boolean explodeRefBlocks) {
         this.sampleId = sampleId;
         this.seqDictionary = seqDictionary;
         this.outputType = outputType;
@@ -50,6 +50,9 @@ public final class PetTsvCreator {
             switch (outputType) {
                 case TSV:                
                     List<String> petHeader = PetTsvCreator.getHeaders();
+                    // KCIBUL: hacky
+                    if (!explodeRefBlocks) petHeader.add("length");
+                    
                     petTsvWriter = new SimpleXSVWriter(petOutputFile.toPath(), IngestConstants.SEPARATOR);
                     petTsvWriter.setHeaderLine(petHeader);
                     break;
@@ -109,7 +112,7 @@ public final class PetTsvCreator {
 
     }
 
-    public void apply(VariantContext variant, List<GenomeLoc> intervalsToWrite) throws IOException {
+    public void apply(VariantContext variant, List<GenomeLoc> intervalsToWrite, boolean explodeRefBlocks) throws IOException {
         boolean firstInterval = true;
         final String variantChr = variant.getContig();
 
@@ -139,14 +142,16 @@ public final class PetTsvCreator {
                             SchemaUtils.encodeLocation(variantChr, start),
                             SchemaUtils.encodeLocation(variantChr, end),
                             variant,
-                            sampleId
+                            sampleId,
+                            explodeRefBlocks
                     );
                 } else {
                     TSVLinesToCreatePet = createRows(
                             SchemaUtils.encodeLocation(variantChr, start),
                             SchemaUtils.encodeLocation(variantChr, end),
                             variant,
-                            sampleId
+                            sampleId,
+                            explodeRefBlocks
                     );
                 }
 
@@ -180,7 +185,7 @@ public final class PetTsvCreator {
 
     }
 
-    public void writeMissingIntervals(GenomeLocSortedSet intervalArgumentGenomeLocSortedSet) throws IOException {
+    public void writeMissingIntervals(GenomeLocSortedSet intervalArgumentGenomeLocSortedSet, boolean explodeRefBlocks) throws IOException {
         GenomeLocSortedSet uncoveredIntervals = intervalArgumentGenomeLocSortedSet.subtractRegions(coverageLocSortedSet);
         logger.info("MISSING_GREP_HERE:" + uncoveredIntervals.coveredSize());
         logger.info("MISSING_PERCENTAGE_GREP_HERE:" + (1.0 * uncoveredIntervals.coveredSize()) / intervalArgumentGenomeLocSortedSet.coveredSize());
@@ -190,7 +195,8 @@ public final class PetTsvCreator {
             for (List<String> TSVLineToCreatePet : PetTsvCreator.createMissingTSV(
                     SchemaUtils.encodeLocation(contig, genomeLoc.getStart()),
                     SchemaUtils.encodeLocation(contig, genomeLoc.getEnd()),
-                    sampleId
+                    sampleId,
+                    explodeRefBlocks
             )) {
                 long location = Long.parseLong(TSVLineToCreatePet.get(0));
                 long sampleId = Long.parseLong(TSVLineToCreatePet.get(1));
@@ -231,7 +237,7 @@ public final class PetTsvCreator {
         previousInterval = new SimpleInterval(possiblyMergedGenomeLoc);
     }
 
-    public List<List<String>> createRows(final long start, final long end, final VariantContext variant, final String sampleId) {
+    public List<List<String>> createRows(final long start, final long end, final VariantContext variant, final String sampleId, boolean explodeRefBlocks) {
 
         List<List<String>> rows = new ArrayList<>();
 
@@ -240,6 +246,9 @@ public final class PetTsvCreator {
             row.add(String.valueOf(start));
             row.add(sampleId);
             row.add(GQStateEnum.VARIANT.value);
+
+            if (!explodeRefBlocks) row.add("");
+
             rows.add(row);
 
             //if variant is variant and has additional positions--must be a deletion: add `*` state
@@ -248,18 +257,31 @@ public final class PetTsvCreator {
                 row.add(String.valueOf(i));
                 row.add(sampleId);
                 row.add(GQStateEnum.STAR.value);
+
+                if (!explodeRefBlocks) row.add("");
+
                 rows.add(row);
             }
         } else {
             // TODO check in the tool to make sure it's only one sample
             GQStateEnum state = getGQStateEnum(variant.getGenotype(0).getGQ());
 
-            for (long position = start; position <= end; position++){ // break up ref blocks
-                List<String> row = new ArrayList<>();
+            if (explodeRefBlocks) {
+                for (long position = start; position <= end; position++){ // break up ref blocks
+                    List<String> row = new ArrayList<>();
 
-                row.add(String.valueOf(position));
+                    row.add(String.valueOf(position));
+                    row.add(sampleId);
+                    row.add(state.value);
+                    rows.add(row);
+                }
+            } else {
+                long length = end-start+1;
+                List<String> row = new ArrayList<>();
+                row.add(String.valueOf(start));
                 row.add(sampleId);
                 row.add(state.value);
+                row.add(String.valueOf(length));
                 rows.add(row);
             }
         }
@@ -268,7 +290,7 @@ public final class PetTsvCreator {
     }
 
 
-    public List<List<String>> createSpanDelRows(final long start, final long end, final VariantContext variant, final String sampleName) {
+    public List<List<String>> createSpanDelRows(final long start, final long end, final VariantContext variant, final String sampleName, boolean explodeRefBlocks) {
         if (variant.isReferenceBlock()){
             throw new IllegalStateException("Cannot create span deletion rows for a reference block");
         }
@@ -281,23 +303,37 @@ public final class PetTsvCreator {
             row.add(String.valueOf(position));
             row.add(sampleName);
             row.add(GQStateEnum.STAR.value);
+
+            // KCIBUL -- clean up
+            if (!explodeRefBlocks) row.add("");
+
             rows.add(row);
         }
 
         return rows;
     }
 
-    public static List<List<String>> createMissingTSV(long start, long end, String sampleName) {
+    public static List<List<String>> createMissingTSV(long start, long end, String sampleName, boolean explodeRefBlocks) {
         List<List<String>> rows = new ArrayList<>();
 
-        for (long position = start; position <= end; position ++){
+        if (explodeRefBlocks) {
+            for (long position = start; position <= end; position ++){
+                List<String> row = new ArrayList<>();
+                row.add(String.valueOf(position));
+                row.add(sampleName);
+                row.add(GQStateEnum.MISSING.value);
+                rows.add(row);
+            }
+        } else {
+            long length = end-start+1;
+
             List<String> row = new ArrayList<>();
-            row.add(String.valueOf(position));
+            row.add(String.valueOf(start));
             row.add(sampleName);
             row.add(GQStateEnum.MISSING.value);
+            row.add(String.valueOf(length));
             rows.add(row);
         }
-
         return rows;
     }
 

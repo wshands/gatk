@@ -68,6 +68,12 @@ public final class CreateVariantIngestFiles extends VariantWalker {
     optional = true)
     public boolean dropAboveGqThreshold = false;
 
+    @Argument(fullName = "explode-ref-blocks",
+    shortName = "exr",
+    doc = "if true (default) explode reference blocks into single-base rows, otherwise add a 'length' column to output and keep ranges",
+    optional = true)
+    public boolean explodeRefBlocks = true;
+
     @Argument(fullName = "sample-name-mapping",
             shortName = "SNM",
             doc = "Sample name to sample id mapping",
@@ -151,7 +157,7 @@ public final class CreateVariantIngestFiles extends VariantWalker {
         final GenomeLocSortedSet genomeLocSortedSet = new GenomeLocSortedSet(new GenomeLocParser(seqDictionary));
         intervalArgumentGenomeLocSortedSet = GenomeLocSortedSet.createSetFromList(genomeLocSortedSet.getGenomeLocParser(), IntervalUtils.genomeLocsFromLocatables(genomeLocSortedSet.getGenomeLocParser(), intervalArgumentCollection.getIntervals(seqDictionary)));
 
-        petTsvCreator = new PetTsvCreator(sampleName, sampleId, tableNumberPrefix, seqDictionary, gqStateToIgnore, dropAboveGqThreshold, outputDir, outputType);
+        petTsvCreator = new PetTsvCreator(sampleName, sampleId, tableNumberPrefix, seqDictionary, gqStateToIgnore, dropAboveGqThreshold, outputDir, outputType, explodeRefBlocks);
         switch (mode) {
             case EXOMES:
             case GENOMES:
@@ -192,7 +198,7 @@ public final class CreateVariantIngestFiles extends VariantWalker {
             vetTsvCreator.apply(variant, readsContext, referenceContext, featureContext);
         }
         try {
-            petTsvCreator.apply(variant, intervalsToWrite);
+            petTsvCreator.apply(variant, intervalsToWrite, explodeRefBlocks);
         } catch (IOException ioe) {
             throw new GATKException("Error writing PET", ioe);
         }
@@ -202,7 +208,7 @@ public final class CreateVariantIngestFiles extends VariantWalker {
     @Override
     public Object onTraversalSuccess() {
         try {
-            petTsvCreator.writeMissingIntervals(intervalArgumentGenomeLocSortedSet);
+            petTsvCreator.writeMissingIntervals(intervalArgumentGenomeLocSortedSet, explodeRefBlocks);
         } catch (IOException ioe) {
             throw new GATKException("Error writing missing intervals", ioe);
         }

@@ -18,7 +18,7 @@ PET_TABLE_PREFIX = "pet_"
 VET_TABLE_PREFIX = "vet_"
 SAMPLES_PER_PARTITION = 4000
 
-TEMP_TABLE_TTL = " OPTIONS( expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)) "
+TEMP_TABLE_TTL = " OPTIONS( expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)) "
 FINAL_TABLE_TTL = ""
 #FINAL_TABLE_TTL = " OPTIONS( expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)) "
 
@@ -141,15 +141,16 @@ def create_position_table(fq_temp_table_dataset, min_variant_samples):
   if min_variant_samples > 0:
       min_sample_clause = f"HAVING count(distinct sample_id) >= {min_variant_samples}"
 
-  create_vet_distinct_pos_query = client.query(
-        f"""
+  sql = f"""
           create or replace table `{dest}` {TEMP_TABLE_TTL}
           as (
             select location from `{fq_temp_table_dataset}.{VET_NEW_TABLE}` GROUP BY location {min_sample_clause}
           )
         """
-    )
-
+  
+  print(sql)
+  
+  create_vet_distinct_pos_query = client.query(sql)        
   create_vet_distinct_pos_query.result()
   JOB_IDS.add((f"create positions table {dest}", create_vet_distinct_pos_query.job_id))
   return
@@ -180,7 +181,7 @@ def make_new_pet_union_all(fq_pet_vet_dataset, fq_temp_table_dataset, cohort):
         "q_all AS (" + (" union all ".join([ f"(SELECT * FROM q_{id})" for id in subs.keys()]))  + ")\n" + \
         f" (SELECT * FROM q_all)"
 
-  #print(sql)      
+  print(sql)      
   print(f"PET Query is {utf8len(sql)/(1024*1024)} MB in length")
   results = execute_with_retry("insert pet new table", sql)    
   return results
@@ -210,7 +211,7 @@ def populate_final_extract_table(fq_temp_table_dataset, fq_destination_dataset, 
           LEFT OUTER JOIN
             `{fq_sample_mapping_table}` s ON (new_pet.sample_id = s.sample_id))
       """
-  #print(sql)
+  print(sql)
   cohort_extract_final_query_job = client.query(sql)
 
   cohort_extract_final_query_job.result()
