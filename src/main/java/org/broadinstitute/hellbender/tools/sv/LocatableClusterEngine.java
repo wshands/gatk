@@ -1,15 +1,17 @@
 package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.samtools.util.Locatable;
-import org.broadinstitute.hellbender.utils.*;
+import org.broadinstitute.hellbender.utils.GenomeLoc;
+import org.broadinstitute.hellbender.utils.GenomeLocParser;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.Utils;
 import scala.Tuple2;
 
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-public abstract class LocatableClusterEngine<T extends Locatable> {
+public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
     protected final TreeMap<GenomeLoc, Integer> genomicToBinMap;
     protected final List<GenomeLoc> coverageIntervals;
@@ -29,7 +31,9 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
     private String currentContig;
 
 
-    public LocatableClusterEngine(final SAMSequenceDictionary dictionary, final CLUSTERING_TYPE clusteringType, final List<GenomeLoc> coverageIntervals) {
+    public LocatableClusterEngine(final SAMSequenceDictionary dictionary,
+                                  final CLUSTERING_TYPE clusteringType,
+                                  final List<GenomeLoc> coverageIntervals) {
         this.dictionary = dictionary;
         this.clusteringType = clusteringType;
         this.currentClusters = new LinkedList<>();
@@ -53,15 +57,14 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
 
     abstract protected boolean clusterTogether(final T a, final T b);
     abstract protected SimpleInterval getClusteringInterval(final T item, final SimpleInterval currentClusterInterval);
-    abstract protected T deduplicateIdenticalItems(final Collection<T> items);
-    abstract protected boolean itemsAreIdentical(final T a, final T b);
     abstract protected T flattenCluster(final Collection<T> cluster);
+    abstract protected SVDeduplicator<T> getDeduplicator();
 
     public List<T> getOutput() {
         flushClusters();
         final List<T> output;
         if (clusteringType == CLUSTERING_TYPE.MAX_CLIQUE) {
-            output = deduplicateItems(outputBuffer);
+            output = getDeduplicator().deduplicateItems(outputBuffer);
         } else {
             output = new ArrayList<>(outputBuffer);
         }
@@ -82,9 +85,9 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
     public void add(final T item) {
 
         // Start a new cluster if on a new contig
-        if (!item.getContig().equals(currentContig)) {
+        if (!item.getContigA().equals(currentContig)) {
             flushClusters();
-            currentContig = item.getContig();
+            currentContig = item.getContigA();
             idToItemMap.put(currentItemId, item);
             seedCluster(currentItemId);
             currentItemId++;
@@ -103,40 +106,13 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
         return currentContig;
     }
 
-    public List<T> deduplicateItems(final List<T> items) {
-        final List<T> sortedItems = IntervalUtils.sortLocatablesBySequenceDictionary(items, dictionary);
-        final List<T> deduplicatedList = new ArrayList<>();
-        int i = 0;
-        while (i < sortedItems.size()) {
-            final T record = sortedItems.get(i);
-            int j = i + 1;
-            final Collection<Integer> identicalItemIndexes = new ArrayList<>();
-            while (j < sortedItems.size() && record.getStart() == sortedItems.get(j).getStart()) {
-                final T other = sortedItems.get(j);
-                if (itemsAreIdentical(record, other)) {
-                    identicalItemIndexes.add(j);
-                }
-                j++;
-            }
-            if (identicalItemIndexes.isEmpty()) {
-                deduplicatedList.add(record);
-                i++;
-            } else {
-                identicalItemIndexes.add(i);
-                final List<T> identicalItems = identicalItemIndexes.stream().map(sortedItems::get).collect(Collectors.toList());
-                deduplicatedList.add(deduplicateIdenticalItems(identicalItems));
-                i = j;
-            }
-        }
-        return deduplicatedList;
-    }
-
     /**
      * Add a new {@param <T>} to the current clusters and determine which are complete
      * @param item to be added
      * @return the IDs for clusters that are complete and ready for processing
      */
     private List<Integer> cluster(final T item) {
+
         // Get list of item IDs from active clusters that cluster with this item
         final Set<Long> linkedItemIds = idToItemMap.entrySet().stream()
                 .filter(other -> other.getKey().intValue() != currentItemId && clusterTogether(item, other.getValue()))
@@ -265,8 +241,8 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
         if (item == null) {
             throw new IllegalArgumentException("Item id " + index + " not found in table");
         }
-        if (!currentContig.equals(item.getContig())) {
-            throw new IllegalArgumentException("Attempted to seed new cluster with item on contig " + item.getContig() + " but the current contig is " + currentContig);
+        if (!currentContig.equals(item.getContigA())) {
+            throw new IllegalArgumentException("Attempted to seed new cluster with item on contig " + item.getContigA() + " but the current contig is " + currentContig);
         }
         return item;
     }
@@ -294,8 +270,8 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
         if (item == null) {
             throw new IllegalArgumentException("Item id " + item + " not found in table");
         }
-        if (!currentContig.equals(item.getContig())) {
-            throw new IllegalArgumentException("Attempted to add new item on contig " + item.getContig() + " but the current contig is " + currentContig);
+        if (!currentContig.equals(item.getContigA())) {
+            throw new IllegalArgumentException("Attempted to add new item on contig " + item.getContigA() + " but the current contig is " + currentContig);
         }
         if (clusterIndex >= currentClusters.size()) {
             throw new IllegalArgumentException("Specified cluster index " + clusterIndex + " is greater than the largest index.");
@@ -310,4 +286,5 @@ public abstract class LocatableClusterEngine<T extends Locatable> {
             currentClusters.add(clusterIndex, new Tuple2<>(clusteringStartInterval, clusterItems));
         }
     }
+
 }

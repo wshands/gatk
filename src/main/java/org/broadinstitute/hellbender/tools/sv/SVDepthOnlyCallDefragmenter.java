@@ -4,15 +4,18 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.GenotypeBuilder;
-import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
-import org.broadinstitute.hellbender.utils.*;
+import org.broadinstitute.hellbender.utils.GenomeLoc;
+import org.broadinstitute.hellbender.utils.IntervalUtils;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
-public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRecordWithEvidence> {
+public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRecord> {
 
     private final double minSampleOverlap;
     private final double paddingFraction;
@@ -34,21 +37,26 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
     }
 
     /**
-     * Find a single call representative of all the calls in the cluster
+     * Find a single call representative of all the calls in the {@param cluster}
      * @param cluster   the events that are clustered together
      * @return  a call encompassing all the cluster's events and containing all the algorithms and genotypes
      */
     @Override
-    protected SVCallRecordWithEvidence flattenCluster(final Collection<SVCallRecordWithEvidence> cluster) {
-        final int newStart =  cluster.stream().mapToInt(SVCallRecordWithEvidence::getStart).min().getAsInt();
-        final int newEnd = cluster.stream().mapToInt(SVCallRecordWithEvidence::getEnd).max().getAsInt();
-        final SVCallRecordWithEvidence exampleCall = cluster.iterator().next();
+    protected SVCallRecord flattenCluster(final Collection<SVCallRecord> cluster) {
+        final int newStart =  cluster.stream().mapToInt(SVCallRecord::getPositionA).min().getAsInt();
+        final int newEnd = cluster.stream().mapToInt(SVCallRecord::getPositionB).max().getAsInt();
+        final SVCallRecord exampleCall = cluster.iterator().next();
         final int length = newEnd - newStart + 1;  //+1 because GATK intervals are inclusive
         final List<String> algorithms = cluster.stream().flatMap(v -> v.getAlgorithms().stream()).distinct().collect(Collectors.toList()); //should be depth only
         final List<Genotype> clusterGenotypes = deduplicateGenotypes(cluster.stream().flatMap(v -> v.getGenotypes().stream()).collect(Collectors.toList()));
-        return new SVCallRecordWithEvidence(exampleCall.getContig(), newStart, exampleCall.getStartStrand(),
-                exampleCall.getEndContig(), newEnd, exampleCall.getEndStrand(), exampleCall.getType(), length, algorithms, clusterGenotypes,
-                exampleCall.getStartSplitReadSites(), exampleCall.getEndSplitReadSites(), exampleCall.getDiscordantPairs());
+        return new SVCallRecord(exampleCall.getId(), exampleCall.getContigA(), newStart, exampleCall.getStrandA(),
+                exampleCall.getContigB(), newEnd, exampleCall.getStrandB(), exampleCall.getType(), length, algorithms, clusterGenotypes);
+    }
+
+    @Override
+    protected SVDeduplicator<SVCallRecord> getDeduplicator() {
+        final Function<Collection<SVCallRecord>,SVCallRecord> collapser = SVCallRecordUtils::deduplicateWithRawCallAttribute;
+        return new SVCallRecordDeduplicator<>(collapser, dictionary);
     }
 
     protected List<Genotype> deduplicateGenotypes(final List<Genotype> clusterGenotypes) {
@@ -86,20 +94,26 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
      * @return
      */
     private Genotype defragmentGenotypes(final List<Genotype> genotypesForSameSample) {
+        Utils.nonEmpty(genotypesForSameSample);
         final String sampleName = genotypesForSameSample.get(0).getSampleName();
         if (!genotypesForSameSample.stream().allMatch(g -> g.getSampleName().equals(sampleName))) {
             throw new IllegalArgumentException("This method expects a list of genotypes from the same sample, " +
                     "but not all input genotypes represent sample " + sampleName + ".");
         }
+        final Set<Integer> copyNumbers = genotypesForSameSample.stream()
+                .filter(g -> g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT))
+                .map(g -> Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()))
+                .collect(Collectors.toSet());
         final GenotypeBuilder gb = new GenotypeBuilder(genotypesForSameSample.get(0));
-        //For now just make sure genotypes have the same copy number -- qualities will be recalculated elsewhere
-        gb.noAttributes();
-        final int copyNumber = Integer.parseInt(genotypesForSameSample.get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString());
-        if (genotypesForSameSample.stream().allMatch(g -> Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()) == copyNumber)) {
-            gb.attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, copyNumber);
+        if (copyNumbers.isEmpty()) {
+            return gb.make();
+        } else if (copyNumbers.size() == 1) {
+            //For now just make sure genotypes have the same copy number -- qualities will be recalculated elsewhere
+            gb.noAttributes();
+            gb.attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, copyNumbers.iterator().next());
             return gb.make();
         } else {
-            throw new IllegalArgumentException("This method will only merge genotypes with the same copy number. Expected all genotypes to be copy number " + copyNumber + ".");
+            throw new IllegalArgumentException("This method will only merge genotypes with the same copy number. Found " + copyNumbers.size() + " different copy numbers.");
         }
     }
 
@@ -110,14 +124,14 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
      * @return true if the two calls should be in the same cluster
      */
     @Override
-    protected boolean clusterTogether(final SVCallRecordWithEvidence a, final SVCallRecordWithEvidence b) {
+    protected boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
         if (!isDepthOnlyCall(a) || !isDepthOnlyCall(b)) return false;
-        Utils.validate(a.getContig().equals(a.getEndContig()), "Call A is depth-only but interchromosomal");
-        Utils.validate(b.getContig().equals(b.getEndContig()), "Call B is depth-only but interchromosomal");
+        Utils.validate(a.getContigA().equals(a.getContigB()), "Call A is depth-only but interchromosomal");
+        Utils.validate(b.getContigA().equals(b.getContigB()), "Call B is depth-only but interchromosomal");
         if (!a.getType().equals(b.getType())) return false;
-        final Set<String> sharedSamples = new LinkedHashSet<>(a.getSamples());
-        sharedSamples.retainAll(b.getSamples());
-        final double sampleOverlap = Math.min(sharedSamples.size() / (double) a.getSamples().size(), sharedSamples.size() / (double) b.getSamples().size());
+        final Set<String> sharedSamples = new LinkedHashSet<>(a.getCalledSamples());
+        sharedSamples.retainAll(b.getCalledSamples());
+        final double sampleOverlap = Math.min(sharedSamples.size() / (double) a.getCalledSamples().size(), sharedSamples.size() / (double) b.getCalledSamples().size());
         if (sampleOverlap < minSampleOverlap) return false;
         //in the single-sample case, match copy number strictly if we're looking at the same sample
         boolean copyNumbersAgree = true;
@@ -141,29 +155,29 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
      * @return  an interval describing the cluster after the new event is added
      */
     @Override
-    protected SimpleInterval getClusteringInterval(final SVCallRecordWithEvidence call, final SimpleInterval currentClusterInterval) {
+    protected SimpleInterval getClusteringInterval(final SVCallRecord call, final SimpleInterval currentClusterInterval) {
         Utils.nonNull(call);
         final SimpleInterval callInterval = getCallInterval(call);
         final int paddedCallStart, paddedCallEnd;
         if (genomicToBinMap != null) {
-            final GenomeLoc callStart = parser.createGenomeLoc(call.getContig(), call.getStart(), call.getStart());
-            final GenomeLoc callEnd = parser.createGenomeLoc(call.getContig(), call.getEnd(), call.getEnd());
+            final GenomeLoc callStart = parser.createGenomeLoc(call.getContigA(), call.getPositionA(), call.getPositionA());
+            final GenomeLoc callEnd = parser.createGenomeLoc(call.getContigA(), call.getPositionB(), call.getPositionB());
             //first interval that is equal to or "greater than" the call start, such that the start of the bin should match the call start, with a little wiggle room
             final Map.Entry<GenomeLoc, Integer> startBin = genomicToBinMap.ceilingEntry(callStart);
             if (startBin == null) {
-                throw new UserException.BadInput("Call start " + callStart + " for  call " + call.prettyPrint() + " not found in model call intervals.");
+                throw new UserException.BadInput("Call start " + callStart + " for  call " + call.getId() + " not found in model call intervals.");
             }
             final int callStartIndex = startBin.getValue();
             //last interval that is equal to or "less than" the call start, such that the end of the bin should match the call end
             final Map.Entry<GenomeLoc, Integer> endBin = genomicToBinMap.floorEntry(callEnd);
             if (endBin == null) {
-                throw new UserException.BadInput("Call end " + callEnd + " for call " + call.prettyPrint() + " not found in model call intervals.");
+                throw new UserException.BadInput("Call end " + callEnd + " for call " + call.getId() + " not found in model call intervals.");
             }
             final int callEndIndex = endBin.getValue();
             final int callBinLength = callEndIndex - callStartIndex + 1;
             if (callBinLength <= 0) {
-                throw new UserException.BadInput("Copy number call at " + call.getContig() + ":" + call.getStart() + "-"
-                        + call.getEnd() + " does not align with supplied model calling intervals. Use the filtered intervals input from GermlineCNVCaller for this cohort/model.");
+                throw new UserException.BadInput("Copy number call at " + call.getContigA() + ":" + call.getPositionA() + "-"
+                        + call.getPositionB() + " does not align with supplied model calling intervals. Use the filtered intervals input from GermlineCNVCaller for this cohort/model.");
             }
             final int paddedStartIndex = Math.max(callStartIndex - (int)Math.round(callBinLength * paddingFraction), 0);
             if (coverageIntervals.get(paddedStartIndex).getContig().equals(callStart.getContig())) {
@@ -181,30 +195,18 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
             paddedCallStart = (int) (callInterval.getStart() - paddingFraction * callInterval.getLengthOnReference());
             paddedCallEnd = (int) (callInterval.getEnd() + paddingFraction * callInterval.getLengthOnReference());
         }
-        final int contigLength = dictionary.getSequence(call.getContig()).getSequenceLength();
+        final int contigLength = dictionary.getSequence(call.getContigA()).getSequenceLength();
         if (currentClusterInterval == null) {
-            return IntervalUtils.trimIntervalToContig(call.getContig(), paddedCallStart, paddedCallEnd, contigLength);
+            return IntervalUtils.trimIntervalToContig(call.getContigA(), paddedCallStart, paddedCallEnd, contigLength);
         }
         //NOTE: this is an approximation -- padding should be based on the length of the call plus currentClusterIntervals
         final int newMinStart = Math.min(paddedCallStart, currentClusterInterval.getStart());
         final int newMaxEnd = Math.max(paddedCallEnd, currentClusterInterval.getEnd());
-        return IntervalUtils.trimIntervalToContig(call.getContig(), newMinStart, newMaxEnd, contigLength);
+        return IntervalUtils.trimIntervalToContig(call.getContigA(), newMinStart, newMaxEnd, contigLength);
     }
 
-    // Not used for single-linkage clustering
-    @Override
-    protected boolean itemsAreIdentical(final SVCallRecordWithEvidence a, final SVCallRecordWithEvidence b) {
-        throw new GATKException.ShouldNeverReachHereException("Deduplication should not be called for single-linkage clustering in depth-only defragmentation.");
-    }
-
-    // Not used for single-linkage clustering
-    @Override
-    protected SVCallRecordWithEvidence deduplicateIdenticalItems(final Collection<SVCallRecordWithEvidence> items) {
-        return null;
-    }
-
-    private SimpleInterval getCallInterval(final SVCallRecordWithEvidence call) {
-        return new SimpleInterval(call.getContig(), call.getStart(), call.getEnd());
+    private SimpleInterval getCallInterval(final SVCallRecord call) {
+        return new SimpleInterval(call.getContigA(), call.getPositionA(), call.getPositionB());
     }
 
     public static boolean isDepthOnlyCall(final SVCallRecord call) {
@@ -215,7 +217,10 @@ public class SVDepthOnlyCallDefragmenter extends LocatableClusterEngine<SVCallRe
         return true;
     }
 
-    @VisibleForTesting
+    public double getPaddingFraction() {
+        return paddingFraction;
+    }
+
     public static double getDefaultPaddingFraction() {
         return DEFAULT_PADDING_FRACTION;
     }

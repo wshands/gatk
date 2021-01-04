@@ -24,17 +24,16 @@ import org.broadinstitute.hellbender.tools.copynumber.PostprocessGermlineCNVCall
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFHeaderLines;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVUtils;
-import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
-import org.broadinstitute.hellbender.tools.sv.SVClusterEngine;
-import org.broadinstitute.hellbender.tools.sv.SVCallRecordWithEvidence;
-import org.broadinstitute.hellbender.tools.sv.SVDepthOnlyCallDefragmenter;
+import org.broadinstitute.hellbender.tools.sv.*;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 import org.broadinstitute.hellbender.utils.samples.PedigreeValidationType;
 import org.broadinstitute.hellbender.utils.samples.SampleDB;
 import org.broadinstitute.hellbender.utils.samples.Sex;
-import org.broadinstitute.hellbender.utils.variant.*;
+import org.broadinstitute.hellbender.utils.variant.GATKSVVariantContextUtils;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -248,7 +247,7 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
             currentContig = variantContexts.get(0).getContig();
         }
         for (final VariantContext vc : variantContexts) {
-            final SVCallRecord record = SVCallRecord.createDepthOnlyFromGCNV(vc, minQS);
+            final SVCallRecord record = SVCallRecordUtils.createDepthOnlyFromGCNVWithOriginalGenotypes(vc, minQS);
             if (record != null) {
                 if (!isMultiSampleInput) {
                     defragmenter.add(new SVCallRecordWithEvidence(record));
@@ -267,17 +266,17 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
 
     private void processClusters() {
         if (!defragmenter.isEmpty()) {
-            final List<SVCallRecordWithEvidence> defragmentedCalls = defragmenter.getOutput();
+            final List<SVCallRecord> defragmentedCalls = defragmenter.getOutput();
             defragmentedCalls.stream().forEachOrdered(clusterEngine::add);
         }
         //Jack and Isaac cluster first and then defragment
-        final List<SVCallRecordWithEvidence> clusteredCalls = clusterEngine.getOutput();
+        final List<SVCallRecord> clusteredCalls = clusterEngine.getOutput();
         write(clusteredCalls);
     }
 
-    private void write(final List<SVCallRecordWithEvidence> calls) {
+    private void write(final List<SVCallRecord> calls) {
         final List<VariantContext> sortedCalls = calls.stream()
-                .sorted(Comparator.comparing(c -> new SimpleInterval(c.getContig(), c.getStart(), c.getEnd()), //VCs have to be sorted by end as well
+                .sorted(Comparator.comparing(c -> new SimpleInterval(c.getContigA(), c.getPositionA(), c.getPositionB()), //VCs have to be sorted by end as well
                         IntervalUtils.getDictionaryOrderComparator(dictionary)))
                 .map(record -> buildVariantContext(record, reference))
                 .collect(Collectors.toList());
@@ -498,12 +497,12 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
     }
 
     @VisibleForTesting
-    protected static VariantContext buildVariantContext(final SVCallRecordWithEvidence call, final ReferenceSequenceFile reference) {
+    protected static VariantContext buildVariantContext(final SVCallRecord call, final ReferenceSequenceFile reference) {
         Utils.nonNull(call);
         Utils.nonNull(reference);
         final boolean isCNV = call.getType().equals(StructuralVariantType.CNV);
         final List<Allele> outputAlleles = new ArrayList<>(3);  //max is ref, del, dup
-        final Allele refAllele = Allele.create(ReferenceUtils.getRefBaseAtPosition(reference, call.getContig(), call.getStart()), true);
+        final Allele refAllele = Allele.create(ReferenceUtils.getRefBaseAtPosition(reference, call.getContigA(), call.getPositionA()), true);
         outputAlleles.add(refAllele);
         if (!isCNV) {
             outputAlleles.add(Allele.create("<" + call.getType().name() + ">", false));
@@ -512,9 +511,9 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
             outputAlleles.add(GATKSVVCFConstants.DUP_ALLELE);
         }
 
-        final VariantContextBuilder builder = new VariantContextBuilder("", call.getContig(), call.getStart(), call.getEnd(),
+        final VariantContextBuilder builder = new VariantContextBuilder("", call.getContigA(), call.getPositionA(), call.getPositionB(),
                 outputAlleles);
-        builder.attribute(VCFConstants.END_KEY, call.getEnd());
+        builder.attribute(VCFConstants.END_KEY, call.getPositionB());
         builder.attribute(GATKSVVCFConstants.SVLEN, call.getLength());
         if (isCNV) {
             builder.attribute(VCFConstants.SVTYPE, "MCNV");  //MCNV for compatibility with svtk annotate
