@@ -21,13 +21,14 @@ import java.io.IOException;
 import java.io.PrintStream;
 
 /**
- * Prints SV evidence records. Can be used with -L to retrieve records on a set of intervals.
+ * Writes SV evidence records to a file. Can be used with -L to retrieve records on a set of intervals. Supports
+ * streaming input from Google Cloud Storage buckets.
  *
  * <h3>Inputs</h3>
  *
  * <ul>
  *     <li>
- *         Evidence file URI
+ *         Coordinate-sorted and indexed evidence file
  *     </li>
  * </ul>
  *
@@ -35,7 +36,7 @@ import java.io.PrintStream;
  *
  * <ul>
  *     <li>
- *         Evidence file (local)
+ *         Coordinate-sorted evidence file
  *     </li>
  * </ul>
  *
@@ -49,10 +50,11 @@ import java.io.PrintStream;
  * </pre>
  *
  * @author Mark Walker &lt;markw@broadinstitute.org&gt;
+ * {@GATK.walkertype FeatureWalker}
  */
 
 @CommandLineProgramProperties(
-        summary = "Prints SV evidence records",
+        summary = "Prints SV evidence records to a local file",
         oneLineSummary = "Prints SV evidence records",
         programGroup = StructuralVariantDiscoveryProgramGroup.class
 )
@@ -65,13 +67,13 @@ public final class PrintSVEvidence extends FeatureWalker<Feature> {
     public static final String COMPRESSION_LEVEL_NAME = "compression-level";
 
     @Argument(
-            doc = "Input file URI with extension '.SR.txt', '.PE.txt', '.BAF.txt', or '.RD.txt' (may be gzipped).",
+            doc = "Input URI with extension '.SR.txt', '.PE.txt', '.BAF.txt', or '.RD.txt'. May be block compressed.",
             fullName = EVIDENCE_FILE_NAME
     )
     private GATKPath inputFilePath;
 
     @Argument(
-            doc = "Output file. Filenames ending in '.gz' will be block compressed.",
+            doc = "Output path. Must be local. Filenames ending in '.gz' will be block compressed.",
             fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME
     )
