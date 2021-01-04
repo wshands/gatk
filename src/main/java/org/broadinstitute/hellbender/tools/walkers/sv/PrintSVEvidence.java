@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.tribble.Feature;
 import org.broadinstitute.barclay.argparser.Argument;
@@ -10,6 +10,10 @@ import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDisc
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.sv.BafEvidence;
+import org.broadinstitute.hellbender.tools.sv.DepthEvidence;
+import org.broadinstitute.hellbender.tools.sv.DiscordantPairEvidence;
+import org.broadinstitute.hellbender.tools.sv.SplitReadEvidence;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 
 import java.io.File;

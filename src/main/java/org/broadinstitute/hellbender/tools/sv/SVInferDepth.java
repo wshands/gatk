@@ -52,8 +52,8 @@ import java.util.stream.DoubleStream;
 @ExperimentalFeature
 @DocumentedFeature
 @CommandLineProgramProperties(
-        summary = SVTrainGenotyping.USAGE_SUMMARY,
-        oneLineSummary = SVTrainGenotyping.USAGE_ONE_LINE_SUMMARY,
+        summary = SVInferDepth.USAGE_SUMMARY,
+        oneLineSummary = SVInferDepth.USAGE_ONE_LINE_SUMMARY,
         programGroup = StructuralVariantDiscoveryProgramGroup.class
 )
 

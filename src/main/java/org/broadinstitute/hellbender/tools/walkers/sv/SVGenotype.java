@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import com.google.common.collect.Lists;
 import htsjdk.variant.variantcontext.StructuralVariantType;
@@ -15,6 +15,7 @@ import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
+import org.broadinstitute.hellbender.tools.sv.SVGenotypeEngineFromModel;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.python.PythonScriptExecutor;
@@ -50,8 +51,8 @@ import java.util.stream.Collectors;
 @ExperimentalFeature
 @DocumentedFeature
 @CommandLineProgramProperties(
-        summary = SVTrainGenotyping.USAGE_SUMMARY,
-        oneLineSummary = SVTrainGenotyping.USAGE_ONE_LINE_SUMMARY,
+        summary = SVGenotype.USAGE_SUMMARY,
+        oneLineSummary = SVGenotype.USAGE_ONE_LINE_SUMMARY,
         programGroup = StructuralVariantDiscoveryProgramGroup.class
 )
 

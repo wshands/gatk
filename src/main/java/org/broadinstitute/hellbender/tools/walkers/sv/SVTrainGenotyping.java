@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import com.google.common.collect.Lists;
 import htsjdk.variant.variantcontext.Genotype;
