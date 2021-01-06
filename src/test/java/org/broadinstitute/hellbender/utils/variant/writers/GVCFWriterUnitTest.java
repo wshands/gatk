@@ -634,8 +634,8 @@ public class GVCFWriterUnitTest extends GATKBaseTest {
         final VariantContext origRefBlock = makeHomRef("1", 10026, 60, 10050);
 
         //Let's say that these "low quality" deletions are below the RGQ threshold and get converted to homRefs with all zero PLs
-        final VariantContext block1 = reblocker.lowQualVariantToGQ0HomRef(deletion1, deletion1);
-        final VariantContext block2 = reblocker.lowQualVariantToGQ0HomRef(deletion2, deletion2);
+        final VariantContext block1 = reblocker.lowQualVariantToGQ0HomRef(deletion1, deletion1).make();
+        final VariantContext block2 = reblocker.lowQualVariantToGQ0HomRef(deletion2, deletion2).make();
 
         final MockWriter mockWriter = new MockWriter();
         final GVCFWriter writer = new GVCFWriter(mockWriter, Arrays.asList(20,100), 2);
