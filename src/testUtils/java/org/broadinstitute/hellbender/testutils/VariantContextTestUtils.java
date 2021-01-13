@@ -21,6 +21,7 @@ import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.AnnotationUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.AlleleSubsettingUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeAssignmentMethod;
+import org.broadinstitute.hellbender.utils.BaseUtils;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -758,6 +759,21 @@ public final class VariantContextTestUtils {
         gb.attribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY, Utils.listFromPrimitives(PPs));
         gb.GQ(MathUtils.secondSmallestMinusSmallest(PPs, gq));
         return vcb.genotypes(gb.make()).id(VCFConstants.EMPTY_ID_FIELD).make();
+    }
+
+    public static Allele makeAnySNPAlt(final Allele refAllele) {
+        Utils.validate(refAllele.length() == 1, "This method is for SNPs with ref allele length 1.");
+        char altBase = 'N';
+        for (final char base : BaseUtils.BASE_CHARS) {
+            if (base != refAllele.getBases()[0]) {
+                altBase = base;
+                break;
+            }
+        }
+        if (altBase == 'N') {
+            throw new IllegalStateException("Non-ref base not found.");
+        }
+        return Allele.create((byte)altBase);
     }
 
     public static String keyForVariant(final VariantContext variant) {

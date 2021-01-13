@@ -77,7 +77,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         reblocker.dropLowQuals = true;
         final Genotype g = makeG("sample1", LONG_REF, Allele.NON_REF_ALLELE, 200, 100, 200, 11, 0, 37);
         final VariantContext toBeNoCalled = makeDeletionVC("lowQualVar", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g);
-        final VariantContext dropped = reblocker.lowQualVariantToGQ0HomRef(toBeNoCalled, toBeNoCalled).make();
+        final VariantContextBuilder dropped = reblocker.lowQualVariantToGQ0HomRef(toBeNoCalled, toBeNoCalled);
         Assert.assertEquals(dropped, null);
 
         reblocker.dropLowQuals = false;
@@ -124,14 +124,14 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
     @DataProvider(name = "overlappingDeletionCases")
     public Object[][] createOverlappingDeletionCases() {
         return new Object[][] {
-                //{100000, 10, 100005, 10, 99, 99, 2},
-                //{100000, 10, 100005, 10, 99, 5, 2},
-                //{100000, 10, 100005, 10, 5, 99, 2},
+                {100000, 10, 100005, 10, 99, 99, 2},
+                {100000, 10, 100005, 10, 99, 5, 2},
+                {100000, 10, 100005, 10, 5, 99, 2},
                 {100000, 10, 100005, 10, 5, 5, 1},
                 {100000, 15, 100010, 5, 99, 99, 2},
                 {100000, 15, 100010, 5, 99, 5, 1},
-                {100000, 15, 100010, 5, 5, 99, 3},
-                {100000, 15, 100010, 5, 5, 5, 1}
+                {100000, 15, 100005, 5, 5, 99, 3},
+                {100000, 15, 100005, 5, 5, 5, 1}
         };
     }
 
@@ -139,10 +139,92 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
     public void testOverlappingDeletions(final int del1start, final int del1length,
                                          final int del2start, final int del2length,
                                          final int del1qual, final int del2qual, final int numExpected) throws IOException {
+        final String inputPrefix = "overlappingDeletions";
+        final String inputSuffix = ".g.vcf";
+        final File inputFile = File.createTempFile(inputPrefix, inputSuffix);
+        final GVCFWriter gvcfWriter= setUpWriter(inputFile, new File(GATKBaseTest.FULL_HG19_DICT));
+
+        final ReferenceSequenceFile ref = ReferenceUtils.createReferenceReader(new GATKPath(GATKBaseTest.b37Reference));
+        final Allele del1Ref = Allele.create(ReferenceUtils.getRefBasesAtPosition(ref, "20", del1start, del1length), true);
+        final Allele del1Alt = Allele.create(ReferenceUtils.getRefBaseAtPosition(ref, "20", del1start), false);
+        final Allele del2Ref = Allele.create(ReferenceUtils.getRefBasesAtPosition(ref, "20", del2start, del2length), true);
+        final Allele del2Alt = Allele.create(ReferenceUtils.getRefBaseAtPosition(ref, "20", del2start), false);
+        final VariantContextBuilder variantContextBuilder = new VariantContextBuilder();
+        variantContextBuilder.chr("20").start(del1start).stop(del1start+del1length-1).attribute(VCFConstants.DEPTH_KEY, 10).alleles(Arrays.asList(del1Ref, del1Alt, Allele.NON_REF_ALLELE));
+        final VariantContext del1 = VariantContextTestUtils.makeGVCFVariantContext(variantContextBuilder, Arrays.asList(del1Ref, del1Alt), del1qual);
+
+        variantContextBuilder.chr("20").start(del2start).stop(del2start+del2length-1).attribute(VCFConstants.DEPTH_KEY, 10).alleles(Arrays.asList(del2Ref, del2Alt, Allele.NON_REF_ALLELE));
+        final VariantContext del2 = VariantContextTestUtils.makeGVCFVariantContext(variantContextBuilder, Arrays.asList(del2Ref, del2Alt), del2qual);
+
+        gvcfWriter.add(del1);
+        gvcfWriter.add(del2);
+        gvcfWriter.close();
+
+        final File outputFile = File.createTempFile(inputPrefix,".reblocked" + inputSuffix);
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", inputFile)
+            .add(ReblockGVCF.RGQ_THRESHOLD_SHORT_NAME, 10.0)
+            .addOutput(outputFile);
+        runCommandLine(args);
+
+        final Pair<VCFHeader, List<VariantContext>> outVCs = VariantContextTestUtils.readEntireVCFIntoMemory(outputFile.getAbsolutePath());
+        Assert.assertEquals(outVCs.getRight().size(), numExpected);
+    }
+
+    //TODO: test for uncalled alts, which we want to always drop
+    @Test
+    public void testIndelTrimming() throws IOException {
+        final String inputPrefix = "altToTrim";
+        final String inputSuffix = ".g.vcf";
+        final File inputFile = new File(inputPrefix+inputSuffix);
+        final GVCFWriter gvcfWriter= setUpWriter(inputFile, new File(GATKBaseTest.FULL_HG19_DICT));
+
+        final int longestDelLength = 20;
+        final int del1start = 200000;
+        final int goodDelLength = 10;
+        final ReferenceSequenceFile ref = ReferenceUtils.createReferenceReader(new GATKPath(GATKBaseTest.b37Reference));
+        final Allele del1Ref = Allele.create(ReferenceUtils.getRefBasesAtPosition(ref, "20", del1start, longestDelLength), true);  //+1 for anchor base
+        final Allele del1Alt2 = Allele.create(ReferenceUtils.getRefBaseAtPosition(ref, "20", del1start), false);
+        final Allele del1Alt1 = Allele.extend(Allele.create(del1Alt2, true), ReferenceUtils.getRefBasesAtPosition(ref, "20", del1start+goodDelLength, goodDelLength));
+        final VariantContextBuilder variantContextBuilder = new VariantContextBuilder();
+        variantContextBuilder.chr("20").start(del1start).stop(del1start+longestDelLength-1).attribute(VCFConstants.DEPTH_KEY, 10).alleles(Arrays.asList(del1Ref, del1Alt1, del1Alt2, Allele.NON_REF_ALLELE));
+        final GenotypeBuilder gb = new GenotypeBuilder(VariantContextTestUtils.SAMPLE_NAME, Arrays.asList(del1Ref, del1Alt1));
+        gb.PL(new int[]{50, 0, 100, 150, 200, 300, 400, 500, 600, 1000});
+        variantContextBuilder.genotypes(gb.make());
+        final VariantContext del1 = variantContextBuilder.make();
+
+        final int goodStart = del1start + longestDelLength;
+        final Allele goodRef = Allele.create(ReferenceUtils.getRefBasesAtPosition(ref, "20", goodStart, 1), true);
+        final Allele goodSNP = VariantContextTestUtils.makeAnySNPAlt(goodRef);  //generate valid data, but make it agnostic to position and reference genome
+        variantContextBuilder.start(goodStart).stop(goodStart).alleles(Arrays.asList(goodRef, goodSNP, Allele.NON_REF_ALLELE));
+        final GenotypeBuilder gb2 = new GenotypeBuilder(VariantContextTestUtils.SAMPLE_NAME, Arrays.asList(goodRef, goodSNP));
+        gb2.PL(new int[]{50, 0, 100, 150, 200, 300});
+        gb2.GQ(50);
+        variantContextBuilder.genotypes(gb2.make());
+        final VariantContext keepVar = variantContextBuilder.make();
+
+        gvcfWriter.add(del1);
+        gvcfWriter.add(keepVar);
+        gvcfWriter.close();
+
+        final File outputFile = File.createTempFile(inputPrefix,".reblocked" + inputSuffix);
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", inputFile)
+                .addOutput(outputFile);
+        runCommandLine(args);
+
+        final List<VariantContext> outVCs = VariantContextTestUtils.readEntireVCFIntoMemory(outputFile.getAbsolutePath()).getRight();
+        Assert.assertEquals(outVCs.size(), 3);
+        Assert.assertTrue(outVCs.get(0).isVariant());
+        Assert.assertTrue(outVCs.get(1).isReferenceBlock());
+        Assert.assertEquals(outVCs.get(1).getStart(), del1start + goodDelLength);
+        Assert.assertTrue(outVCs.get(2).isVariant());
+    }
+
+    private GVCFWriter setUpWriter(final File outputFile, final File dictionary) throws IOException {
         final VariantContextWriterBuilder builder = new VariantContextWriterBuilder();
-        final File inputFile = File.createTempFile("overlappingDeletions",".g.vcf");
-        builder.setOutputPath(inputFile.toPath());
-        final SAMSequenceDictionary dict = SAMSequenceDictionaryExtractor.extractDictionary(new File(GATKBaseTest.FULL_HG19_DICT).toPath());
+        builder.setOutputPath(outputFile.toPath());
+        final SAMSequenceDictionary dict = SAMSequenceDictionaryExtractor.extractDictionary(dictionary.toPath());
         builder.setReferenceDictionary(dict);
         final VariantContextWriter vcfWriter = builder.build();
         final GVCFWriter gvcfWriter= new GVCFWriter(vcfWriter, Arrays.asList(20,100), HomoSapiensConstants.DEFAULT_PLOIDY);
@@ -161,35 +243,8 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         result.addMetaDataLine(new VCFFormatHeaderLine(VCFConstants.GENOTYPE_PL_KEY, 1,
                 VCFHeaderLineType.String, "Phred-scaled likelihoods"));
         gvcfWriter.writeHeader(result);
-
-        final ReferenceSequenceFile ref = ReferenceUtils.createReferenceReader(new GATKPath(GATKBaseTest.b37Reference));
-        final Allele del1Ref = Allele.create(ReferenceUtils.getRefBasesAtPosition(ref, "20", del1start, del1length), true);
-        final Allele del1Alt = Allele.create(ReferenceUtils.getRefBaseAtPosition(ref, "20", del1start), false);
-        final Allele del2Ref = Allele.create(ReferenceUtils.getRefBasesAtPosition(ref, "20", del2start, del2length), true);
-        final Allele del2Alt = Allele.create(ReferenceUtils.getRefBaseAtPosition(ref, "20", del2start), false);
-        final VariantContextBuilder variantContextBuilder = new VariantContextBuilder();
-        variantContextBuilder.chr("20").start(del1start).stop(del1start+del1length-1).attribute(VCFConstants.DEPTH_KEY, 10).alleles(Arrays.asList(del1Ref, del1Alt, Allele.NON_REF_ALLELE));
-        final VariantContext del1 = VariantContextTestUtils.makeGVCFVariantContext(variantContextBuilder, Arrays.asList(del1Ref, del1Alt), del1qual);
-
-        variantContextBuilder.chr("20").start(del2start).stop(del2start+del2length-1).attribute(VCFConstants.DEPTH_KEY, 10).alleles(Arrays.asList(del2Ref, del2Alt, Allele.NON_REF_ALLELE));
-        final VariantContext del2 = VariantContextTestUtils.makeGVCFVariantContext(variantContextBuilder, Arrays.asList(del2Ref, del2Alt), del2qual);
-
-        gvcfWriter.add(del1);
-        gvcfWriter.add(del2);
-        gvcfWriter.close();
-
-        final File outputFile = File.createTempFile("overlappingDeletions",".reblocked.g.vcf");
-        final ArgumentsBuilder args = new ArgumentsBuilder();
-        args.add("V", inputFile)
-            .add(ReblockGVCF.RGQ_THRESHOLD_SHORT_NAME, 10.0)
-            .addOutput(outputFile);
-        runCommandLine(args);
-
-        final Pair<VCFHeader, List<VariantContext>> outVCs = VariantContextTestUtils.readEntireVCFIntoMemory(outputFile.getAbsolutePath());
-        Assert.assertEquals(outVCs.getRight().size(), numExpected);
+        return gvcfWriter;
     }
-
-    //TODO: test for uncalled alts, which we want to always drop
 
     //TODO: these are duplicated from PosteriorProbabilitiesUtilsUnitTest but PR #4947 modifies VariantContextTestUtils, so I'll do some refactoring before the second of the two is merged
     private Genotype makeG(final String sample, final Allele a1, final Allele a2, final int... pls) {

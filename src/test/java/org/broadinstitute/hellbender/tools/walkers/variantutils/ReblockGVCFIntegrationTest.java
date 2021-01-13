@@ -224,4 +224,21 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
                 Arrays.asList(getToolTestDataDir() + "expected.overlappingDeletions.g.vcf"));
         spec.executeTest("testOverlappingDeletions", this);
     }
+
+    @Test
+    public void testHomRefCalls() throws IOException {
+        final File input = new File(getToolTestDataDir() + "dropGQ0Dels.g.vcf");
+        final File output = createTempFile("dropGQ0Dels.reblocked", ".g.vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", input)
+                .addOutput(output);
+        runCommandLine(args);
+
+        final List<VariantContext> inputVCs = VariantContextTestUtils.readEntireVCFIntoMemory(input.getAbsolutePath()).getRight();
+        final List<VariantContext> outputVCs = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight();
+
+        Assert.assertEquals(outputVCs.size(), 1);
+        Assert.assertEquals(outputVCs.get(0).getStart(), inputVCs.get(0).getStart());
+        Assert.assertEquals(outputVCs.get(0).getEnd(), inputVCs.get(inputVCs.size()-1).getEnd());
+    }
 }

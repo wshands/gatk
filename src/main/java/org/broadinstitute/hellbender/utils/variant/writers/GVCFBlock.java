@@ -83,8 +83,13 @@ public abstract class GVCFBlock implements Locatable {
         return minGQ;
     }
 
+    /**
+     * Allow overlapping blocks to be merged, as can occur in reblocking
+     * @param vc
+     * @return
+     */
     public boolean isContiguous(final VariantContext vc) {
-        return (vc.getStart() == getEnd() + 1) && startingVC.getContig().equals(vc.getContig());
+        return (vc.getStart() >= getStart()) && (vc.getStart() <= getEnd() + 1) && startingVC.getContig().equals(vc.getContig());
     }
 
     public VariantContext getStartingVC() {
