@@ -326,9 +326,11 @@ public final class ReblockGVCF extends VariantWalker {
                 return null;
             }
             final VariantContextBuilder newHomRefBuilder = lowQualVariantToGQ0HomRef(result, originalVC);
-            updateHomRefBlockBuffer(newHomRefBuilder.make());
-            homRefBlockBuffer.add(newHomRefBuilder);
-            bufferEnd = result.getEnd();
+            if (newHomRefBuilder != null) {
+                updateHomRefBlockBuffer(newHomRefBuilder.make());
+                homRefBlockBuffer.add(newHomRefBuilder);
+                bufferEnd = result.getEnd();
+            }
             return null;  //don't write yet in case new ref block needs to be modified
         }
         //high quality variant
