@@ -459,7 +459,12 @@ public final class ReblockGVCF extends VariantWalker {
     @VisibleForTesting
     protected boolean shouldBeReblocked(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
-        return !genotype.isCalled() || (genotype.hasPL() && genotype.getPL()[0] < rgqThreshold) || genotype.isHomRef();
+        return !genotype.isCalled() || (genotype.hasPL() && genotype.getPL()[0] < rgqThreshold) || genotype.isHomRef()
+                || !genotypeHasConcreteAlt(genotype);
+    }
+
+    private boolean genotypeHasConcreteAlt(final Genotype g) {
+        return g.getAlleles().stream().anyMatch(a -> !a.isReference() && !a.isSymbolic() && !a.equals(Allele.SPAN_DEL));
     }
 
     /**
@@ -474,7 +479,7 @@ public final class ReblockGVCF extends VariantWalker {
             return null;
         }
         if (!result.getGenotype(0).isCalled()) {
-            return new VariantContextBuilder(result).attributes(null);
+            return new VariantContextBuilder(result).attributes(null).attribute(VCFConstants.END_KEY, result.getEnd());  //delete variant annotations and add end key
         }
 
         final Map<String, Object> attrMap = new HashMap<>();
@@ -506,7 +511,6 @@ public final class ReblockGVCF extends VariantWalker {
 
         VariantContextBuilder builder = new VariantContextBuilder(result);
 
-        //TODO: update and flush
         final Genotype newG = gb.make();
         return builder.alleles(Arrays.asList(newG.getAlleles().get(0), Allele.NON_REF_ALLELE)).unfiltered().log10PError(VariantContext.NO_LOG10_PERROR).attributes(attrMap).genotypes(newG); //genotyping engine will add lowQual filter, so strip it off
     }
@@ -687,7 +691,21 @@ public final class ReblockGVCF extends VariantWalker {
         //do QUAL calcs after we potentially drop alleles
         if (doQualApprox) {
             if (g.hasPL()) {
-                attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, g.getPL()[0]);
+                int[] plsMaybeUnnormalized;
+                if (updatedAlleles.getAlternateAlleles().contains(Allele.SPAN_DEL)) {
+                    final List<Allele> altsWithoutStar = new ArrayList<>(updatedAlleles.getAlleles());
+                    altsWithoutStar.remove(Allele.SPAN_DEL);
+                    if (altsWithoutStar.stream().anyMatch(a -> !a.isReference() && !a.isSymbolic())) {
+                        final int[] subsettedPLIndices = AlleleSubsettingUtils.subsettedPLIndices(PLOIDY_TWO, updatedAlleles.getAlleles(), altsWithoutStar);
+                        final int[] oldPLs = g.getPL();
+                        plsMaybeUnnormalized = Arrays.stream(subsettedPLIndices).map(idx -> oldPLs[idx]).toArray();
+                        attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, plsMaybeUnnormalized[0] - MathUtils.arrayMin(plsMaybeUnnormalized));
+                    } else {
+                        attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, 0);
+                    }
+                } else {
+                    attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, g.getPL()[0]);
+                }
                 int varDP = QualByDepth.getDepth(result.getGenotypes(), null);
                 if (varDP == 0) {  //prevent QD=Infinity case
                     varDP = originalVC.getAttributeAsInt(VCFConstants.DEPTH_KEY, 1); //if there's no VarDP and no DP, just prevent Infs/NaNs and QD will get capped later
@@ -696,16 +714,24 @@ public final class ReblockGVCF extends VariantWalker {
                 if (annotationEngine.getInfoAnnotations().stream()
                         .anyMatch(infoFieldAnnotation -> infoFieldAnnotation.getClass().getSimpleName().equals("AS_QualByDepth"))) {
                     final List<String> quals = new ArrayList<>();
-                    for (final Allele alt : newAlleleSet) {
+                    for (final Allele alt : updatedAlleles.getAlleles()) {
                         if (alt.isReference()) {
                             //GDB expects an empty field for ref
                             continue;
                         }
-                        if (alt.equals(Allele.NON_REF_ALLELE)) {
+                        if (alt.equals(Allele.NON_REF_ALLELE) || alt.equals(Allele.SPAN_DEL)) {
                             quals.add("0");
                             continue;
                         }
-                        quals.add(Integer.toString(g.getPL()[0]));
+                        if (g.isHetNonRef()) {
+                            final int[] subsetIndices = AlleleSubsettingUtils.subsettedPLIndices(PLOIDY_TWO, updatedAlleles.getAlleles(), Arrays.asList(updatedAlleles.getReference(), alt, Allele.NON_REF_ALLELE));
+                            final int[] fullLikelihoods = g.getPL();
+                            final int[] subsetPLs = Arrays.stream(subsetIndices).map(idx -> fullLikelihoods[idx]).toArray();
+                            quals.add(Integer.toString(subsetPLs[0] - MathUtils.arrayMin(subsetPLs)));
+                        }
+                        else {
+                            quals.add(Integer.toString(g.getPL()[0]));
+                        }
                     }
                     attrMap.put(GATKVCFConstants.AS_RAW_QUAL_APPROX_KEY, AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM + String.join(AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM, quals));
                     List<Integer> as_varDP = AS_QualByDepth.getAlleleDepths(AlleleSubsettingUtils.subsetAlleles(result.getGenotypes(),
