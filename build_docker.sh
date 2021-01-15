@@ -4,7 +4,7 @@
 set -e
 
 REPO=broadinstitute
-PROJECT=gatk
+PROJECT=mwalker174
 REPO_PRJ=${REPO}/${PROJECT}
 GCR_REPO="us.gcr.io/broad-gatk/gatk"
 STAGING_CLONE_DIR=${PROJECT}_staging_temp
