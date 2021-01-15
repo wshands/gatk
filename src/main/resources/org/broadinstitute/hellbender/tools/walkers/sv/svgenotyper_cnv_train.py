@@ -12,7 +12,7 @@ parser.add_argument("--device", type=str, required=True)
 
 parser.add_argument("--num_states", type=int, required=True)
 parser.add_argument("--random_seed", type=int, required=True)
-parser.add_argument("--read_length", type=int, required=True)
+parser.add_argument("--sample_depth_bin_size", type=int, required=True)
 parser.add_argument("--max_iter", type=int, required=True)
 parser.add_argument("--iter_log_freq", type=int, required=True)
 

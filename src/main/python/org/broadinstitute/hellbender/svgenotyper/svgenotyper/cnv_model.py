@@ -7,6 +7,8 @@ from pyro.ops.indexing import Vindex
 from pyro.infer import config_enumerate, infer_discrete
 from pyro.infer.predictive import Predictive
 from pyro.infer.autoguide import AutoDiagonalNormal
+from pyro.infer.autoguide.initialization import init_to_sample
+from torch.distributions.constraints import positive
 import torch
 
 
@@ -28,11 +30,26 @@ class SVDepthData(object):
         self.counts = counts
 
 
+def custom_init(site):
+    if site is None:
+        return init_to_sample
+    if site['name'] == 'p_hw':
+        sample = site['fn'].sample()
+        shape = sample.shape
+        x = torch.zeros(shape)
+        x[..., 0] = 1e-3
+        x[..., 2] = 1e-3
+        x[..., 1] = 1. - x[..., 0] - x[..., 2]
+        return x
+    else:
+        return site['fn'].sample().detach()
+
+
 class SVDepthPyroModel(object):
     def __init__(self,
                  k: int,
                  tensor_dtype: torch.dtype,
-                 read_length: float,
+                 sample_depth_bin_size: float = 100,
                  var_phi_bin: float = 0.2,
                  var_phi_sample: float = 0.01,
                  alpha_non_ref: float = 1.,
@@ -49,7 +66,7 @@ class SVDepthPyroModel(object):
         self.mu_eps = mu_eps
         self.alpha_non_ref = alpha_non_ref
         self.alpha_ref = alpha_ref
-        self.read_length = read_length
+        self.sample_depth_bin_size = sample_depth_bin_size
         self.device = device
         if loss is None:
             self.loss = {'epoch': [], 'elbo': []}
@@ -57,7 +74,7 @@ class SVDepthPyroModel(object):
             self.loss = loss
 
         self.latent_sites = ['phi_bin', 'phi_sample', 'eps', 'p_hw']
-        self.guide = AutoDiagonalNormal(poutine.block(self.model, expose=self.latent_sites))
+        self.guide = AutoDiagonalNormal(poutine.block(self.model, expose=self.latent_sites), init_loc_fn=custom_init)
 
     @config_enumerate(default="parallel")
     def model(self,
@@ -83,11 +100,12 @@ class SVDepthPyroModel(object):
 
         with plate_1:
 
-            phi_bin = pyro.sample('phi_bin', dist.LogNormal(zero_t, self.var_phi_bin))
+            psi_bin = pyro.param('psi_bin', one_t.expand(n_intervals) * self.var_phi_bin, constraint=positive, event_dim=0).unsqueeze(-1)
+            phi_bin = pyro.sample('phi_bin', dist.LogNormal(zero_t, psi_bin))
+
             eps_rd = pyro.sample('eps', dist.Exponential(one_t)) * self.mu_eps
 
-            alpha_hw = self.alpha_non_ref * one_t.expand(3)
-            alpha_hw[1] = self.alpha_ref
+            alpha_hw = torch.tensor([self.alpha_non_ref, self.alpha_ref, self.alpha_non_ref], device=self.device, dtype=self.tensor_dtype)
             p_hw = pyro.sample('p_hw', dist.Dirichlet(alpha_hw))
 
         with plate_1, plate_2:
@@ -96,6 +114,7 @@ class SVDepthPyroModel(object):
             p_hw_loss = p_hw[..., 0]
             p_hw_neutral = p_hw[..., 1]
             p_hw_gain = p_hw[..., 2]
+
             z0 = p_hw_loss * p_hw_loss
             z1 = 2 * p_hw_loss * p_hw_neutral
             z2 = p_hw_neutral * p_hw_neutral + 2 * p_hw_loss * p_hw_gain
@@ -116,7 +135,7 @@ class SVDepthPyroModel(object):
 
             # N x S
             # TODO add in * phi_sample
-            mu_counts = bin_size.unsqueeze(-1) * sample_depth * Vindex(locs)[..., z] / self.read_length
+            mu_counts = bin_size.unsqueeze(-1) * sample_depth * Vindex(locs)[..., z] / self.sample_depth_bin_size
 
             pyro.sample('obs', dist.Poisson(rate=mu_counts), obs=counts)
 

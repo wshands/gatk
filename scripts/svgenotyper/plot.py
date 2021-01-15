@@ -80,6 +80,9 @@ class GATKSVPlottingSuite(object):
         self.types = sorted(list(mt.aggregate_rows(hl.agg.collect_as_set(mt.info.SVTYPE))))
         self.samples = mt.s.collect()
 
+        if args.out_vcf:
+            hl.export_vcf(self.mt, os.path.join(self.out_dir, self.out_name + ".vcf.gz"))
+
     def fetch(self, contig: str = None):
         if contig is None:
             return self.mt
@@ -615,6 +618,7 @@ def parse_args():
     parser.add_argument('--out-name', help='Output base name', required=True)
     parser.add_argument('--contigs-list', help='List of contigs', required=True)
     parser.add_argument('--out-dir', help='Output directory', default='.')
+    parser.add_argument('--out-vcf', help='Generate output vcf', action='store_true')
 
     parser.add_argument('--depth-only', help='Depth-only variants filter', action='store_true')
     parser.add_argument('--non-depth-only', help='Non-depth-only variants filter', action='store_true')

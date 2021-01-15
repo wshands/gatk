@@ -57,7 +57,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     static final String USAGE_ONE_LINE_SUMMARY = "Train model to genotype structural variants";
     static final String USAGE_SUMMARY = "Runs training on a set of variants and generates a genotyping model.";
 
-    @Argument(fullName = "coverage-file", doc = "Tab-delimited table of per-base sample depth of the reference state")
+    @Argument(fullName = "coverage-file", doc = "Tab-delimited table of binned read counts for the reference state")
     private GATKPath sampleDepthFilePath;
 
     @Argument(fullName = "depth-file", doc = "Read depth evidence file")
@@ -96,8 +96,8 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     @Argument(fullName = "alpha-non-ref", doc = "Hardy-Weinberg Dirichlet concentration for non-reference states", optional = true)
     private double alphaNonRef  = 1.;
 
-    @Argument(fullName = "read-length", doc = "Library read length", optional = true)
-    private int readLength  = 150;
+    @Argument(fullName = "coverage-file-bin-size", doc = "Size of bins used for coverage-file", optional = true)
+    private int coverageBinSize  = 100;
 
     @Argument(fullName = "lr-decay", doc = "Learning rate decay constant (lower is faster)", optional = true)
     private double lrDecay = 1000;
@@ -249,7 +249,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         arguments.add("--var_phi_bin=" + varPhiBin);
         arguments.add("--alpha_ref=" + alphaRef);
         arguments.add("--alpha_non_ref=" + alphaNonRef);
-        arguments.add("--read_length=" + readLength);
+        arguments.add("--sample_depth_bin_size=" + coverageBinSize);
         arguments.add("--lr_decay=" + lrDecay);
         arguments.add("--lr_min=" + lrMin);
         arguments.add("--lr_init=" + lrInit);

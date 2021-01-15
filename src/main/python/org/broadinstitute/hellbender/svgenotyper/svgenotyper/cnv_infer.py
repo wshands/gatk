@@ -10,7 +10,11 @@ from . import cnv_io
 
 
 def run(args: dict, default_dtype: torch.dtype = torch.float32):
-    logging.basicConfig(level=logging.INFO,
+    base_path = os.path.join(args['model_dir'], args['model_name'])
+    log_path = base_path + ".log.infer.txt"
+    logging.basicConfig(filename=log_path,
+                        filemode='w',
+                        level=logging.INFO,
                         format='%(asctime)s %(levelname)-8s %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
     pyro.enable_validation(True)
@@ -21,12 +25,11 @@ def run(args: dict, default_dtype: torch.dtype = torch.float32):
     torch.random.manual_seed(args['random_seed'])
     pyro.set_rng_seed(args['random_seed'])
 
-    base_path = os.path.join(args['model_dir'], args['model_name'])
     params = load_model(base_path)
     if params is None:
         raise RuntimeError("Model at not found: {:s}".format(base_path))
 
-    model = SVDepthPyroModel(k=params['k'], tensor_dtype=default_dtype, read_length=params['read_length'],
+    model = SVDepthPyroModel(k=params['k'], tensor_dtype=default_dtype, sample_depth_bin_size=params['sample_depth_bin_size'],
                              var_phi_bin=params['var_phi_bin'], var_phi_sample=params['var_phi_sample'],
                              alpha_non_ref=params['alpha_non_ref'], alpha_ref=params['alpha_ref'],
                              mu_eps=params['mu_eps'], device=args['device'], loss=params['loss'])

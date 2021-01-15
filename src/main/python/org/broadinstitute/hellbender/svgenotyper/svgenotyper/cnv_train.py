@@ -49,10 +49,16 @@ def run_training(model: SVDepthPyroModel,
     # Run training loop.  Use try to allow for keyboard interrupt.
     try:
         for epoch in range(max_iter):
+            #predictive = Predictive(model.model, guide=model.guide, num_samples=1, return_sites=model.latent_sites)
+            #sample = predictive(counts=data.counts, bin_size=data.bin_size, sample_ploidy=data.sample_ploidy,
+            #                    sample_depth=data.sample_per_base_depth)
+            #logging.info(sample['p_hw'][0, 5, 0, :].detach())
+
             # Train, and keep track of training loss.
             total_epoch_loss = train_epoch(svi=svi, data=data, epoch=epoch, scheduler=scheduler)
             model.loss['epoch'].append(epoch)
             model.loss['elbo'].append(-total_epoch_loss)
+
             if (epoch + 1) % iter_log_freq == 0:
                 logging.info("[epoch %04d]  training loss: %.4f" % (epoch + 1, total_epoch_loss))
         logging.info("Training procedure complete after {:d} epochs, loss: {:.4f}".format(max_iter, total_epoch_loss))
@@ -78,7 +84,7 @@ def run(args: dict, default_dtype: torch.dtype = torch.float32):
     torch.random.manual_seed(args['random_seed'])
     pyro.set_rng_seed(args['random_seed'])
 
-    model = SVDepthPyroModel(k=args['num_states'], tensor_dtype=default_dtype,  read_length=args['read_length'],
+    model = SVDepthPyroModel(k=args['num_states'], tensor_dtype=default_dtype,  sample_depth_bin_size=args['sample_depth_bin_size'],
                              var_phi_bin=args['var_phi_bin'], var_phi_sample=args['var_phi_sample'],
                              alpha_ref=args['alpha_ref'], alpha_non_ref=args['alpha_non_ref'],
                              mu_eps=args['mu_eps'], device=args['device'])
@@ -110,7 +116,7 @@ def save_model(model: SVDepthPyroModel, base_path: str):
             'mu_eps': model.mu_eps,
             'alpha_ref': model.alpha_ref,
             'alpha_non_ref': model.alpha_non_ref,
-            'read_length': model.read_length,
+            'sample_depth_bin_size': model.sample_depth_bin_size,
             'loss': model.loss,
             'guide_loc': pyro.param('AutoDiagonalNormal.loc').tolist(),
             'guide_scale': pyro.param('AutoDiagonalNormal.scale').tolist()
