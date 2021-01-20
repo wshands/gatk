@@ -7,7 +7,6 @@ import pysam
 
 
 def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_small, rd_tabix_large, args):
-
     carriers = [s for s in record.samples if sum(record.samples[s]['GT']) > 0]
     #carriers = [s for s in record.samples if record.samples[s]['RC'] == 1]
     allele_freq = len(carriers) / float(len(record.samples))
@@ -76,12 +75,12 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
     rd_positions = mt_median.index.values
 
     out_path = "{}.{}.depth.png".format(args.out_name, record.id)
-    figure_width = 24
-    figure_height = 24
+    figure_width = 12
+    figure_height = 8
 
     linewidth = 0.5
-    alpha_carrier = max(0.5 / len(carriers), 0.1)
-    alpha_non_carrier = max(min([1, 5. / len(non_carriers)]), 0.1)
+    alpha_carrier = max(0.5 / max(len(carriers), 1), 0.1)
+    alpha_non_carrier = max(min([1, 5. / max(1, len(non_carriers))]), 0.1)
     title = "{} {} {}:{}-{}".format(record.id, record.info['SVTYPE'], chrom, start, end)
 
     rows = 5
@@ -94,7 +93,8 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
     fig, axes = plt.subplots(rows, cols, sharex=True, figsize=(figure_width, figure_height))
 
     ax = axes[0, 0]
-    ax.step(rd_positions, rd_non_carriers, color='r', linewidth=linewidth, where='post', alpha=alpha_non_carrier)
+    if len(non_carriers) > 0:
+        ax.step(rd_positions, rd_non_carriers, color='r', linewidth=linewidth, where='post', alpha=alpha_non_carrier)
     ax.step(rd_positions, rd_carriers, color='b', linewidth=linewidth, where='post', alpha=alpha_carrier)
     ax.step(rd_positions, rd_median, color='k', linewidth=linewidth, where='post')
     ax.set_title(title)
@@ -219,7 +219,7 @@ def main():
     for record in vcf:
         if args.site is not None and args.site != record.id:
             continue
-        if record.info['SVTYPE'] in ['DEL', 'DUP', 'CNV']:
+        if record.info['SVTYPE'] in ['DEL', 'DUP', 'CNV'] or (record.info['SVTYPE'] == 'BND' and record.chrom == record.info['CHR2']):
             plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_small, rd_tabix_large, args)
 
 

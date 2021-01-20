@@ -94,8 +94,8 @@ class GATKSVPlottingSuite(object):
 
         rows = 1
         cols = 2
-        figure_width = max(4, len(self.types) * 2)
-        figure_height = 4
+        figure_width = max(2, len(self.types) * 1.5)
+        figure_height = 2
 
         pf, axes = plt.subplots(rows, cols, figsize=(figure_width, figure_height))
 
@@ -119,8 +119,8 @@ class GATKSVPlottingSuite(object):
         def _histograms_plotter(out_path: str, contig: str, positions_contig: list, types=list):
             rows = len(types)
             cols = 1
-            figure_width = 8
-            figure_height = 3 * len(types)
+            figure_width = 4
+            figure_height = 1 * len(types)
             n_bins = 100
 
             pf, axes = plt.subplots(rows, cols, figsize=(figure_width, figure_height))
@@ -165,8 +165,8 @@ class GATKSVPlottingSuite(object):
         def _totals_plotter(out_path: str, totals: list, types: list):
             rows = 1
             cols = 1
-            figure_width = max(3, len(types))
-            figure_height = 4
+            figure_width = max(1.5, len(types))
+            figure_height = 2
 
             pf, axes = plt.subplots(rows, cols, figsize=(figure_width, figure_height))
 
@@ -181,8 +181,8 @@ class GATKSVPlottingSuite(object):
         def _totals_by_contig_plotter(out_path: str, totals_by_contig: list, types: list):
             rows = len(types)
             cols = 1
-            figure_width = 16
-            figure_height = 3 * len(types)
+            figure_width = 8
+            figure_height = 2 * len(types)
 
             pf, axes = plt.subplots(rows, cols, figsize=(figure_width, figure_height))
 
@@ -194,6 +194,10 @@ class GATKSVPlottingSuite(object):
                 ax.set_title("Variant Counts - {}".format(types[i]))
                 ax.bar(x=self.contigs, height=[totals_by_contig[(c, self.types[i])] if (c, self.types[i]) in totals_by_contig else 0 for c in self.contigs])
                 ax.set_ylabel('freq')
+                if i != len(types) - 1:
+                    ax.set_xticks([])
+                else:
+                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=70)
 
             plt.tight_layout()
             plt.savefig(out_path)
@@ -257,7 +261,7 @@ class GATKSVPlottingSuite(object):
         rows = 3
         cols = 5
         figure_width = 12
-        figure_height = 6
+        figure_height = 4
         markersize = 3
         image_ext = ".png"
         mean_cov_ploidy = 2.0
@@ -351,8 +355,8 @@ class GATKSVPlottingSuite(object):
 
         rows = 3
         cols = 5
-        figure_width = 12
-        figure_height = 6
+        figure_width = 8
+        figure_height = 4
         image_ext = ".png"
         mean_cov_ploidy = 2.0
 
@@ -361,7 +365,6 @@ class GATKSVPlottingSuite(object):
         mt = self.fetch()
         samples_list = list(mt.s.collect())
         mean_cov = mean_cov_df.loc[samples_list].values.squeeze(-1) / mean_cov_ploidy
-
 
         records = mt.filter_rows(hl.expr.set(vids).contains(mt.rsid)).entries().collect()
 
@@ -497,7 +500,7 @@ class GATKSVPlottingSuite(object):
 
         rows = len(self.types)
         cols = len(INFOS_LIST)
-        figure_width = 14
+        figure_width = 8
         figure_height = max(2, len(self.types))
 
         pf, axes = plt.subplots(rows, cols, figsize=(figure_width, figure_height))
@@ -540,23 +543,23 @@ class GATKSVPlottingSuite(object):
         # Autosomal only, TODO : hard-coded allosome
         mt = hl.variant_qc(mt).rows()
         mt = mt.filter((mt.locus.contig != 'chrX') & (mt.locus.contig != 'chrY'))
-        vqc = mt.aggregate(hl.agg.group_by(mt.info.SVTYPE, hl.agg.collect(hl.struct(AF=mt.variant_qc.AF, N_NON_REF=mt.variant_qc.n_non_ref, P_HWE=mt.variant_qc.p_value_hwe, MIN_GQ=mt.variant_qc.gq_stats.min))))
+        vqc = mt.aggregate(hl.agg.group_by(mt.info.SVTYPE, hl.agg.collect(hl.struct(AF=mt.variant_qc.AF, N_NON_REF=mt.variant_qc.n_non_ref, P_HWE=mt.variant_qc.p_value_hwe, MEAN_GQ=mt.variant_qc.gq_stats.mean))))
 
         types = sorted(vqc.keys())
 
         rows = len(types)
         cols = 5
-        figure_width = 20
-        figure_height = max(5, 3 * rows)
+        figure_width = 10
+        figure_height = max(3, 1.25 * rows)
 
-        bins_lin_af = min(num_samples, 30)
+        bins_lin_af = min(num_samples, 10)
         bins_log_start_af = - np.log(float(num_samples)) / np.log(10.)
-        bins_log_af = np.logspace(start=bins_log_start_af, stop=0, num=min(num_samples, 30), base=10.0)
+        bins_log_af = np.logspace(start=bins_log_start_af, stop=0, num=min(num_samples, 10), base=10.0)
 
         bins_log_start_p_hwe = np.log(min([min([x.P_HWE for x in vqc[t]]) for t in vqc])) / np.log(10.)
-        bins_log_p_hwe = np.logspace(start=max(-6, bins_log_start_p_hwe), stop=0, num=30, base=10.0)
+        bins_log_p_hwe = np.logspace(start=max(-6, bins_log_start_p_hwe), stop=0, num=10, base=10.0)
 
-        bins_min_gq = np.arange(31)
+        bins_mean_gq = np.arange(0, 31, 3)
 
         alt_allele_index = 1  # TODO: does not work for multi-allelic, assumes alt index
         rwidth = 0.9
@@ -569,7 +572,7 @@ class GATKSVPlottingSuite(object):
             rolling_af_x = np.arange(min(carrier_freq), max(carrier_freq), 0.01)
             rolling_af = rolling_af_fn(rolling_af_x)
             p_hwe = [x.P_HWE for x in vqc[types[i]]]
-            min_gq = [x.MIN_GQ for x in vqc[types[i]]]
+            mean_gq = [x.MEAN_GQ for x in vqc[types[i]]]
 
             if rows == 1:
                 ax0 = axes[0]
@@ -584,17 +587,21 @@ class GATKSVPlottingSuite(object):
                 ax3 = axes[i, 3]
                 ax4 = axes[i, 4]
             ax0.hist(allele_freq, bins=bins_lin_af, rwidth=rwidth)
+            ax0.set_yticks([])
             ax0.set_ylabel('{} freq'.format(types[i]))
 
             ax1.hist(allele_freq, bins=bins_log_af, rwidth=rwidth)
+            ax1.set_yticks([])
             ax1.set_xscale('log')
 
             ax2.hist(p_hwe, bins=bins_log_p_hwe, rwidth=rwidth)
+            ax2.set_yticks([])
             ax2.set_xscale('log')
 
-            ax3.hist(min_gq, bins=bins_min_gq, rwidth=rwidth)
+            ax3.hist(mean_gq, bins=bins_mean_gq, rwidth=rwidth)
+            ax3.set_yticks([])
 
-            ax4.plot(carrier_freq, allele_freq, 'ok', markersize=2)
+            ax4.plot(carrier_freq, allele_freq, 'ok', markersize=2, alpha=0.1)
             ax4.plot([0, 1], [0, 1], '-k')
             ax4.plot([0, 1], [0, 0.5], '-k')
             ax4.plot(rolling_af_x, rolling_af, '-r')
@@ -603,7 +610,7 @@ class GATKSVPlottingSuite(object):
                 ax0.set_xlabel('AF')
                 ax1.set_xlabel('AF')
                 ax2.set_xlabel('HWE p-val')
-                ax3.set_xlabel('Min GQ')
+                ax3.set_xlabel('Mean GQ')
                 ax4.set_xlabel('Carrier Freq')
         plt.tight_layout()
         plt.savefig(out_path)

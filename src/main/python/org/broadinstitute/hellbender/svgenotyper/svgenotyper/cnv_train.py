@@ -117,8 +117,6 @@ def save_model(model: SVDepthPyroModel, base_path: str):
             'alpha_ref': model.alpha_ref,
             'alpha_non_ref': model.alpha_non_ref,
             'sample_depth_bin_size': model.sample_depth_bin_size,
-            'loss': model.loss,
-            'guide_loc': pyro.param('AutoDiagonalNormal.loc').tolist(),
-            'guide_scale': pyro.param('AutoDiagonalNormal.scale').tolist()
+            'loss': model.loss
         }, f)
     pyro.get_param_store().save(base_path + '.param_store.pyro')
