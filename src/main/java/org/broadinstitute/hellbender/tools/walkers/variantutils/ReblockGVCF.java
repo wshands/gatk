@@ -27,6 +27,7 @@ import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReferenceConf
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
@@ -174,6 +175,7 @@ public final class ReblockGVCF extends VariantWalker {
     private List<VariantContextBuilder> homRefBlockBuffer = new ArrayList<>(10);  //10 is a generous estimate for the number of overlapping deletions
     private String currentContig;
     private VariantContextWriter vcfWriter;
+    private CachingIndexedFastaSequenceFile referenceReader;
     private VariantContextBuilderComparator refBufferComparator = new VariantContextBuilderComparator();
 
     @Override
@@ -235,6 +237,8 @@ public final class ReblockGVCF extends VariantWalker {
         if (genotypeArgs.samplePloidy != PLOIDY_TWO) {
             throw new UserException.BadInput("The -ploidy parameter is ignored in " + getClass().getSimpleName() + " tool as this is tool assumes a diploid sample");
         }
+
+         referenceReader = ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier());
     }
 
     private HaplotypeCallerGenotypingEngine createGenotypingEngine(SampleList samples) {
@@ -295,7 +299,7 @@ public final class ReblockGVCF extends VariantWalker {
 
         //Pass back ref-conf homRef sites/blocks to be combined by the GVCFWriter
         if (isHomRefBlock(result)) {
-            if (result.getEnd() <= bufferEnd) {
+            if (result.getEnd() <= vcfOutputEnd) {
                 return null;
             }
             final VariantContext filtered = filterHomRefBlock(result);
@@ -311,31 +315,30 @@ public final class ReblockGVCF extends VariantWalker {
         if (result.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0) > 0 && !isMonomorphicCallWithAlts(result) && dropLowQuals) {
             result = genotypingEngine.calculateGenotypes(originalVC);
         }
-
         if (result == null) {
             return null;
         }
 
-        final VariantContext trimmedVariant = cleanUpHighQualityVariant(result, originalVC);
-        //handle overlapping deletions so there are no duplicate bases
-        //this is under the assumption that HaplotypeCaller doesn't give us overlapping bases, which isn't really tru
 
 
         //variants with PL[0] less than threshold get turned to homRef with PL=[0,0,0], shouldn't get INFO attributes
         //make sure we can call het variants with GQ >= rgqThreshold in joint calling downstream
         if(shouldBeReblocked(result)) {
-            if (result.getEnd() <= vcfOutputEnd || result.getEnd() <= bufferEnd) {
+            if (result.getEnd() <= vcfOutputEnd) {
                 return null;
             }
             final VariantContextBuilder newHomRefBuilder = lowQualVariantToGQ0HomRef(result, originalVC);
             if (newHomRefBuilder != null) {
                 updateHomRefBlockBuffer(newHomRefBuilder.make());
-                bufferEnd = result.getEnd();
             }
             return null;  //don't write yet in case new ref block needs to be modified
         }
         //high quality variant
         else {
+            final VariantContext trimmedVariant = cleanUpHighQualityVariant(result, originalVC);
+            //handle overlapping deletions so there are no duplicate bases
+            //this is under the assumption that HaplotypeCaller doesn't give us overlapping bases, which isn't really tru
+
             if (homRefBlockBuffer.size() > 0) {
                 //Queue the low quality deletions until we hit a high quality variant or the start is past the oldBlockEnd
                 //Oh no, do we have to split the deletion-ref blocks???
@@ -349,10 +352,15 @@ public final class ReblockGVCF extends VariantWalker {
     /**
      * Write and remove ref blocks that end before the variant
      * Trim ref block if the variant occurs in the middle of a block
-     * @param variantContextToOutput
+     * @param variantContextToOutput can overlap existing ref blocks in buffer, but should never start before vcfOutputEnd
      */
     private void updateHomRefBlockBuffer(final VariantContext variantContextToOutput) {
-        Utils.validate(variantContextToOutput.getStart() <= variantContextToOutput.getEnd(), "Input variant context has negative length: " + variantContextToOutput.toStringDecodeGenotypes());
+        Utils.validate(variantContextToOutput.getStart() <= variantContextToOutput.getEnd(),
+                "Input variant context at position " + currentContig + ":" + variantContextToOutput.getStart() + " has negative length: start=" + variantContextToOutput.getStart() + " end=" + variantContextToOutput.getEnd());
+        if (variantContextToOutput.getGenotype(0).isHomRef() && variantContextToOutput.getStart() < vcfOutputEnd) {
+            throw new IllegalStateException("Reference positions added to buffer should not overlap positions already output to VCF. "
+                    + variantContextToOutput.getStart() + " overlaps position " + currentContig + ":" + vcfOutputEnd + " already emitted.");
+        }
         final List<VariantContextBuilder> completedBlocks = new ArrayList<>();
         final List<VariantContextBuilder> tailBuffer = new ArrayList<>();
         for (final VariantContextBuilder builder : homRefBlockBuffer) {
@@ -366,8 +374,7 @@ public final class ReblockGVCF extends VariantWalker {
             if (blockEnd >= variantStart) {  //then trim out overlap
                 if (blockEnd > variantEnd && blockStart <= variantStart) {  //then this block will be split -- add a post-variant block
                     final VariantContextBuilder blockTailBuilder = new VariantContextBuilder(builder);
-                    final byte[] newRef = ReferenceUtils.getRefBaseAtPosition(ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier()), variantContextToOutput.getContig(), variantEnd + 1);
-                    blockTailBuilder.start(variantEnd + 1).alleles(Arrays.asList(Allele.create(newRef,true), Allele.NON_REF_ALLELE));
+                    moveBuilderStart(blockTailBuilder, variantEnd + 1);
                     tailBuffer.add(blockTailBuilder);
                     builder.stop(variantEnd);
                     builder.attribute(VCFConstants.END_KEY, variantEnd);
@@ -375,7 +382,7 @@ public final class ReblockGVCF extends VariantWalker {
                 }
                 if (blockStart < variantStart) { //right trim
                     if (blockStart > variantStart - 1) {
-                        throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; variant: " + variantContextToOutput.toStringDecodeGenotypes() + "; current builder: " + builder.getStart() + " to " + builder.getStop());
+                        throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; current builder: " + builder.getStart() + " to " + builder.getStop());
                     }
                     builder.attribute(VCFConstants.END_KEY, variantStart - 1);
                     builder.stop(variantStart - 1);
@@ -384,13 +391,14 @@ public final class ReblockGVCF extends VariantWalker {
                         completedBlocks.add(builder);
                     } else {
                         if (blockEnd < variantEnd + 1) {
-                            throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; variant: " + variantContextToOutput.toStringDecodeGenotypes() + "; current builder: " + builder.getStart() + " to " + builder.getStop());
+                            throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; current builder: " + builder.getStart() + " to " + builder.getStop());
                         }
-                        builder.start(variantEnd + 1);
+                        final byte[] newRef = ReferenceUtils.getRefBaseAtPosition(ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier()), variantContextToOutput.getContig(), variantEnd + 1);
+                        moveBuilderStart(builder, variantEnd + 1);
                     }
                 }
                 if (builder.getStart() > builder.getStop()) {
-                    throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; variant: " + variantContextToOutput.toStringDecodeGenotypes() + "; current builder: " + builder.getStart() + " to " + builder.getStop());
+                    throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; current builder: " + builder.getStart() + " to " + builder.getStop());
                 }
             }
             //only flush ref blocks if we're outputting a variant, otherwise ref blocks can be out of order
@@ -399,19 +407,16 @@ public final class ReblockGVCF extends VariantWalker {
                 vcfOutputEnd = (int)builder.getStop();
                 completedBlocks.add(builder);
             }
-            bufferEnd = blockEnd;
+            bufferEnd = blockEnd;  //keep track of observed ends
         }
         homRefBlockBuffer.removeAll(completedBlocks);
         if (variantContextToOutput.getGenotype(0).isHomRef()) {
             final VariantContextBuilder newHomRefBlock = new VariantContextBuilder(variantContextToOutput);
-            if (variantContextToOutput.getStart() < vcfOutputEnd) {
-                throw new IllegalStateException("Reference positions added to buffer should not overlap positions already output to VCF. "
-                        + variantContextToOutput.getStart() + " overlaps position " + currentContig + ":" + vcfOutputEnd + " already emitted.");
-            }
             homRefBlockBuffer.add(newHomRefBlock);
         }
         homRefBlockBuffer.addAll(tailBuffer);
         homRefBlockBuffer.sort(refBufferComparator);  //this may seem lazy, but it's more robust to assumptions about overlap being violated
+        bufferEnd = Math.max(bufferEnd, variantContextToOutput.getEnd());
     }
 
     private void flushRefBlockBuffer() {
@@ -448,21 +453,21 @@ public final class ReblockGVCF extends VariantWalker {
      */
     private boolean isMonomorphicCallWithAlts(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
-        return (genotype.isHomRef() && result.getLog10PError() != VariantContext.NO_LOG10_PERROR)
-                || genotype.getAlleles().stream().allMatch(a -> a.equals(Allele.SPAN_DEL) || a.isReference());
+        return ((genotype.isHomRef() || genotype.isNoCall()) && result.getLog10PError() != VariantContext.NO_LOG10_PERROR)
+                || genotype.getAlleles().stream().allMatch(a -> a.equals(Allele.SPAN_DEL) || a.isReference() || a.isNoCall());
     }
 
     private VariantContext filterHomRefBlock(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
-        if (result.getEnd() <= bufferEnd) {
+        /*if (result.getEnd() <= bufferEnd) {
             return null;
-        }
+        }*/
         final VariantContextBuilder vcBuilder = new VariantContextBuilder(result);
         if (result.getStart() <= vcfOutputEnd) {
             if (result.getEnd() <= vcfOutputEnd) {
                 return null;
             }
-            vcBuilder.start(vcfOutputEnd + 1);
+            moveBuilderStart(vcBuilder, vcfOutputEnd + 1);
         }
         if (dropLowQuals && (!genotype.hasGQ() || genotype.getGQ() < rgqThreshold || genotype.getGQ() == 0)) {
             return null;
@@ -516,29 +521,36 @@ public final class ReblockGVCF extends VariantWalker {
      */
     @VisibleForTesting
     public VariantContextBuilder lowQualVariantToGQ0HomRef(final VariantContext result, final VariantContext originalVC) {
-        Utils.validate(result.getEnd() > vcfOutputEnd && result.getEnd() > bufferEnd, "Variant is entirely "
-                + "overlapped by emitted deletions and/or pending reference blocks.");
+        //Utils.validate(result.getEnd() > vcfOutputEnd && result.getEnd() > bufferEnd, "Variant is entirely "
+        //        + "overlapped by emitted deletions and/or pending reference blocks.");
+        // this is okay because trimmed deletions will have tail blocks
 
         if(dropLowQuals && (!isMonomorphicCallWithAlts(result) || !result.getGenotype(0).isCalled())) {
             return null;
         }
-        if (!result.getGenotype(0).isCalled()) {  //TODO: need to add genotype?
-            return new VariantContextBuilder(result).attributes(null).attribute(VCFConstants.END_KEY, result.getEnd())
-                    .start(Math.max(result.getStart(), vcfOutputEnd +1));  //delete variant annotations and add end key
+
+        if (!result.getGenotype(0).isCalled() && !result.getGenotype(0).hasPL()) {
+            final Map<String, Object> blockAttributes = new LinkedHashMap<>(2);
+            final GenotypeBuilder gb = changeCallToGQ0HomRef(result, blockAttributes);
+            final List<Allele> blockAlleles = Arrays.asList(Allele.create(result.getReference().getBases()[0], true), Allele.NON_REF_ALLELE);
+            return new VariantContextBuilder(result).alleles(blockAlleles).attributes(blockAttributes).genotypes(gb.make())
+                    .start(Math.max(result.getStart(), vcfOutputEnd +1)).log10PError(VariantContext.NO_LOG10_PERROR);  //delete variant annotations and add end key
         }
 
         final Map<String, Object> attrMap = new HashMap<>();
-        final GenotypeBuilder gb = changeCallToGQ0HomRef(result, attrMap);
+
+        //this method does a lot of things, including fixing alleles and adding the END key
+        final GenotypeBuilder gb = changeCallToGQ0HomRef(result, attrMap);  //note that gb has all zero PLs
 
         //there are some cases where there are low quality variants with homRef calls AND alt alleles!
         //take the most likely alt's likelihoods when making the ref block
-        if (isMonomorphicCallWithAlts(originalVC)) {
+        if (isMonomorphicCallWithAlts(result)) {
             final Genotype genotype = result.getGenotype(0);
             final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAlleles(result, PLOIDY_TWO, 1);
             final Optional<Allele> bestNonSymbolicAlt = bestAlleles.stream().filter(a -> !a.isReference() && !a.isNonRefAllele()).findFirst();  //allow span dels
             //here we're assuming that an alt that isn't <NON_REF> will have higher likelihood than non-ref, which should be true
             final Allele bestAlt = bestNonSymbolicAlt.isPresent() ? bestNonSymbolicAlt.get() : Allele.NON_REF_ALLELE;
-            final int[] idxVector = originalVC.getGLIndicesOfAlternateAllele(bestAlt);   //this is always length 3
+            final int[] idxVector = result.getGLIndicesOfAlternateAllele(bestAlt);   //this is always length 3
             if (genotype.hasPL()) {
                 final int[] multiallelicPLs = genotype.getPL();
                 int[] newPLs = new int[3];
@@ -565,11 +577,13 @@ public final class ReblockGVCF extends VariantWalker {
         final VariantContextBuilder builder = new VariantContextBuilder(result);
 
         final Genotype newG = gb.make();
-        if (result.getStart() <= vcfOutputEnd || result.getStart() <= bufferEnd) {
-            builder.start(Math.max(vcfOutputEnd, bufferEnd) + 1);
+        builder.alleles(Arrays.asList(newG.getAlleles().get(0), Allele.NON_REF_ALLELE)).genotypes(newG);
+        if (result.getStart() <= vcfOutputEnd) {
+            final int newStart = vcfOutputEnd + 1;
+            moveBuilderStart(builder, newStart);
         }
-        return builder.alleles(Arrays.asList(newG.getAlleles().get(0), Allele.NON_REF_ALLELE)).unfiltered()
-                .log10PError(VariantContext.NO_LOG10_PERROR).attributes(attrMap).genotypes(newG); //genotyping engine will add lowQual filter, so strip it off
+        return builder.unfiltered()
+                .log10PError(VariantContext.NO_LOG10_PERROR).attributes(attrMap); //genotyping engine will add lowQual filter, so strip it off
     }
 
     /**
@@ -584,9 +598,9 @@ public final class ReblockGVCF extends VariantWalker {
         Allele newRef = result.getReference();
         GenotypeBuilder gb = new GenotypeBuilder(genotype);
         //NB: If we're dropping a deletion allele, then we need to trim the reference and add an END tag with the vc stop position
-        if (result.getReference().length() > 1 || genotype.getAlleles().contains(Allele.SPAN_DEL)) {
+        if (result.getReference().length() > 1 || genotype.getAlleles().contains(Allele.SPAN_DEL) || genotype.getAlleles().contains(Allele.NO_CALL)) {
             newRef = Allele.create(newRef.getBases()[0], true);
-            gb.alleles(Collections.nCopies(PLOIDY_TWO, newRef));
+            gb.alleles(Collections.nCopies(PLOIDY_TWO, newRef)).PL(new int[3]).GQ(0).noAD().noAttributes();
         }
         //if GT is not homRef, correct it
         if (!isMonomorphicCallWithAlts(result)) {
@@ -671,13 +685,12 @@ public final class ReblockGVCF extends VariantWalker {
                 if (genotype.hasDP()) {
                     refBlockGenotypeBuilder.DP(genotype.getDP());
                 }
-                if (refStart < bufferEnd  && result.getEnd() > bufferEnd && result.getEnd() > vcfOutputEnd) {
+                if (refStart > vcfOutputEnd  && newTrimmedAllelesVC.getEnd() > vcfOutputEnd) {
                     final VariantContextBuilder trimBlockBuilder = new VariantContextBuilder();
                     trimBlockBuilder.chr(currentContig).start(Math.max(refStart, vcfOutputEnd+1)).stop(result.getEnd()).
                             alleles(Arrays.asList(newRef, Allele.NON_REF_ALLELE)).attribute(VCFConstants.END_KEY, result.getEnd())
                             .genotypes(refBlockGenotypeBuilder.make());
                     updateHomRefBlockBuffer(trimBlockBuilder.make());
-                    bufferEnd = result.getEnd();
                 }
             }
         }
@@ -824,6 +837,25 @@ public final class ReblockGVCF extends VariantWalker {
         attrMap.put(GATKVCFConstants.RAW_GENOTYPE_COUNT_KEY, g.getAlleles().stream().anyMatch(Allele::isReference) ? Arrays.asList(0,1,0) : Arrays.asList(0,0,1)); //ExcessHet currently uses rounded/integer genotype counts, so do the same here
 
         return builder.attributes(attrMap).unfiltered().make();
+    }
+
+    /**
+     * Modifies ref block builder to change start position and update ref allele accordingly in VC and genotypes
+     * @param builder
+     * @param newStart
+     */
+    private void moveBuilderStart(final VariantContextBuilder builder, final int newStart) {
+        final byte[] newRef = ReferenceUtils.getRefBaseAtPosition(referenceReader, currentContig, newStart);
+        final Allele newRefAllele = Allele.create(newRef, true);
+        final ArrayList<Genotype> genotypesArray = new ArrayList<>();
+        for (final Genotype g : builder.getGenotypes()) {
+            final GenotypeBuilder gb = new GenotypeBuilder(g);
+            final List<Allele> newGTAlleles = g.getAlleles().stream().map(a -> a.isReference() ? newRefAllele : a).collect(Collectors.toList());
+            gb.alleles(newGTAlleles);
+            genotypesArray.add(gb.make());
+        }
+        final List<Allele> newVCAlleles = builder.getAlleles().stream().map(a -> a.isReference() ? newRefAllele : a).collect(Collectors.toList());
+        builder.start(newStart).alleles(newVCAlleles).genotypes(genotypesArray);
     }
 
     @Override
