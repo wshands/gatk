@@ -533,8 +533,12 @@ public final class ReblockGVCF extends VariantWalker {
             final Map<String, Object> blockAttributes = new LinkedHashMap<>(2);
             final GenotypeBuilder gb = changeCallToGQ0HomRef(result, blockAttributes);
             final List<Allele> blockAlleles = Arrays.asList(Allele.create(result.getReference().getBases()[0], true), Allele.NON_REF_ALLELE);
-            return new VariantContextBuilder(result).alleles(blockAlleles).attributes(blockAttributes).genotypes(gb.make())
-                    .start(Math.max(result.getStart(), vcfOutputEnd +1)).log10PError(VariantContext.NO_LOG10_PERROR);  //delete variant annotations and add end key
+            final VariantContextBuilder vb = new VariantContextBuilder(result).alleles(blockAlleles).attributes(blockAttributes).genotypes(gb.make())
+                    .log10PError(VariantContext.NO_LOG10_PERROR);
+            if (vcfOutputEnd + 1 > result.getStart()) {
+                moveBuilderStart(vb, vcfOutputEnd + 1);
+            }
+            return vb;   //delete variant annotations and add end key
         }
 
         final Map<String, Object> attrMap = new HashMap<>();
