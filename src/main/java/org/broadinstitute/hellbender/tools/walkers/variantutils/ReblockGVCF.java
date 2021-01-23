@@ -265,6 +265,7 @@ public final class ReblockGVCF extends VariantWalker {
         } else if (!variant.getContig().equals(currentContig)) {
             flushRefBlockBuffer();
             currentContig = variant.getContig();
+            vcfOutputEnd = 0;
         }
         if (variant.getStart() > vcfOutputEnd) {
             isInDeletion = false;
