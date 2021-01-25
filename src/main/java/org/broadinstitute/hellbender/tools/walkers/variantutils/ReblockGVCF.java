@@ -682,7 +682,8 @@ public final class ReblockGVCF extends VariantWalker {
                     }
                 }
                 final GenotypeBuilder refBlockGenotypeBuilder = new GenotypeBuilder();
-                final int refStart = result.getEnd()-(oldLongestAlleleLength-newLongestAlleleLength)+1;
+                //final int refStart = result.getEnd()-(oldLongestAlleleLength-newLongestAlleleLength)+1;
+                final int refStart = Math.max(result.getEnd()-(oldLongestAlleleLength-newLongestAlleleLength), vcfOutputEnd)+1;
                 final Allele newRef = getRefAfterTrimmedDeletion(result.getReference(), result.getStart(), refStart);
                 refBlockGenotypeBuilder.PL(newRefBlockLikelihoods)
                         .GQ(MathUtils.secondSmallestMinusSmallest(newRefBlockLikelihoods, 0))
