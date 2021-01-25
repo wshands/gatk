@@ -690,7 +690,8 @@ public final class ReblockGVCF extends VariantWalker {
                 if (genotype.hasDP()) {
                     refBlockGenotypeBuilder.DP(genotype.getDP());
                 }
-                if (refStart > vcfOutputEnd  && newTrimmedAllelesVC.getEnd() > vcfOutputEnd) {
+                //if (refStart > vcfOutputEnd  && newTrimmedAllelesVC.getEnd() > vcfOutputEnd) {
+                if (refStart > vcfOutputEnd) {
                     final VariantContextBuilder trimBlockBuilder = new VariantContextBuilder();
                     trimBlockBuilder.chr(currentContig).start(Math.max(refStart, vcfOutputEnd+1)).stop(result.getEnd()).
                             alleles(Arrays.asList(newRef, Allele.NON_REF_ALLELE)).attribute(VCFConstants.END_KEY, result.getEnd())
