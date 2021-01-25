@@ -445,17 +445,17 @@ public class LocalAssembler extends PairWalker {
     /** replace adjacent contigs without branches with a single, larger contig **/
     @VisibleForTesting
     static void weldPipes( final List<ContigImpl> contigs ) {
-        for ( int contigId = 0; contigId != contigs.size(); ++contigId ) {
-            final ContigImpl contig = contigs.get(contigId);
+        for ( int contigIdx = 0; contigIdx != contigs.size(); ++contigIdx ) {
+            final ContigImpl contig = contigs.get(contigIdx);
             if ( contig.getSuccessors().size() == 1 ) {
                 final Contig successor = contig.getSuccessors().get(0);
                 if ( successor != contig && successor != contig.rc() &&
                         successor.getPredecessors().size() == 1 ) {
-                    contigs.set(contigId, join(contigId, contig, successor));
+                    contigs.set(contigIdx, join(contig.getId(), contig, successor));
                     if ( !contigs.remove(successor.canonical()) ) {
                         throw new GATKException("successor linkage is messed up");
                     }
-                    contigId -= 1; // reconsider the new contig -- there might be more joining possible
+                    contigIdx -= 1; // reconsider the new contig -- there might be more joining possible
                     continue;
                 }
             }
@@ -463,11 +463,11 @@ public class LocalAssembler extends PairWalker {
                 final Contig predecessor = contig.getPredecessors().get(0);
                 if ( predecessor != contig && predecessor != contig.rc() &&
                         predecessor.getSuccessors().size() == 1 ) {
-                    contigs.set(contigId, join(contigId, predecessor, contig));
+                    contigs.set(contigIdx, join(contig.getId(), predecessor, contig));
                     if ( !contigs.remove(predecessor.canonical()) ) {
                         throw new GATKException("predecessor linkage is messed up");
                     }
-                    contigId -= 1; // reconsider
+                    contigIdx -= 1; // reconsider
                 }
             }
         }
@@ -753,12 +753,9 @@ public class LocalAssembler extends PairWalker {
                                   final Set<Traversal> traversalSet ) {
         contigsList.add(predecessor);
         if ( contig.isCyclic() ) {
-            final int cycleIdx = contigsList.indexOf(contig);
-            if ( cycleIdx != -1 ) {
-                traverseCycle(cycleIdx, contig, contigsList, readPaths, contigTransitsMap, traversalSet);
-                contigsList.remove(contigsList.size() - 1);
-                return;
-            }
+            traverseCycle(contig, contigsList, readPaths, contigTransitsMap, traversalSet);
+            contigsList.remove(contigsList.size() - 1);
+            return;
         }
         final List<TransitPairCount> transits = contigTransitsMap.get(contig);
         boolean done = false;
@@ -788,20 +785,24 @@ public class LocalAssembler extends PairWalker {
         contigsList.remove(contigsList.size() - 1);
     }
 
-    private static void traverseCycle( final int cycleIdx,
-                                       final Contig contig,
+    private static void traverseCycle( final Contig contig,
                                        final List<Contig> contigsList,
                                        final List<Path> readPaths,
                                        final Map<Contig, List<TransitPairCount>> contigTransitsMap,
                                        final Set<Traversal> traversalSet ) {
         contigsList.add(contig);
-        final int startIdx = cycleIdx > 0 ? cycleIdx - 1 : 0;
+        final int nContigs = contigsList.size();
+        // the final element of the list is cyclic, if there's a previous element it will be
+        // non-cyclic, so start there figuring out how far the read paths lead us
         final List<List<Contig>> longestPaths =
-                findLongestPaths(contigsList.subList(startIdx, contigsList.size()), readPaths);
+                findLongestPaths(contigsList.subList(Math.max(0, nContigs - 2), nContigs), readPaths);
+        // didn't get anywhere -- just complete the traversal
         if ( longestPaths.isEmpty() ) {
             addTraversal(new Traversal(contigsList, true), traversalSet);
         } else {
+            // for each unique extension into the cycle
             for ( final List<Contig> path : longestPaths ) {
+                // don't think this can happen, but still
                 if ( path.isEmpty() ) {
                     addTraversal(new Traversal(contigsList, true), traversalSet);
                     continue;
@@ -809,10 +810,12 @@ public class LocalAssembler extends PairWalker {
                 final List<Contig> extendedContigsList =
                         new ArrayList<>(contigsList.size() + path.size());
                 extendedContigsList.addAll(contigsList);
+                // if we didn't get out of the cycle
                 if ( path.get(path.size() - 1).isCyclic() ) {
                     extendedContigsList.addAll(path);
                     addTraversal(new Traversal(extendedContigsList, true), traversalSet);
                 } else {
+                    // we found a cycle-exiting path, so extend that normally
                     for ( final Contig curContig : path ) {
                         if ( curContig.isCyclic() ) {
                             extendedContigsList.add(curContig);
