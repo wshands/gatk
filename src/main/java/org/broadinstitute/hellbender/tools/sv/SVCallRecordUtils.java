@@ -229,38 +229,43 @@ public final class SVCallRecordUtils {
     }
 
     public static boolean isValidSize(final SVCallRecord call, final int minEventSize) {
-        return call.getType().equals(StructuralVariantType.BND) || call.getLength() >= minEventSize;
+        // Treat inter-chromosomal events as always valid
+        if (!call.getContigA().equals(call.getContigB())) {
+            return true;
+        }
+        // BNDs have undefined nominal length, so use coordinates
+        if (call.getType().equals(StructuralVariantType.BND)) {
+            return Math.abs(call.getPositionB() - call.getPositionA()) >= minEventSize;
+        }
+        // Otherwise use length
+        return call.getLength() >= minEventSize;
     }
 
     public static <T> boolean intervalIsIncluded(final SVCallRecord call, final Map<String, IntervalTree<T>> includedIntervalTreeMap,
-                                                 final double minDepthOnlyIncludeOverlap) {
-        if (SVDepthOnlyCallDefragmenter.isDepthOnlyCall(call)) {
-            return intervalIsIncludedDepthOnly(call, includedIntervalTreeMap, minDepthOnlyIncludeOverlap);
-        }
-        return intervalIsIncludedNonDepthOnly(call, includedIntervalTreeMap);
-    }
-
-    private static <T> boolean intervalIsIncludedNonDepthOnly(final SVCallRecord call, final Map<String,IntervalTree<T>> includedIntervalTreeMap) {
+                                                 final double minOverlapFraction, final boolean requireBreakendOverlap) {
         final IntervalTree<T> startTree = includedIntervalTreeMap.get(call.getContigA());
+        // Contig A included
         if (startTree == null) {
             return false;
         }
         final IntervalTree<T> endTree = includedIntervalTreeMap.get(call.getContigB());
+        // Contig B included
         if (endTree == null) {
             return false;
         }
-        return startTree.overlappers(call.getPositionA(), call.getPositionA() + 1).hasNext()
-                && endTree.overlappers(call.getPositionB(), call.getPositionB() + 1).hasNext();
-    }
-
-    private static <T> boolean intervalIsIncludedDepthOnly(final SVCallRecord call, final Map<String,IntervalTree<T>> includedIntervalTreeMap,
-                                                           final double minDepthOnlyIncludeOverlap) {
-        final IntervalTree<T> tree = includedIntervalTreeMap.get(call.getContigA());
-        if (tree == null) {
+        // Breakends both included, if required
+        if (requireBreakendOverlap && !startTree.overlappers(call.getPositionA(), call.getPositionA() + 1).hasNext()
+                && !endTree.overlappers(call.getPositionB(), call.getPositionB() + 1).hasNext()) {
             return false;
         }
-        final double overlapFraction = totalOverlap(call.getPositionA(), call.getPositionB(), tree) / (double) call.getLength();
-        return overlapFraction >= minDepthOnlyIncludeOverlap;
+        // Can include all interchromosomal variants at this point
+        if (!call.getContigA().equals(call.getContigB())) {
+            return true;
+        }
+        // Check overlap fraction
+        final long overlapLength = totalOverlap(call.getPositionA(), call.getPositionB(), startTree);
+        final double overlapFraction = overlapLength / (double) (call.getPositionB() - call.getPositionA());
+        return overlapFraction >= minOverlapFraction;
     }
 
     private static <T> long totalOverlap(final int start, final int end, final IntervalTree<T> tree) {

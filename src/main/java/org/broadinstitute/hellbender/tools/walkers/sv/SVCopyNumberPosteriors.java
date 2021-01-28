@@ -3,7 +3,6 @@ package org.broadinstitute.hellbender.tools.walkers.sv;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.samtools.util.IntervalTree;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
@@ -24,7 +23,6 @@ import org.broadinstitute.hellbender.tools.copynumber.gcnv.IntegerCopyNumberStat
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.*;
 import org.broadinstitute.hellbender.utils.QualityUtils;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
@@ -102,15 +100,6 @@ public final class SVCopyNumberPosteriors extends VariantWalker {
     private File outputFile;
 
     @Argument(
-            doc = "Min event size",
-            fullName = MIN_SIZE_LONG_NAME,
-            minValue = 0,
-            maxValue = Integer.MAX_VALUE,
-            optional = true
-    )
-    private int minEventSize = 0;
-
-    @Argument(
             doc = "Prior probability of neutral copy number for " + DepthEvidenceAggregator.COPY_NEUTRAL_PRIOR_BASIS_LENGTH +
                     "bp in regions where copy number calls are not available.",
             fullName = COPY_NEUTRAL_PRIOR_LONG_NAME,
@@ -141,20 +130,9 @@ public final class SVCopyNumberPosteriors extends VariantWalker {
     )
     private boolean genotypeDepthCalls = false;
 
-    @Argument(
-            doc = "Depth-only call min included intervals overlap",
-            fullName = SVCluster.DEPTH_ONLY_INCLUDE_INTERVAL_OVERLAP_LONG_NAME,
-            minValue = 0,
-            maxValue = 1,
-            optional = true
-    )
-    private double minDepthOnlyIncludeOverlap = 0.5;
-
-    private final Map<String,IntervalTree<Object>> includedIntervalsTreeMap = new HashMap<>();
     private List<VCFFileReader> posteriorsReaders;
     private List<String> samples;
     private VariantContextWriter outputWriter;
-    private String currentContig;
     private SVGenotypeEngineDepthOnly depthOnlyGenotypeEngine;
     private DepthEvidenceAggregator depthEvidenceAggregator;
     private SAMSequenceDictionary dictionary;
@@ -177,8 +155,6 @@ public final class SVCopyNumberPosteriors extends VariantWalker {
         depthEvidenceAggregator = new DepthEvidenceAggregator(posteriorsReaders, contigPloidyCollections, copyNeutralPrior, samples, dictionary);
         outputWriter = createVCFWriter(outputFile);
         outputWriter.writeHeader(composeHeader());
-        currentContig = null;
-        loadIntervalTree();
     }
 
     @Override
@@ -191,11 +167,6 @@ public final class SVCopyNumberPosteriors extends VariantWalker {
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
         final SVCallRecord call = SVCallRecordUtils.create(variant);
-        if (!SVCallRecordUtils.isValidSize(call, minEventSize)
-                || !SVCallRecordUtils.intervalIsIncluded(call, includedIntervalsTreeMap, minDepthOnlyIncludeOverlap)) {
-            return;
-        }
-
         VariantContext finalVariant = depthEvidenceAggregator.apply(call, variant);
         if (SVGenotypeEngine.CNV_TYPES.contains(finalVariant.getStructuralVariantType())
                 && !SVGenotypeEngineFromModel.isDepthOnlyVariant(finalVariant)
@@ -236,17 +207,6 @@ public final class SVCopyNumberPosteriors extends VariantWalker {
             }
         }
         return Collections.unmodifiableSet(cnvSamplesSet);
-    }
-
-    private void loadIntervalTree() {
-        final List<SimpleInterval> intervals = getRequestedIntervals();
-        if (intervals == null) {
-            throw new UserException.MissingReference("Reference dictionary is required");
-        }
-        for (final SimpleInterval interval : intervals) {
-            includedIntervalsTreeMap.putIfAbsent(interval.getContig(), new IntervalTree<>());
-            includedIntervalsTreeMap.get(interval.getContig()).put(interval.getStart(), interval.getEnd(), null);
-        }
     }
 
     private VCFHeader composeHeader() {

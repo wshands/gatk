@@ -1,7 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.samtools.util.IntervalTree;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.GenotypesContext;
@@ -22,7 +21,6 @@ import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.*;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 
 import java.io.IOException;
@@ -85,19 +83,19 @@ public final class SVCluster extends VariantWalker {
     public static final String VARIANT_PREFIX_LONG_NAME = "variant-prefix";
 
     @Argument(
-            doc = "Split reads file",
+            doc = "Split reads evidence file",
             fullName = SPLIT_READ_LONG_NAME
     )
     private GATKPath splitReadsFile;
 
     @Argument(
-            doc = "Discordant pairs file",
+            doc = "Discordant pairs evidence file",
             fullName = DISCORDANT_PAIRS_LONG_NAME
     )
     private GATKPath discordantPairsFile;
 
     @Argument(
-            doc = "Sample coverage tsv",
+            doc = "Tab-delimited table with sample IDs in the first column and expected per-base coverage per sample in the second column",
             fullName = SAMPLE_COVERAGE_LONG_NAME
     )
     private GATKPath sampleCoverageFile;
@@ -110,32 +108,6 @@ public final class SVCluster extends VariantWalker {
     private String outputFile;
 
     @Argument(
-            doc = "Min event size",
-            fullName = MIN_SIZE_LONG_NAME,
-            minValue = 0,
-            maxValue = Integer.MAX_VALUE,
-            optional = true
-    )
-    private int minEventSize = 50;
-
-    @Argument(
-            doc = "Depth-only call min included intervals overlap",
-            fullName = DEPTH_ONLY_INCLUDE_INTERVAL_OVERLAP_LONG_NAME,
-            minValue = 0,
-            maxValue = 1,
-            optional = true
-    )
-    private double minDepthOnlyIncludeOverlap = 0.5;
-
-    @Argument(
-            doc = "Minimum depth-only call size to emit",
-            fullName = MIN_DEPTH_SIZE_LONG_NAME,
-            minValue = 0,
-            optional = true
-    )
-    private int minDepthOnlySize = 5000;
-
-    @Argument(
             doc = "Prefix for variant IDs",
             fullName = VARIANT_PREFIX_LONG_NAME,
             optional = true
@@ -143,7 +115,6 @@ public final class SVCluster extends VariantWalker {
     private String variantPrefix = "SV_x";
 
     private SAMSequenceDictionary dictionary;
-    private final Map<String,IntervalTree<Object>> includedIntervalsTreeMap = new HashMap<>();
     private VariantContextWriter writer;
     private FeatureDataSource<SplitReadEvidence> splitReadSource;
     private FeatureDataSource<DiscordantPairEvidence> discordantPairSource;
@@ -162,11 +133,6 @@ public final class SVCluster extends VariantWalker {
     private final int DISCORDANT_PAIR_QUERY_LOOKAHEAD = 0;
 
     @Override
-    public boolean ignoresIntervalsForTraversal() {
-        return true;
-    }
-
-    @Override
     public void onTraversalStart() {
         dictionary = getBestAvailableSequenceDictionary();
         if (dictionary == null) {
@@ -176,7 +142,6 @@ public final class SVCluster extends VariantWalker {
         loadSampleCoverage();
         initializeSplitReadEvidenceDataSource();
         initializeDiscordantPairDataSource();
-        loadIntervalTree();
 
         defragmenter = new SVDepthOnlyCallDefragmenter(dictionary);
         nonDepthRawCallsBuffer = new ArrayList<>();
@@ -232,17 +197,6 @@ public final class SVCluster extends VariantWalker {
         }
     }
 
-    private void loadIntervalTree() {
-        final List<SimpleInterval> intervals = getRequestedIntervals();
-        if (intervals == null) {
-            throw new UserException.MissingReference("Reference dictionary is required");
-        }
-        for (final SimpleInterval interval : intervals) {
-            includedIntervalsTreeMap.putIfAbsent(interval.getContig(), new IntervalTree<>());
-            includedIntervalsTreeMap.get(interval.getContig()).put(interval.getStart(), interval.getEnd(), null);
-        }
-    }
-
     @Override
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
@@ -255,11 +209,6 @@ public final class SVCluster extends VariantWalker {
         final Predicate<Genotype> nonRefPredicate = g -> SVCallRecord.isRawCall(g);
         final GenotypesContext genotypes = SVCallRecordUtils.predicateGenotypeAlleles(filteredGenotypes, nonRefPredicate, nonRefAlleles, refAlleles);
         final SVCallRecord call = SVCallRecordUtils.copyCallWithNewGenotypes(originalCall, genotypes);
-
-        // Filter
-        if (!SVCallRecordUtils.isValidSize(call, minEventSize) || !SVCallRecordUtils.intervalIsIncluded(call, includedIntervalsTreeMap, minDepthOnlyIncludeOverlap)) {
-            return;
-        }
 
         // Flush clusters if we hit the next contig
         if (!call.getContigA().equals(currentContig)) {
@@ -293,7 +242,6 @@ public final class SVCluster extends VariantWalker {
         final List<SVCallRecordWithEvidence> callsWithEvidence = evidenceCollector.collectEvidence(clusteredCalls);
         logger.info("Filtering and refining breakpoints...");
         final List<SVCallRecordWithEvidence> refinedCalls = callsWithEvidence.stream()
-                .filter(call -> !SVDepthOnlyCallDefragmenter.isDepthOnlyCall(call) || call.getLength() >= minDepthOnlySize)
                 .map(breakpointRefiner::refineCall)
                 .sorted(SVCallRecordUtils.getCallComparator(dictionary))
                 .collect(Collectors.toList());
