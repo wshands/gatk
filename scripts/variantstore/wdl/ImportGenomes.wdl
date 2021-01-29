@@ -213,7 +213,7 @@ task CreateImportTsvs {
       memory: "3.75 GB"
       disks: "local-disk " + disk_size + " HDD"
       preemptible: select_first([preemptible_tries, 5])
-      cpu: 1
+      cpu: 2
   }
   output {
       String done = "true"
