@@ -254,8 +254,8 @@ public final class SVCallRecordUtils {
             return false;
         }
         // Breakends both included, if required
-        if (requireBreakendOverlap && !startTree.overlappers(call.getPositionA(), call.getPositionA() + 1).hasNext()
-                && !endTree.overlappers(call.getPositionB(), call.getPositionB() + 1).hasNext()) {
+        if (requireBreakendOverlap && !(startTree.overlappers(call.getPositionA(), call.getPositionA() + 1).hasNext()
+                && endTree.overlappers(call.getPositionB(), call.getPositionB() + 1).hasNext())) {
             return false;
         }
         // Can include all interchromosomal variants at this point

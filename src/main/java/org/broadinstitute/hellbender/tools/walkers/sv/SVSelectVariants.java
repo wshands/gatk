@@ -201,8 +201,9 @@ public final class SVSelectVariants extends VariantWalker {
     }
 
     private void writeVCFHeader() {
-        final VCFHeader header = getHeaderForVariants();
-        for (final VCFHeaderLine line : getDefaultToolVCFHeaderLines()) {
+        final VCFHeader inputHeader = getHeaderForVariants();
+        final VCFHeader header = new VCFHeader(getDefaultToolVCFHeaderLines(), inputHeader.getSampleNamesInOrder());
+        for (final VCFHeaderLine line : inputHeader.getMetaDataInInputOrder()) {
             header.addMetaDataLine(line);
         }
         writer.writeHeader(header);
