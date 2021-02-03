@@ -507,8 +507,8 @@ public final class ReblockGVCF extends VariantWalker {
     @VisibleForTesting
     protected boolean shouldBeReblocked(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
-        return !genotype.isCalled() || (genotype.hasPL() && genotype.getPL()[0] < rgqThreshold) || genotype.isHomRef()
-                || !genotypeHasConcreteAlt(genotype);
+        return !genotype.isCalled() || (genotype.hasPL() && getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey)[0] < rgqThreshold) || genotype.isHomRef()
+                || !genotypeHasConcreteAlt(genotype) ;
     }
 
     private boolean genotypeHasConcreteAlt(final Genotype g) {
@@ -557,8 +557,8 @@ public final class ReblockGVCF extends VariantWalker {
             //here we're assuming that an alt that isn't <NON_REF> will have higher likelihood than non-ref, which should be true
             final Allele bestAlt = bestNonSymbolicAlt.isPresent() ? bestNonSymbolicAlt.get() : Allele.NON_REF_ALLELE;
             final int[] idxVector = result.getGLIndicesOfAlternateAllele(bestAlt);   //this is always length 3
-            if (genotype.hasPL()) {
-                final int[] multiallelicPLs = genotype.getPL();
+            if ((posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey)) || genotype.hasPL()) {
+                final int[] multiallelicPLs = getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey);
                 int[] newPLs = new int[3];
                 newPLs[0] = multiallelicPLs[idxVector[0]];  //in the case of *, we need to renormalize to homref
                 newPLs[1] = multiallelicPLs[idxVector[1]];
@@ -672,7 +672,7 @@ public final class ReblockGVCF extends VariantWalker {
             if (newLongestAlleleLength < oldLongestAlleleLength && genotype.hasPL()) {
                 //need to add a ref block to make up for the allele trimming or there will be a hole in the GVCF
                 //subset PLs to ref and longest dropped allele (longest may not be most likely, but we'll approximate so we don't have to make more than one ref block)
-                final int[] originalLikelihoods = genotype.getPL();
+                final int[] originalLikelihoods = getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey);
                 final int[] longestVersusRefPLIndices = AlleleSubsettingUtils.subsettedPLIndices(result.getGenotype(0).getPloidy(),
                         result.getAlleles(), Arrays.asList(result.getReference(), oldLongestDeletion));
                 final int[] newRefBlockLikelihoods = MathUtils.normalizePLs(Arrays.stream(longestVersusRefPLIndices)
@@ -778,20 +778,14 @@ public final class ReblockGVCF extends VariantWalker {
                     altsWithoutStar.remove(Allele.SPAN_DEL);
                     if (altsWithoutStar.stream().anyMatch(a -> !a.isReference() && !a.isSymbolic())) {
                         final int[] subsettedPLIndices = AlleleSubsettingUtils.subsettedPLIndices(PLOIDY_TWO, updatedAlleles.getAlleles(), altsWithoutStar);
-                        final int[] oldPLs;
-                        if ((posteriorsKey != null && g.hasExtendedAttribute(posteriorsKey))) {
-                            final double[] posteriors = VariantContextGetters.getAttributeAsDoubleArray(g, posteriorsKey, () -> null, 0);
-                            oldPLs = Arrays.stream(posteriors).mapToInt(x -> (int)Math.round(x)).toArray();
-                        } else {
-                            oldPLs = g.getPL();
-                        }
+                        final int[] oldPLs = getGenotypeLikelihoodsOrPosteriors(g, posteriorsKey);
                         plsMaybeUnnormalized = Arrays.stream(subsettedPLIndices).map(idx -> oldPLs[idx]).toArray();
                         attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, plsMaybeUnnormalized[0] - MathUtils.arrayMin(plsMaybeUnnormalized));
                     } else {
                         attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, 0);
                     }
                 } else {
-                    attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, g.getPL()[0]);
+                    attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, getGenotypeLikelihoodsOrPosteriors(g, posteriorsKey)[0]);
                 }
                 int varDP = QualByDepth.getDepth(result.getGenotypes(), null);
                 if (varDP == 0) {  //prevent QD=Infinity case
@@ -812,12 +806,12 @@ public final class ReblockGVCF extends VariantWalker {
                         }
                         if (g.isHetNonRef()) {
                             final int[] subsetIndices = AlleleSubsettingUtils.subsettedPLIndices(PLOIDY_TWO, updatedAlleles.getAlleles(), Arrays.asList(updatedAlleles.getReference(), alt, Allele.NON_REF_ALLELE));
-                            final int[] fullLikelihoods = g.getPL();
+                            final int[] fullLikelihoods = getGenotypeLikelihoodsOrPosteriors(g, posteriorsKey);
                             final int[] subsetPLs = Arrays.stream(subsetIndices).map(idx -> fullLikelihoods[idx]).toArray();
                             quals.add(Integer.toString(subsetPLs[0] - MathUtils.arrayMin(subsetPLs)));
                         }
-                        else {
-                            quals.add(Integer.toString(g.getPL()[0]));
+                        else if (g.hasPL()) {
+                            quals.add(Integer.toString(getGenotypeLikelihoodsOrPosteriors(g, posteriorsKey)[0]));
                         }
                     }
                     attrMap.put(GATKVCFConstants.AS_RAW_QUAL_APPROX_KEY, AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM + String.join(AnnotationUtils.ALLELE_SPECIFIC_RAW_DELIM, quals));
@@ -870,6 +864,23 @@ public final class ReblockGVCF extends VariantWalker {
         }
         final List<Allele> newVCAlleles = builder.getAlleles().stream().map(a -> a.isReference() ? newRefAllele : a).collect(Collectors.toList());
         builder.start(newStart).alleles(newVCAlleles).genotypes(genotypesArray);
+    }
+
+    /**
+     *
+     * @param genotype
+     * @param posteriorsKey may be null
+     * @return may be null
+     */
+    private int[] getGenotypeLikelihoodsOrPosteriors(final Genotype genotype, final String posteriorsKey) {
+        if ((posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey))) {
+            final double[] posteriors = VariantContextGetters.getAttributeAsDoubleArray(genotype, posteriorsKey, () -> null, 0);
+            return Arrays.stream(posteriors).mapToInt(x -> (int)Math.round(x)).toArray();
+        } else if (genotype.hasPL()) {
+            return genotype.getPL();
+        } else {
+            return null;
+        }
     }
 
     @Override
