@@ -32,10 +32,7 @@ import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
-import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
-import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
-import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
+import org.broadinstitute.hellbender.utils.variant.*;
 import org.broadinstitute.hellbender.utils.variant.writers.GVCFWriter;
 import picard.cmdline.programgroups.OtherProgramGroup;
 
@@ -156,6 +153,10 @@ public final class ReblockGVCF extends VariantWalker {
     @Advanced
     @Argument(fullName=KEEP_ALL_ALTS_ARG_NAME, doc="Keep all ALT alleles and full PL array for most accurate GQs")
     protected boolean keepAllAlts = false;
+
+    @Advanced
+    @Argument(fullName="genotype-posteriors-key", doc="INFO field key corresponding to the posterior genotype probabilities")
+    protected String posteriorsKey = null;
 
     /**
      * The rsIDs from this file are used to populate the ID column of the output.  Also, the DB INFO flag will be set when appropriate. Note that dbSNP is not used in any way for the calculations themselves.
@@ -770,14 +771,20 @@ public final class ReblockGVCF extends VariantWalker {
         }
         //do QUAL calcs after we potentially drop alleles
         if (doQualApprox) {
-            if (g.hasPL()) {
+            if ((posteriorsKey != null && g.hasExtendedAttribute(posteriorsKey)) || g.hasPL()) {
                 int[] plsMaybeUnnormalized;
                 if (updatedAlleles.getAlternateAlleles().contains(Allele.SPAN_DEL)) {
                     final List<Allele> altsWithoutStar = new ArrayList<>(updatedAlleles.getAlleles());
                     altsWithoutStar.remove(Allele.SPAN_DEL);
                     if (altsWithoutStar.stream().anyMatch(a -> !a.isReference() && !a.isSymbolic())) {
                         final int[] subsettedPLIndices = AlleleSubsettingUtils.subsettedPLIndices(PLOIDY_TWO, updatedAlleles.getAlleles(), altsWithoutStar);
-                        final int[] oldPLs = g.getPL();
+                        final int[] oldPLs;
+                        if ((posteriorsKey != null && g.hasExtendedAttribute(posteriorsKey))) {
+                            final double[] posteriors = VariantContextGetters.getAttributeAsDoubleArray(g, posteriorsKey, () -> null, 0);
+                            oldPLs = Arrays.stream(posteriors).mapToInt(x -> (int)Math.round(x)).toArray();
+                        } else {
+                            oldPLs = g.getPL();
+                        }
                         plsMaybeUnnormalized = Arrays.stream(subsettedPLIndices).map(idx -> oldPLs[idx]).toArray();
                         attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, plsMaybeUnnormalized[0] - MathUtils.arrayMin(plsMaybeUnnormalized));
                     } else {
