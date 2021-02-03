@@ -155,7 +155,7 @@ public final class ReblockGVCF extends VariantWalker {
     protected boolean keepAllAlts = false;
 
     @Advanced
-    @Argument(fullName="genotype-posteriors-key", doc="INFO field key corresponding to the posterior genotype probabilities")
+    @Argument(fullName="genotype-posteriors-key", doc="INFO field key corresponding to the posterior genotype probabilities", optional = true)
     protected String posteriorsKey = null;
 
     /**
