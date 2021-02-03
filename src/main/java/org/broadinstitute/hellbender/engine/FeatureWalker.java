@@ -5,7 +5,8 @@ import htsjdk.tribble.FeatureCodec;
 import org.broadinstitute.hellbender.engine.filters.CountingReadFilter;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.Utils;
+
+import java.util.Iterator;
 
 /**
  * A FeatureWalker is a tool that processes a {@link Feature} at a time from a source of Features, with
@@ -20,7 +21,7 @@ import org.broadinstitute.hellbender.utils.Utils;
  */
 public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
 
-    private FeatureDataSource<F> drivingFeatures;
+    private FeatureInput<F> drivingFeaturesInput;
     private Object header;
 
     @Override
@@ -46,20 +47,13 @@ public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
     @Override
     protected final void onStartup() {
         super.onStartup();
-        // set the intervals for the feature here, because they are not initialized when initialize features is set
-        if ( hasUserSuppliedIntervals() ) {
-            drivingFeatures.setIntervalsForTraversal(userIntervals);
-        }
     }
 
-    @SuppressWarnings("unchecked")
     private void initializeDrivingFeatures() {
         final GATKPath drivingPath = getDrivingFeaturePath();
         final FeatureCodec<? extends Feature, ?> codec = FeatureManager.getCodecForFile(drivingPath.toPath());
         if (isAcceptableFeatureType(codec.getFeatureType())) {
-            drivingFeatures = new FeatureDataSource<>(new FeatureInput<>(drivingPath), FeatureDataSource.DEFAULT_QUERY_LOOKAHEAD_BASES, null, cloudPrefetchBuffer, cloudIndexPrefetchBuffer, referenceArguments.getReferencePath());
-
-            final FeatureInput<F> drivingFeaturesInput = new FeatureInput<>(drivingPath, "drivingFeatureFile");
+            drivingFeaturesInput = new FeatureInput<>(drivingPath, "drivingFeatureFile");
             features.addToFeatureSources(0, drivingFeaturesInput, codec.getFeatureType(), cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
                                          referenceArguments.getReferencePath());
             header = getHeaderForFeatures(drivingFeaturesInput);
@@ -84,16 +78,19 @@ public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
      */
     @Override
     public void traverse() {
-        CountingReadFilter readFilter = makeReadFilter();
+        final CountingReadFilter readFilter = makeReadFilter();
         // Process each feature in the input stream.
-        Utils.stream(drivingFeatures).forEach(feature -> {
-                    final SimpleInterval featureInterval = makeFeatureInterval(feature);
-                    apply(feature,
-                            new ReadsContext(reads, featureInterval, readFilter),
-                            new ReferenceContext(reference, featureInterval),
-                            new FeatureContext(features, featureInterval));
-                    progressMeter.update(feature);
-                });
+        final Iterator<F> featureItr =
+                features.getFeatureIterator(drivingFeaturesInput, userIntervals);
+        while ( featureItr.hasNext() ) {
+            final F feature = featureItr.next();
+            final SimpleInterval featureInterval = makeFeatureInterval(feature);
+            apply(feature,
+                  new ReadsContext(reads, featureInterval, readFilter),
+                  new ReferenceContext(reference, featureInterval),
+                  new FeatureContext(features, featureInterval));
+            progressMeter.update(feature);
+        }
     }
 
     /**
@@ -136,10 +133,6 @@ public abstract class FeatureWalker<F extends Feature> extends WalkerBase {
     @Override
     protected final void onShutdown() {
         super.onShutdown();
-
-        if ( drivingFeatures != null ) {
-            drivingFeatures.close();
-        }
     }
 
     /**

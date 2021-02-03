@@ -13,6 +13,7 @@ import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
+import java.io.BufferedWriter;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -98,7 +99,7 @@ public class PairedEndAndSplitReadEvidenceCollectionUnitTest extends GATKBaseTes
         final GATKRead rightClip = ArtificialReadUtils.createArtificialRead(header, "rightClip", 0, 1000, ArtificialReadUtils.createRandomReadBases(151, false),
                 ArtificialReadUtils.createRandomReadQuals(151), "100M51S");
 
-        final FeatureOutputStream<SplitReadEvidence> mockSrWriter = Mockito.mock(SplitReadFeatureOutputStream.class);
+        final BufferedWriter mockSrWriter = Mockito.mock(BufferedWriter.class);
 
         PairedEndAndSplitReadEvidenceCollection tool = new PairedEndAndSplitReadEvidenceCollection();
         final PriorityQueue<PairedEndAndSplitReadEvidenceCollection.SplitPos> splitCounts = new PriorityQueue<>(new PairedEndAndSplitReadEvidenceCollection.SplitPosComparator());
@@ -131,10 +132,8 @@ public class PairedEndAndSplitReadEvidenceCollectionUnitTest extends GATKBaseTes
         Assert.assertFalse(counts.containsKey(new PairedEndAndSplitReadEvidenceCollection.SplitPos(1100, PairedEndAndSplitReadEvidenceCollection.POSITION.RIGHT)));
         Assert.assertFalse(counts.containsKey(new PairedEndAndSplitReadEvidenceCollection.SplitPos(1100, PairedEndAndSplitReadEvidenceCollection.POSITION.LEFT)));
         Assert.assertEquals(counts.get(new PairedEndAndSplitReadEvidenceCollection.SplitPos(1600, PairedEndAndSplitReadEvidenceCollection.POSITION.LEFT)).intValue(), 1);
-        final SplitReadEvidence splitRead1 = new SplitReadEvidence("sample", "1", 1100, 1, false);
-        final SplitReadEvidence splitRead2 = new SplitReadEvidence("sample", "1", 1100, 2, true);
-        Mockito.verify(mockSrWriter).add(splitRead1);
-        Mockito.verify(mockSrWriter).add(splitRead2);
+        Mockito.verify(mockSrWriter).write("1	1099	left	1	sample\n");
+        Mockito.verify(mockSrWriter).write("1	1099	right	2	sample\n");
         Mockito.verifyNoMoreInteractions(mockSrWriter);
 
     }

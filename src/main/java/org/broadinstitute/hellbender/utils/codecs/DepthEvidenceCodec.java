@@ -28,6 +28,9 @@ public class DepthEvidenceCodec extends AsciiFeatureCodec<DepthEvidence> {
 
     @Override
     public DepthEvidence decode(final String line) {
+        if ( line.startsWith("#Chr") ) {
+            return null;
+        }
         final List<String> tokens = splitter.splitToList(line);
         if (tokens.size() < 3) {
             throw new IllegalArgumentException("Expected at least 3 columns but found " + tokens.size());

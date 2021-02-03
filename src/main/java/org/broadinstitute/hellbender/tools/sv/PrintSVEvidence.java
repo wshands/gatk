@@ -10,11 +10,15 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.utils.codecs.BafEvidenceCodec;
-import org.broadinstitute.hellbender.utils.codecs.DepthEvidenceCodec;
-import org.broadinstitute.hellbender.utils.codecs.DiscordantPairEvidenceCodec;
-import org.broadinstitute.hellbender.utils.codecs.SplitReadEvidenceCodec;
+import org.broadinstitute.hellbender.utils.codecs.*;
+import org.broadinstitute.hellbender.utils.io.BlockCompressedIntervalStream.Header;
+import org.broadinstitute.hellbender.utils.io.BlockCompressedIntervalStream.Writer;
 import org.broadinstitute.hellbender.utils.io.FeatureOutputStream;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.function.Function;
 
 /**
  * Prints SV evidence records. Can be used with -L to retrieve records on a set of intervals. Supports streaming input
@@ -69,14 +73,15 @@ public final class PrintSVEvidence extends FeatureWalker<Feature> {
                     + SplitReadEvidenceCodec.FORMAT_SUFFIX + "', '"
                     + DiscordantPairEvidenceCodec.FORMAT_SUFFIX + "', '"
                     + BafEvidenceCodec.FORMAT_SUFFIX + "', or '"
-                    + DepthEvidenceCodec.FORMAT_SUFFIX + "' (may be gzipped).",
+                    + DepthEvidenceCodec.FORMAT_SUFFIX + "' (may be gzipped). "
+                    + "Can also handle bci rather than txt files.",
             fullName = EVIDENCE_FILE_NAME
     )
     private GATKPath inputFilePath;
 
     @Argument(
             doc = "Output file with an evidence extension matching the input. Will be indexed if it has a " +
-                    "block-compressed extension (e.g. '.gz').",
+                    "block-compressed extension (e.g. '.gz' or '.bci').",
             fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME
     )
@@ -89,12 +94,27 @@ public final class PrintSVEvidence extends FeatureWalker<Feature> {
     )
     private int compressionLevel = 4;
 
-    private FeatureOutputStream<DiscordantPairEvidence> peStream;
-    private FeatureOutputStream<SplitReadEvidence> srStream;
-    private FeatureOutputStream<BafEvidence> bafStream;
-    private FeatureOutputStream<DepthEvidence> rdStream;
+    @Argument(doc = "List of sample names", fullName = "sample-names", optional = true)
+    private List<String> sampleNames = new ArrayList<>();
+
+    @SuppressWarnings("rawtypes")
+    private FeatureOutputStream foStream;
+    @SuppressWarnings("rawtypes")
+    private Writer bciWriter;
     private FeatureCodec<? extends Feature, ?> featureCodec;
     private Class<? extends Feature> evidenceClass;
+
+    private static final List<FeatureCodec<? extends Feature, ?>> outputCodecs = new ArrayList<>(8);
+    static {
+        outputCodecs.add(new BafEvidenceCodec());
+        outputCodecs.add(new DepthEvidenceCodec());
+        outputCodecs.add(new DiscordantPairEvidenceCodec());
+        outputCodecs.add(new SplitReadEvidenceCodec());
+        outputCodecs.add(new BafEvidenceBCICodec());
+        outputCodecs.add(new DepthEvidenceBCICodec());
+        outputCodecs.add(new DiscordantPairEvidenceBCICodec());
+        outputCodecs.add(new SplitReadEvidenceBCICodec());
+    }
 
     @Override
     protected boolean isAcceptableFeatureType(final Class<? extends Feature> featureType) {
@@ -113,73 +133,98 @@ public final class PrintSVEvidence extends FeatureWalker<Feature> {
         featureCodec = FeatureManager.getCodecForFile(inputFilePath.toPath());
         evidenceClass = featureCodec.getFeatureType();
         initializeOutput();
-        writeHeader();
+    }
+
+    private static FeatureCodec<? extends Feature, ?> findOutputCodec( final GATKPath outputFilePath ) {
+        final String outputFileName = outputFilePath.toString();
+        for ( final FeatureCodec<? extends Feature, ?> codec : outputCodecs ) {
+            if ( codec.canDecode(outputFileName) ) {
+                return codec;
+            }
+        }
+        throw new UserException("no codec found for path " + outputFileName);
     }
 
     private void initializeOutput() {
-        if (evidenceClass.equals(DiscordantPairEvidence.class)) {
-            peStream = new FeatureOutputStream<>(outputFilePath, featureCodec, DiscordantPairEvidenceCodec::encode,
-                    getBestAvailableSequenceDictionary(), compressionLevel);
-        } else if (evidenceClass.equals(SplitReadEvidence.class)) {
-            srStream = new FeatureOutputStream<>(outputFilePath, featureCodec, SplitReadEvidenceCodec::encode,
-                    getBestAvailableSequenceDictionary(), compressionLevel);
-        } else if (evidenceClass.equals(BafEvidence.class)) {
-            bafStream = new FeatureOutputStream<>(outputFilePath, featureCodec, BafEvidenceCodec::encode,
-                    getBestAvailableSequenceDictionary(), compressionLevel);
-        } else if (evidenceClass.equals(DepthEvidence.class)) {
-            rdStream = new FeatureOutputStream<>(outputFilePath, featureCodec, DepthEvidenceCodec::encode,
-                    getBestAvailableSequenceDictionary(), compressionLevel);
-        } else {
-            throw new UserException.BadInput("Unsupported evidence type: " + evidenceClass.getSimpleName());
+        final FeatureCodec<? extends Feature, ?> outputCodec = findOutputCodec(outputFilePath);
+        final Class<? extends Feature> outputClass = outputCodec.getFeatureType();
+        if ( evidenceClass != outputClass ) {
+            throw new UserException("input file contains " + evidenceClass.getSimpleName() +
+                    " but output file would be expected to contain " + outputClass.getSimpleName());
         }
-    }
 
-    private void writeHeader() {
-        final Object header = getDrivingFeaturesHeader();
-        if (header != null) {
-            if (header instanceof String) {
-                if (peStream != null) {
-                    peStream.writeHeader((String) header);
-                } else if (srStream != null) {
-                    srStream.writeHeader((String) header);
-                } else if (bafStream != null) {
-                    bafStream.writeHeader((String) header);
-                } else {
-                    rdStream.writeHeader((String) header);
-                }
+        if ( outputCodec instanceof AbstractBCICodec ) {
+            final AbstractBCICodec<? extends Feature> bciCodec =
+                    (AbstractBCICodec<? extends Feature>)outputCodec;
+            final Object headerObj = getDrivingFeaturesHeader();
+            final Header header;
+            if ( headerObj instanceof Header ) {
+                header = (Header)headerObj;
             } else {
-                throw new IllegalArgumentException("Expected header object of type " + String.class.getSimpleName());
+                header = new Header(outputClass.getSimpleName(), bciCodec.getVersion(),
+                                   getBestAvailableSequenceDictionary(), sampleNames);
+            }
+            bciWriter = new Writer<>(outputFilePath, header, bciCodec::encode, compressionLevel);
+        } else {
+            if ( evidenceClass.equals(DiscordantPairEvidence.class) ) {
+                initializeFOStream(new DiscordantPairEvidenceCodec(), DiscordantPairEvidenceCodec::encode);
+            } else if ( evidenceClass.equals(SplitReadEvidence.class) ) {
+                initializeFOStream(new SplitReadEvidenceCodec(), SplitReadEvidenceCodec::encode);
+            } else if ( evidenceClass.equals(BafEvidence.class) ) {
+                initializeFOStream(new BafEvidenceCodec(), BafEvidenceCodec::encode);
+            } else if ( evidenceClass.equals(DepthEvidence.class) ) {
+                initializeFOStream(new DepthEvidenceCodec(), DepthEvidenceCodec::encode);
+                writeDepthEvidenceHeader();
+            } else {
+                throw new UserException.BadInput("Unsupported evidence type: " + evidenceClass.getSimpleName());
             }
         }
     }
 
+    private <F extends Feature> void initializeFOStream( final FeatureCodec<F, ?> codec,
+                                                         final Function<F, String> encoder ) {
+        foStream = new FeatureOutputStream<>(outputFilePath, codec, encoder,
+                getBestAvailableSequenceDictionary(), compressionLevel);
+    }
+
+    private void writeDepthEvidenceHeader() {
+        final Object header = getDrivingFeaturesHeader();
+        if ( header instanceof Header ) {
+            final StringBuilder sb = new StringBuilder("#Chr\tStart\tEnd");
+            final Header hdr = (Header)header;
+            for ( final String sampleName : hdr.getSampleNames() ) {
+                sb.append('\t').append(sampleName);
+            }
+            foStream.writeHeader(sb.toString());
+        } else if (header instanceof String) {
+            foStream.writeHeader((String) header);
+        } else {
+            throw new IllegalArgumentException("Expected header object of type String");
+        }
+    }
+
     @Override
+    @SuppressWarnings("unchecked")
     public void apply(final Feature feature,
                       final ReadsContext readsContext,
                       final ReferenceContext referenceContext,
                       final FeatureContext featureContext) {
-        if (peStream != null) {
-            peStream.add((DiscordantPairEvidence) feature);
-        } else if (srStream != null) {
-            srStream.add((SplitReadEvidence) feature);
-        } else if (bafStream != null) {
-            bafStream.add((BafEvidence) feature);
-        } else {
-            rdStream.add((DepthEvidence) feature);
+        if ( foStream != null ) {
+            foStream.add(feature);
+        }
+        if ( bciWriter != null ) {
+            bciWriter.write(feature);
         }
     }
 
     @Override
     public Object onTraversalSuccess() {
         super.onTraversalSuccess();
-        if (peStream != null) {
-            peStream.close();
-        } else if (srStream != null) {
-            srStream.close();
-        } else if (bafStream != null) {
-            bafStream.close();
-        } else {
-            rdStream.close();
+        if ( foStream != null ) {
+            foStream.close();
+        }
+        if ( bciWriter != null ) {
+            bciWriter.close();
         }
         return null;
     }

@@ -376,6 +376,22 @@ public final class FeatureManager implements AutoCloseable {
     }
 
     /**
+     * As above, but takes an optional list of intervals to examine.
+     * @param featureDescriptor FeatureInput to scan
+     * @param intervals The userIntervals to examine (may be null)
+     * @param <T> Feature type
+     * @return An iterator over the Features
+     */
+    public <T extends Feature> Iterator<T> getFeatureIterator( final FeatureInput<T> featureDescriptor,
+                                                               final List<SimpleInterval> intervals ) {
+        final FeatureDataSource<T> dataSource = lookupDataSource(featureDescriptor);
+        if ( intervals != null ) {
+            dataSource.setIntervalsForTraversal(intervals);
+        }
+        return dataSource.iterator();
+    }
+
+    /**
      * Get the header associated with a particular FeatureInput
      *
      * @param featureDescriptor the FeatureInput whose header we want to retrieve
