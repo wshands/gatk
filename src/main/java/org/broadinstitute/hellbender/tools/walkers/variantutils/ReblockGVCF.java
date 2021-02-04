@@ -271,7 +271,12 @@ public final class ReblockGVCF extends VariantWalker {
         if (variant.getStart() > vcfOutputEnd) {
             isInDeletion = false;
         }
-        final VariantContext newVC = regenotypeVC(variant);
+        final VariantContext newVC;
+        try {
+            newVC = regenotypeVC(variant);
+        } catch (Exception e) {
+            throw new GATKException("Exception thrown at " + variant.getContig() + ":" + variant.getStart() + " " + variant.toString(), e);
+        }
         if (newVC != null) {
             vcfWriter.add(newVC);
             vcfOutputEnd = newVC.getEnd();
@@ -641,7 +646,8 @@ public final class ReblockGVCF extends VariantWalker {
                         return null;
                     } else {
                         GenotypeBuilder gb = changeCallToGQ0HomRef(result, attrMap);
-                        return builder.alleles(Arrays.asList(result.getReference(), Allele.NON_REF_ALLELE)).unfiltered().log10PError(VariantContext.NO_LOG10_PERROR).attributes(attrMap).genotypes(gb.make()).make();
+                        final Genotype g = gb.make();
+                        return builder.alleles(Arrays.asList(g.getAllele(0), Allele.NON_REF_ALLELE)).unfiltered().log10PError(VariantContext.NO_LOG10_PERROR).attributes(attrMap).genotypes(gb.make()).make();
                     }
                 }
             }
@@ -666,10 +672,15 @@ public final class ReblockGVCF extends VariantWalker {
             relevantIndices = newAlleleSet.stream().mapToInt(a -> originalVC.getAlleles().indexOf(a)).toArray();
 
             //if deletion needs trimming, fill in the gap with a ref block
-            final Allele oldLongestDeletion = allelesToDrop.stream().min(Allele::compareTo).orElseThrow(NoSuchElementException::new);
             final int oldLongestAlleleLength = result.getReference().length();
             final int newLongestAlleleLength = newTrimmedAllelesVC.getReference().length();
             if (newLongestAlleleLength < oldLongestAlleleLength && genotype.hasPL()) {
+                final Allele oldLongestDeletion;
+                try {
+                    oldLongestDeletion = allelesToDrop.stream().filter(a -> !a.equals(Allele.SPAN_DEL)).min(Allele::compareTo).orElseThrow(NoSuchElementException::new);
+                } catch (Exception e) {
+                    throw new GATKException("No longest deletion at " + result.getStart() + " with alleles to drop: " + allelesToDrop);
+                }
                 //need to add a ref block to make up for the allele trimming or there will be a hole in the GVCF
                 //subset PLs to ref and longest dropped allele (longest may not be most likely, but we'll approximate so we don't have to make more than one ref block)
                 final int[] originalLikelihoods = getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey);
@@ -685,7 +696,8 @@ public final class ReblockGVCF extends VariantWalker {
                 final GenotypeBuilder refBlockGenotypeBuilder = new GenotypeBuilder();
                 //final int refStart = result.getEnd()-(oldLongestAlleleLength-newLongestAlleleLength)+1;
                 final int refStart = Math.max(result.getEnd()-(oldLongestAlleleLength-newLongestAlleleLength), vcfOutputEnd)+1;
-                final Allele newRef = getRefAfterTrimmedDeletion(result.getReference(), result.getStart(), refStart);
+                //final Allele newRef = getRefAfterTrimmedDeletion(result.getReference(), result.getStart(), refStart);
+                final Allele newRef = Allele.create(ReferenceUtils.getRefBaseAtPosition(referenceReader, result.getContig(), refStart), true);
                 refBlockGenotypeBuilder.PL(newRefBlockLikelihoods)
                         .GQ(MathUtils.secondSmallestMinusSmallest(newRefBlockLikelihoods, 0))
                         .alleles(Arrays.asList(newRef, newRef));
@@ -693,7 +705,7 @@ public final class ReblockGVCF extends VariantWalker {
                     refBlockGenotypeBuilder.DP(genotype.getDP());
                 }
                 //if (refStart > vcfOutputEnd  && newTrimmedAllelesVC.getEnd() > vcfOutputEnd) {
-                if (refStart > vcfOutputEnd) {
+                if (refStart > vcfOutputEnd && result.getEnd() > vcfOutputEnd) {
                     final VariantContextBuilder trimBlockBuilder = new VariantContextBuilder();
                     trimBlockBuilder.chr(currentContig).start(Math.max(refStart, vcfOutputEnd+1)).stop(result.getEnd()).
                             alleles(Arrays.asList(newRef, Allele.NON_REF_ALLELE)).attribute(VCFConstants.END_KEY, result.getEnd())
