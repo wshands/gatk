@@ -24,9 +24,7 @@ import java.io.*;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-import java.util.stream.Stream;
+import java.util.stream.*;
 
 import org.apache.commons.math3.util.FastMath;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
@@ -94,8 +92,11 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
               doc="If the VCF does not have allele frequency, estimate it from the sample population if there are at least this many samples. Otherwise throw an exception.")
     public int minSamplesToEstimateAlleleFrequency = 100;
 
-    @Argument(fullName="genome-tract", shortName="gt", optional = true)
+    @Argument(fullName="genome-tract", shortName="gt", optional=true)
     final List<String> genomeTractFiles = new ArrayList<>();
+
+    @Argument(fullName="minGQ", shortName="gq", optional=true)
+    int minGQ = 3;
 
     List<TractOverlapDetector> tractOverlapDetectors = null;
 
@@ -108,15 +109,23 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     };
 
 
-
-    // numVariants x numProperties matrix of variant properties
+    protected List<String> trainingSampleIds = null; // numSamples list of IDs for samples that will be used for training
+    protected int[][] trioSampleIndices = null; // numTrios x 3 matrix of sample indices (paternal, maternal, child) for each trio
+    protected Set<Integer> allTrioSampleIndices; // set of all sample indices that are in a trio
+    protected final Map<String, Integer> trainingSampleIndices = new HashMap<>(); // map from sampleId to numerical index, for samples used in training
+    // map from propertyName to numVariants-length array of variant properties
     protected Map<String, double[]> variantPropertiesMap = null;
-    // numVariants x numTrios x 3 tensor of allele counts:
-    protected List<int[][]> alleleCountsTensor = new ArrayList<>();
-    // numVariants x numTrios x 3 tensor of genotype qualities:
-    protected List<int[][]> genotypeQualitiesTensor = new ArrayList<>();
+    // map from property name to numVariants x numSamples matrix of variant sample properties
+    protected Map<String, double[][]> sampleVariantPropertiesMap = null;
+    // numVariants x numSamples matrix of allele counts:
+    protected List<int[]> sampleVariantAlleleCounts = new ArrayList<>();
+    // numVariants x numSamples matrix of genotype qualities:
+    protected List<int[]> sampleVariantGenotypeQualities = new ArrayList<>();
     // map from variantIndex to array of known good GQ values for that variant
     protected Map<Integer, int[]> goodVariantGqs = null;
+    // map from variantIndex to array of known good/bad sample indices for that variant
+    protected final Map<Integer, Set<Integer>> goodSampleVariantIndices = new HashMap<>();
+    protected final Map<Integer, Set<Integer>> badSampleVariantIndices = new HashMap<>();
     // map from variantIndex to array of known bad GQ values for that variant
     protected Map<Integer, int[]> badVariantGqs = null;
     // numVariants array of property-category bins
@@ -128,13 +137,12 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private VariantContextWriter vcfWriter = null;
 
     private int numVariants;
+    private int numSamples;
     private int numTrios;
-    private int numProperties;
-
 
     private static final Set<String> GAIN_SV_TYPES = new HashSet<>(Arrays.asList("INS", "DUP", "MEI", "ITX"));
     private static final Set<String> BREAKPOINT_SV_TYPES = new HashSet<>(Arrays.asList("BND", "CTX"));
-    private static final double SV_EXPAND_RATIO = 1.0; // ratio of how mu//ch to expand SV gain range to SVLEN
+    private static final double SV_EXPAND_RATIO = 1.0; // ratio of how much to expand SV gain range to SVLEN
     private static final int BREAKPOINT_HALF_WIDTH = 50; // how wide to make breakpoint intervals for tract overlap
     private static final String SVLEN_KEY = "SVLEN";
     private static final String EVIDENCE_KEY = "EVIDENCE";
@@ -142,6 +150,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private static final String ALGORITHMS_KEY = "ALGORITHMS";
     private static final String NO_ALGORITHM = "NO_ALGORITHM";
     private static final String AF_PROPERTY_NAME = "AF";
+    private static final String GQ_PROPERTY_NAME = "GQ";
     private static final String MIN_GQ_KEY = "MINGQ";
     private static final String EXCESSIVE_MIN_GQ_FILTER_KEY = "LOW_QUALITY";
     private static final String MULTIALLELIC_FILTER = "MULTIALLELIC";
@@ -151,6 +160,11 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private static final String POS2_KEY = "POS2";
     private static final String END2_KEY = "END2";
 
+    private static final String PE_GQ_KEY = "PE_GQ";
+    private static final String RD_GQ_KEY = "RD_GQ";
+    private static final String SR_GQ_KEY = "SR_GQ";
+    private static final int MISSING_GQ_VAL = -1;
+
     // properties used to gather main matrix / tensors during apply()
     private Set<Trio> pedTrios = null;
     private final List<Double> alleleFrequencies = new ArrayList<>();
@@ -159,9 +173,14 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private final List<Set<String>> variantFilters = new ArrayList<>();
     private final List<Set<String>> variantEvidence = new ArrayList<>();
     private final List<Set<String>> variantAlgorithms = new ArrayList<>();
-    private Map<String, Set<String>> goodVariantSamples = null;
-    private Map<String, Set<String>> badVariantSamples = null;
+    private Map<String, Set<String>> goodSampleVariants = null;
+    private Map<String, Set<String>> badSampleVariants = null;
     private final Map<String, List<Double>> tractOverlapProperties = new HashMap<>();
+    private final List<int[]> sampleVariantGq = new ArrayList<>();
+    private final List<int[]> sampleVariantPeGq = new ArrayList<>();
+    private final List<int[]> sampleVariantRdGq = new ArrayList<>();
+    private final List<int[]> sampleVariantSrGq = new ArrayList<>();
+    protected float[] sampleVariantPropertiesBuffer = null;
 
     // saved initial values
     private List<String> allEvidenceTypes = null;
@@ -169,8 +188,12 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private List<String> allFilterTypes = null;
     private List<String> allSvTypes = null;
     private List<String> propertyNames = null;
+    private List<String> variantPropertyNames = null;
+    private List<String> sampleVariantPropertyNames = null;
     private Map<String, Double> propertyBaseline = null;
     private Map<String, Double> propertyScale = null;
+    protected final PropertiesTable variantPropertiesTable = new PropertiesTable();
+    protected List<PropertiesTable> sampleVariantPropertiesTables = null;
     private static final String ALL_EVIDENCE_TYPES_KEY = "allEvidenceTypes";
     private static final String ALL_FILTER_TYPES_KEY = "allFilterTypes";
     private static final String ALL_SV_TYPES_KEY = "allSvTypes";
@@ -186,14 +209,20 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private int numFilteredGenotypes;
 
     // properties for calculating f1 score or estimating its pseudo-derivatives
-    private int[] perVariantOptimalMinGq = null;
+    private Boolean [][] isTrueVariant; // numVariants x numSamples
+    private int[] perVariantOptimalMinGq = null; // <- REMOVE
     protected int[] maxDiscoverableMendelianAc = null;
     long numDiscoverableMendelianAc = 0;
 
     protected final int getNumVariants() { return numVariants; }
+    protected final int getNumSamples() { return numSamples; }
     protected final int getNumTrios() { return numTrios; }
-    protected final int getNumProperties() { return numProperties; }
+    protected final int getNumVariantProperties() { return variantPropertiesMap.size(); }
+    protected final int getNumSampleVariantProperties() { return sampleVariantPropertiesMap.size(); }
+    protected final int getNumProperties() { return getNumVariantProperties() + getNumSampleVariantProperties(); }
     protected final List<String> getPropertyNames() { return propertyNames; }
+    protected final List<String> getVariantPropertyNames() { return variantPropertyNames; }
+    protected final List<String> getSampleVariantPropertyNames() { return sampleVariantPropertyNames; }
     protected final int[] getTrainingIndices() { return trainingIndices; }
     protected final int[] getValidationIndices() { return validationIndices; }
 
@@ -206,13 +235,43 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
         final SampleDBBuilder sampleDBBuilder = new SampleDBBuilder(PedigreeValidationType.STRICT);
         sampleDBBuilder.addSamplesFromPedigreeFiles(Collections.singletonList(pedigreeFile));
-        pedTrios = sampleDBBuilder.getFinalSampleDB().getTrios();
+
+        final Set<String> vcfSamples = new HashSet<>(getHeaderForVariants().getGenotypeSamples());
+        // get the trios from the pedigree file, keeping only those that are fully present in the input VCF
+        pedTrios = sampleDBBuilder.getFinalSampleDB()
+            .getTrios()
+            .stream()
+            .filter(trio -> vcfSamples.contains(trio.getPaternalID()) && vcfSamples.contains(trio.getMaternalID())
+                            && vcfSamples.contains(trio.getChildID()))
+            .collect(Collectors.toSet());
         if(pedTrios.isEmpty()) {
-            throw new UserException.BadInput("The pedigree file must contain trios: " + pedigreeFile);
+            throw new UserException.BadInput(
+                "The pedigree file (" + pedigreeFile + ") does not contain any trios that are present in the input VCF ("
+                + drivingVariantFile + ")"
+            );
         }
+        numTrios = pedTrios.size();
+        // collect ped trios into training samples
+        pedTrios.stream()
+                .flatMap(trio -> Stream.of(trio.getPaternalID(), trio.getMaternalID(), trio.getChildID()))
+                .forEach(this::addTrainingSampleId);
+        // keep track of the samples that are in trios (those will always have "truth" through inheritance)
+        trioSampleIndices = pedTrios.stream()
+                .map(
+                    trio -> Stream.of(trio.getPaternalID(), trio.getMaternalID(), trio.getChildID())
+                            .mapToInt(trainingSampleIndices::get)
+                            .toArray()
+                )
+                .toArray(int[][]::new);
+
+        allTrioSampleIndices = pedTrios.stream()
+                .flatMap(trio -> Stream.of(trio.getPaternalID(), trio.getMaternalID(), trio.getChildID()))
+                .map(trainingSampleIndices::get)
+                .collect(Collectors.toSet());
+
     }
 
-    private void getVariantTruthData() {
+    private void loadVariantTruthData() {
         if(truthFile == null) {
             System.out.println("No truth file specified. Not using truth data.");
             return;
@@ -225,32 +284,59 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         } catch (IOException | ParseException ioException) {
             throw new GATKException("Unable to parse JSON from inputStream", ioException);
         }
-        goodVariantSamples = new HashMap<>();
-        badVariantSamples = new HashMap<>();
+        final Set<String> vcfSamples = new HashSet<>(getHeaderForVariants().getGenotypeSamples());
+        goodSampleVariants = new HashMap<>();
+        badSampleVariants = new HashMap<>();
         for(final Map.Entry<String, Object> sampleTruthEntry : jsonObject.entrySet()) {
             final String sampleId = sampleTruthEntry.getKey();
+            if(!vcfSamples.contains(sampleId)) {
+                continue; // don't bother storing truth data that doesn't overlap the input VCF
+            }
             final JSONObject sampleTruth = (JSONObject)sampleTruthEntry.getValue();
             for(final Object variantIdObj : (JSONArray)sampleTruth.get(GOOD_VARIANT_TRUTH_KEY)) {
                 final String variantId = (String)variantIdObj;
-                if(goodVariantSamples.containsKey(variantId)) {
-                    goodVariantSamples.get(variantId).add(sampleId);
+                if(goodSampleVariants.containsKey(variantId)) {
+                    goodSampleVariants.get(variantId).add(sampleId);
                 } else {
-                    goodVariantSamples.put(variantId, new HashSet<>(Collections.singleton(sampleId)) );
+                    goodSampleVariants.put(variantId, new HashSet<>(Collections.singleton(sampleId)) );
                 }
             }
             for(final Object variantIdObj : (JSONArray)sampleTruth.get(BAD_VARIANT_TRUTH_KEY)) {
                 final String variantId = (String)variantIdObj;
-                if(badVariantSamples.containsKey(variantId)) {
-                    badVariantSamples.get(variantId).add(sampleId);
+                if(badSampleVariants.containsKey(variantId)) {
+                    badSampleVariants.get(variantId).add(sampleId);
                 } else {
-                    badVariantSamples.put(variantId, new HashSet<>(Collections.singleton(sampleId)));
+                    badSampleVariants.put(variantId, new HashSet<>(Collections.singleton(sampleId)));
                 }
             }
         }
+        if(goodSampleVariants.isEmpty() && badSampleVariants.isEmpty()) {
+            System.out.println("Truth file specified (" + truthFile + "), but no samples/variants overlap with input VCF ("
+                               + drivingVariantFile + "). Not using truth data.");
+            goodSampleVariants = null;
+            badSampleVariants = null;
+            return;
+        }
+        // Add any new samples that have truth but are not in trios file to the training samples
+        goodSampleVariants.values().stream().flatMap(Collection::stream).forEach(this::addTrainingSampleId);
+        badSampleVariants.values().stream().flatMap(Collection::stream).forEach(this::addTrainingSampleId);
         // prepare to hold data for scoring
         goodVariantGqs = new HashMap<>();
         badVariantGqs = new HashMap<>();
     }
+
+    private void addTrainingSampleId(final String sampleId) {
+        trainingSampleIndices.put(sampleId, trainingSampleIndices.getOrDefault(sampleId, trainingSampleIndices.size()));
+    }
+
+    private void setTrainingSampleIds() {
+        trainingSampleIds = trainingSampleIndices.entrySet()
+            .stream()
+            .sorted(Comparator.comparingInt(Map.Entry::getValue))
+            .map(Map.Entry::getKey)
+            .collect(Collectors.toList());
+    }
+
 
     private void initializeVcfWriter() {
         vcfWriter = createVCFWriter(outputFile);
@@ -279,7 +365,10 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 .collect(Collectors.toList());
         if(runMode == RunMode.TRAIN) {
             getPedTrios();  // get trios from pedigree file
-            getVariantTruthData(); // load variant truth data from JSON file
+            loadVariantTruthData(); // load variant truth data from JSON file
+            setTrainingSampleIds(); // set data organizing training samples
+            numSamples = trainingSampleIndices.size();
+
         } else {
             initializeVcfWriter();  // initialize vcfWriter and write header
             numFilteredGenotypes = 0;
@@ -294,7 +383,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private static int[] getMappedTrioProperties(final Map<String, Integer> map, final Trio trio) {
         return new int[] {map.get(trio.getPaternalID()), map.get(trio.getMaternalID()), map.get(trio.getChildID())};
     }
-
 
     private boolean getIsMultiallelic(final VariantContext variantContext) {
         return variantContext.getNAlleles() > 2 || variantContext.getFilters().contains(MULTIALLELIC_FILTER);
@@ -313,6 +401,60 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                         .flatMapToInt(trio -> Arrays.stream(getMappedTrioProperties(sampleAlleleCounts, trio)))
                         .anyMatch(keepHomvar ? ac -> ac == 1 : ac -> ac > 0);
             }
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * form numTrios x 3 matrix of allele counts for specified variantIndex
+     * @param variantIndex
+     * @return
+     */
+    protected int[][] getTrioAlleleCountsMatrix(final int variantIndex) {
+        final int[] sampleAlleleCounts = sampleVariantAlleleCounts.get(variantIndex);
+        return Arrays.stream(trioSampleIndices)
+            .map(
+                trioIndices -> Arrays.stream(trioIndices)
+                                .map(idx -> sampleAlleleCounts[idx])
+                                .toArray()
+            )
+            .toArray(int[][]::new);
+    }
+
+    /**
+     * form numTrios x 3 matrix of genotype qualities for specified variantIndex
+     * @param variantIndex
+     * @return
+     */
+    protected int[][] getTrioGenotypeQualitiesMatrix(final int variantIndex) {
+        final int[] sampleGenotypeQualities = sampleVariantGenotypeQualities.get(variantIndex);
+        return Arrays.stream(trioSampleIndices)
+                .map(
+                        trioIndices -> Arrays.stream(trioIndices)
+                                .map(idx -> sampleGenotypeQualities[idx])
+                                .toArray()
+                )
+                .toArray(int[][]::new);
+    }
+
+    /**
+     * A sample variant is filterable if it's het, or if it's HOMVAR and keepHomVar is not true
+     */
+    protected boolean getSampleVariantIsFilterable(final int variantIndex, final int sampleIndex) {
+        final int ac = sampleVariantAlleleCounts.get(variantIndex)[sampleIndex];
+        return keepHomvar ? ac == 1 : ac > 0;
+    }
+
+
+    /**
+     * A sample Variant is trainable if a) it is filterable, and b) there is truth data (inheritance or known good/bad)
+     */
+    protected boolean getSampleVariantIsTrainable(final int variantIndex, final int sampleIndex) {
+        if(allTrioSampleIndices.contains(sampleIndex) ||
+           goodSampleVariantIndices.getOrDefault(variantIndex, Collections.emptySet()).contains(sampleIndex) ||
+           badSampleVariantIndices.getOrDefault(variantIndex, Collections.emptySet()).contains(sampleIndex)) {
+            return getSampleVariantIsFilterable(variantIndex, sampleIndex);
         } else {
             return false;
         }
@@ -433,6 +575,26 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
     }
 
+    public int getGenotypeAttributeAsInt(final Genotype genotype, final String key, Integer defaultValue) {
+        Object x = genotype.getExtendedAttribute(key);
+        if ( x == null || x == VCFConstants.MISSING_VALUE_v4 ) {
+            if(defaultValue == null) {
+                throw new IllegalArgumentException("Genotype is missing value of " + key);
+            } else {
+                return defaultValue;
+            }
+        }
+        if ( x instanceof Integer ) return (Integer)x;
+        return Integer.parseInt((String)x); // throws an exception if this isn't a string
+    }
+
+    private int[] getGenotypeAttributeAsInt(final Iterable<Genotype> sampleGenotypes, final String attributeKey,
+                                            final int missingAttributeValue) {
+        return StreamSupport.stream(sampleGenotypes.spliterator(), false)
+                        .mapToInt(g -> getGenotypeAttributeAsInt(g, attributeKey, missingAttributeValue))
+                        .toArray();
+    }
+
     /**
      * Accumulate properties for variant matrix, and allele counts, genotype quality for trio tensors
      */
@@ -504,78 +666,116 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             getTractProperties(tractOverlapDetector, variantContext);
         }
 
+        final Iterable<Genotype> sampleGenotypes = variantContext.getGenotypesOrderedBy(trainingSampleIds);
+        sampleVariantGq.add(
+                StreamSupport.stream(sampleGenotypes.spliterator(), false).mapToInt(Genotype::getGQ).toArray()
+        );
+
+        sampleVariantPeGq.add( getGenotypeAttributeAsInt(sampleGenotypes, PE_GQ_KEY, MISSING_GQ_VAL) );
+        sampleVariantRdGq.add( getGenotypeAttributeAsInt(sampleGenotypes, RD_GQ_KEY, MISSING_GQ_VAL) );
+        sampleVariantSrGq.add( getGenotypeAttributeAsInt(sampleGenotypes, SR_GQ_KEY, MISSING_GQ_VAL) );
+
         if(runMode == RunMode.TRAIN) {
             // get per-sample genotype qualities as a map indexed by sample ID
             final Map<String, Integer> sampleGenotypeQualities = variantContext.getGenotypes().stream().collect(
                     Collectors.toMap(Genotype::getSampleName, Genotype::getGQ)
             );
 
-            if(goodVariantSamples != null) {
-                if(goodVariantSamples.containsKey(variantContext.getID())) {
-                    // Get GQ values of known good variants that are filterable
-                    final int[] knownGoodGqs = goodVariantSamples.get(variantContext.getID())
-                        .stream()
-                        .filter(keepHomvar ?
-                                sampleId -> sampleAlleleCounts.get(sampleId) == 1 :
-                                sampleId -> sampleAlleleCounts.get(sampleId) > 0)
-                        .mapToInt(sampleGenotypeQualities::get).toArray();
-                    if(knownGoodGqs.length > 0) {
-                        goodVariantGqs.put(numVariants - 1, knownGoodGqs);
+            if(goodSampleVariants != null) {
+                if(goodSampleVariants.containsKey(variantContext.getID())) {
+                    // Get sample IDs of known good variants that are filterable
+                    final String[] knownGoodSampleIds = goodSampleVariants.get(variantContext.getID())
+                            .stream()
+                            .filter(keepHomvar ?
+                                    sampleId -> sampleAlleleCounts.get(sampleId) == 1 :
+                                    sampleId -> sampleAlleleCounts.get(sampleId) > 0)
+                            .toArray(String[]::new);
+                    if(knownGoodSampleIds.length > 0) {
+                        // get indices and GQ values of good samples for this variant
+                        goodSampleVariantIndices.put(
+                            numVariants - 1, Arrays.stream(knownGoodSampleIds).map(trainingSampleIndices::get).collect(Collectors.toSet())
+                        );
+                        // Get GQ values of known good variants that are filterable
+                        goodVariantGqs.put(
+                            numVariants - 1, Arrays.stream(knownGoodSampleIds).mapToInt(sampleGenotypeQualities::get).toArray()
+                        );
                     }
                 }
-                if(badVariantSamples.containsKey(variantContext.getID())) {
-                    // Get GQ values of known bad variants that are filterable
-                    final int[] knownBadGqs = badVariantSamples.get(variantContext.getID())
-                        .stream()
-                        .filter(keepHomvar ?
-                                sampleId -> sampleAlleleCounts.get(sampleId) == 1 :
-                                sampleId -> sampleAlleleCounts.get(sampleId) > 0)
-                        .mapToInt(sampleGenotypeQualities::get).toArray();
-                    if(knownBadGqs.length > 0) {
-                        badVariantGqs.put(numVariants - 1, knownBadGqs);
+                if(badSampleVariants.containsKey(variantContext.getID())) {
+                    // Get sample IDs of known bad variants that are filterable
+                    final String[] knownBadSampleIds = badSampleVariants.get(variantContext.getID())
+                            .stream()
+                            .filter(keepHomvar ?
+                                    sampleId -> sampleAlleleCounts.get(sampleId) == 1 :
+                                    sampleId -> sampleAlleleCounts.get(sampleId) > 0)
+                            .toArray(String[]::new);
+                    if(knownBadSampleIds.length > 0) {
+                        // get indices and GQ values of good samples for this variant
+                        badSampleVariantIndices.put(
+                                numVariants - 1, Arrays.stream(knownBadSampleIds).map(trainingSampleIndices::get).collect(Collectors.toSet())
+                        );
+                        // Get GQ values of known good variants that are filterable
+                        badVariantGqs.put(
+                                numVariants - 1, Arrays.stream(knownBadSampleIds).mapToInt(sampleGenotypeQualities::get).toArray()
+                        );
                     }
                 }
             }
 
-            // get the numTrios x 3 matrix of trio allele counts for this variant, keeping only trios where all samples
-            // are present in this VariantContext
-            final int[][] trioAlleleCounts = pedTrios.stream()
-                    .filter(trio -> mapContainsTrio(sampleAlleleCounts, trio))
-                    .map(trio -> getMappedTrioProperties(sampleAlleleCounts, trio))
-                    .collect(Collectors.toList())
-                    .toArray(new int[0][0]);
-            alleleCountsTensor.add(trioAlleleCounts);
+            // get allele counts for training samples for this variant
+            sampleVariantAlleleCounts.add(
+                trainingSampleIds.stream().mapToInt(sampleAlleleCounts::get).toArray()
+            );
 
-            // get the numTrios x 3 matrix of trio genotype qualities for this variant, keeping only trios where all samples
-            // are present in this VariantContext
-            final int[][] trioGenotypeQualities = pedTrios.stream()
-                    .filter(trio -> mapContainsTrio(sampleGenotypeQualities, trio))
-                    .map(trio -> getMappedTrioProperties(sampleGenotypeQualities, trio))
-                    .collect(Collectors.toList()).toArray(new int[0][0]);
-            genotypeQualitiesTensor.add(trioGenotypeQualities);
+            // get genotype qualities for training samples for this variant
+            sampleVariantGenotypeQualities.add(
+                trainingSampleIds.stream().mapToInt(sampleGenotypeQualities::get).toArray()
+            );
         } else {
             collectVariantPropertiesMap();
-            final double[] variantProperties = propertyNames.stream().mapToDouble(name -> variantPropertiesMap.get(name)[0]).toArray();
-            final int minGq = predict(variantProperties);
-            vcfWriter.add(filterVariantContext(variantContext, minGq));
+
+
+            vcfWriter.add(filterVariantContext(variantContext));
         }
     }
 
-    private VariantContext filterVariantContext(final VariantContext variantContext, final int minGq) {
+    protected float[] getSampleVariantProperties(final int variantIndex, final int sampleIndex) {
+        if(sampleVariantPropertiesBuffer == null) {
+            sampleVariantPropertiesBuffer = new float[getNumSampleVariantProperties()];
+        }
+        int propertyIndex = 0;
+        for (final String propertyName : getVariantPropertyNames()) {
+            sampleVariantPropertiesBuffer[propertyIndex] =
+                (float)variantPropertiesMap.get(propertyName)[variantIndex];
+            ++propertyIndex;
+        }
+        for(final String propertyName : getSampleVariantPropertyNames()) {
+            sampleVariantPropertiesBuffer[propertyIndex] =
+                (float)sampleVariantPropertiesMap.get(propertyName)[variantIndex][sampleIndex];
+            ++propertyIndex;;
+        }
+        return sampleVariantPropertiesBuffer;
+    }
+
+    private VariantContext filterVariantContext(final VariantContext variantContext) {
         final Genotype[] genotypes = new Genotype[variantContext.getNSamples()];
         int numFiltered = 0;
-        int genotypeIndex = 0;
+        int sampleIndex = 0;
         for(final Genotype genotype : variantContext.getGenotypes()) {
-            if(genotype.getGQ() >= minGq) {
-                genotypes[genotypeIndex] = new GenotypeBuilder(genotype).make();
+            final int gq = getSampleVariantIsFilterable(0, sampleIndex) ?
+                    adjustedGq(getSampleVariantProperties(0, sampleIndex)) :
+                    variantContext.getGenotype(sampleIndex).getGQ();
+            if(gq >= minGQ) {
+                genotypes[sampleIndex] = new GenotypeBuilder(genotype).GQ(gq).make();
+
             } else {
-                genotypes[genotypeIndex] = new GenotypeBuilder(genotype).alleles(GATKVariantContextUtils.noCallAlleles(genotype.getPloidy())).make();
+                genotypes[sampleIndex] = new GenotypeBuilder(genotype).alleles(GATKVariantContextUtils.noCallAlleles(genotype.getPloidy())).make();
                 ++numFiltered;
             }
-            ++genotypeIndex;
+            ++sampleIndex;
         }
         final VariantContextBuilder variantContextBuilder = new VariantContextBuilder(variantContext)
-            .genotypes(genotypes).attribute(MIN_GQ_KEY, minGq);
+            .genotypes(genotypes).attribute(MIN_GQ_KEY, minGQ);
         if(numFiltered > variantContext.getNSamples() * reportMinGqFilterThreshold) {
             variantContextBuilder.filter(EXCESSIVE_MIN_GQ_FILTER_KEY);
         }
@@ -666,6 +866,32 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
     }
 
+    @SuppressWarnings("SameParameterValue")
+    private double[][] getPropertyAsDoubles(final String propertyName, final int[][] values) {
+        // Compute baseline and scale regardless, since this info is saved in model file
+        if (propertyBaseline == null) {
+            propertyBaseline = new HashMap<>();
+        }
+        if (propertyScale == null) {
+            propertyScale = new HashMap<>();
+        }
+        if (!propertyBaseline.containsKey(propertyName)) {
+            final double[] orderedValues = Arrays.stream(values)
+                .flatMapToInt(Arrays::stream)
+                .sorted()
+                .mapToDouble(i -> i)
+                .toArray();
+            propertyBaseline.put(propertyName, getBaselineOrdered(orderedValues));
+            propertyScale.put(propertyName,
+                    getScaleOrdered(orderedValues, propertyBaseline.get(propertyName)));
+        }
+        return Arrays.stream(values)
+            .map(needsZScore() ?
+                    iArr -> zScore(iArr, propertyBaseline.get(propertyName), propertyScale.get(propertyName)) :
+                    iArr -> Arrays.stream(iArr).mapToDouble(i -> i).toArray())
+            .toArray(double[][]::new);
+    }
+
     private double[] getPropertyAsDoubles(final String propertyName, final boolean[] values) {
         // Compute baseline and scale regardless, since this info is saved in model file
         if (propertyBaseline == null) {
@@ -737,6 +963,9 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     }
 
     private void collectVariantPropertiesMap() {
+        // keep track of supplied property names
+        List<String> suppliedPropertyNames = propertyNames == null ? null : new ArrayList<>(propertyNames);
+
         allEvidenceTypes = assignAllSetLabels(variantEvidence, allEvidenceTypes);
         allAlgorithmTypes = assignAllSetLabels(variantAlgorithms, allAlgorithmTypes);
         allFilterTypes = assignAllSetLabels(variantFilters, allFilterTypes);
@@ -747,28 +976,39 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             labelsListsToLabelStatus(variantFilters, allFilterTypes),
             labelsToLabelStatus(svTypes, allSvTypes),
             Collections.singletonMap(
-                AF_PROPERTY_NAME, getPropertyAsDoubles(AF_PROPERTY_NAME, alleleFrequencies.stream().mapToDouble(x -> x).toArray())
+                AF_PROPERTY_NAME, getPropertyAsDoubles(AF_PROPERTY_NAME, alleleFrequencies.stream().mapToDouble(Double::doubleValue).toArray())
             ),
             Collections.singletonMap(
                 SVLEN_KEY, getPropertyAsDoubles(SVLEN_KEY, svLens.stream().mapToInt(x -> x).toArray())
             )
-        ).flatMap(e -> e.entrySet().stream()).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        ).flatMap(e -> e.entrySet().stream())
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         for(final Map.Entry<String, List<Double>> tractEntry : tractOverlapProperties.entrySet()) {
             variantPropertiesMap.put(
                 tractEntry.getKey(),
                 getPropertyAsDoubles(tractEntry.getKey(), tractEntry.getValue().stream().mapToDouble(x -> x).toArray())
             );
         }
+        variantPropertyNames = variantPropertiesMap.keySet().stream().sorted().collect(Collectors.toList());
 
+        sampleVariantPropertiesMap = Stream.of(
+            Collections.singletonMap(GQ_PROPERTY_NAME, getPropertyAsDoubles(GQ_PROPERTY_NAME, sampleVariantGq.toArray(new int[0][]))),
+            Collections.singletonMap(PE_GQ_KEY, getPropertyAsDoubles(PE_GQ_KEY, sampleVariantPeGq.toArray(new int[0][]))),
+            Collections.singletonMap(RD_GQ_KEY, getPropertyAsDoubles(RD_GQ_KEY, sampleVariantRdGq.toArray(new int[0][]))),
+            Collections.singletonMap(SR_GQ_KEY, getPropertyAsDoubles(SR_GQ_KEY, sampleVariantSrGq.toArray(new int[0][])))
+        ).flatMap(e -> e.entrySet().stream())
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        sampleVariantPropertyNames = sampleVariantPropertiesMap.keySet().stream().sorted().collect(Collectors.toList());
 
-        List<String> suppliedPropertyNames = propertyNames == null ? null : new ArrayList<>(propertyNames);
-        propertyNames = variantPropertiesMap.keySet().stream().sorted().collect(Collectors.toList());
+        propertyNames = Stream.of(variantPropertiesMap.keySet(), sampleVariantPropertiesMap.keySet())
+            .flatMap(Collection::stream)
+            .sorted()
+            .collect(Collectors.toList());
         if(suppliedPropertyNames != null && !suppliedPropertyNames.equals(propertyNames)) {
             throw new GATKException("Extracted properties not compatible with existing propertyNames."
                                     + "\nSupplied: " + suppliedPropertyNames
                                     + "\nExtracted: " + propertyNames);
         }
-        numProperties = propertyNames.size();
 
         // Clear raw columns:
         //   in FILTER mode, want to start from scratch with each variant
@@ -812,18 +1052,18 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         return gqStream.filter(keepHomvar ? gc -> acIterator.nextInt() == 1 : gc -> acIterator.nextInt() > 0);
     }
 
-    protected IntStream getCandidateMinGqs(final int rowIndex) {
-        final IntStream alleleCountsStream = Arrays.stream(alleleCountsTensor.get(rowIndex)).flatMapToInt(Arrays::stream);
-        final IntStream genotypeQualitiesStream = Arrays.stream(genotypeQualitiesTensor.get(rowIndex)).flatMapToInt(Arrays::stream);
+    protected IntStream getCandidateMinGqs(final int variantIndex) {
+        final IntStream alleleCountsStream = Arrays.stream(getTrioAlleleCountsMatrix(variantIndex)).flatMapToInt(Arrays::stream);
+        final IntStream genotypeQualitiesStream = Arrays.stream(getTrioGenotypeQualitiesMatrix(variantIndex)).flatMapToInt(Arrays::stream);
         return getCandidateMinGqs(alleleCountsStream, genotypeQualitiesStream, null);
     }
 
     protected IntStream getCandidateMinGqs(final int[] rowIndices) {
         final IntStream alleleCountsStream = Arrays.stream(rowIndices).flatMap(
-                rowIndex -> Arrays.stream(alleleCountsTensor.get(rowIndex)).flatMapToInt(Arrays::stream)
+                rowIndex -> Arrays.stream(getTrioAlleleCountsMatrix(rowIndex)).flatMapToInt(Arrays::stream)
         );
         final IntStream genotypeQualitiesStream = Arrays.stream(rowIndices).flatMap(
-                rowIndex -> Arrays.stream(genotypeQualitiesTensor.get(rowIndex)).flatMapToInt(Arrays::stream)
+                rowIndex -> Arrays.stream(getTrioGenotypeQualitiesMatrix(rowIndex)).flatMapToInt(Arrays::stream)
         );
         return getCandidateMinGqs(alleleCountsStream, genotypeQualitiesStream, null);
     }
@@ -894,6 +1134,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         return childAc <= maxAc;
     }
 
+
+
     static protected class FilterSummary {
         final int minGq;
         final long numDiscoverable;
@@ -955,8 +1197,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     protected FilterSummary getFilterSummary(final int minGq, final int variantIndex) {
         final long numDiscoverable = maxDiscoverableMendelianAc[variantIndex];
-        final int[][] variantAlleleCounts = alleleCountsTensor.get(variantIndex);
-        final int[][] variantGenotypeQualities = genotypeQualitiesTensor.get(variantIndex);
+        final int[][] variantAlleleCounts = getTrioAlleleCountsMatrix(variantIndex);
+        final int[][] variantGenotypeQualities = getTrioGenotypeQualitiesMatrix(variantIndex);
         final int [] goodGqs = goodVariantGqs == null ? null : goodVariantGqs.getOrDefault(variantIndex, null);
         final int [] badGqs = badVariantGqs == null ? null : badVariantGqs.getOrDefault(variantIndex, null);
         return getFilterSummary(minGq, numDiscoverable, variantAlleleCounts, variantGenotypeQualities, goodGqs, badGqs);
@@ -1114,12 +1356,28 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             );
         }
 
+        Loss(final float[] pSampleVariantIsGood, final boolean[] sampleVariantIsGood) {
+            final double balancedLoss = IntStream.range(0, pSampleVariantIsGood.length)
+                .mapToDouble(
+                    idx -> -FastMath.log(
+                        sampleVariantIsGood[idx] ? (double)pSampleVariantIsGood[idx] : 1.0 - (double)pSampleVariantIsGood[idx]
+                    )
+                )
+                .sum();
+            this.inheritanceLoss = balancedLoss;
+            this.truthLoss = balancedLoss;
+        }
+
         static Loss add(final Loss lossA, final Loss lossB) {
             return new Loss(lossA.inheritanceLoss + lossB.inheritanceLoss, lossA.truthLoss + lossB.truthLoss);
         }
 
         Loss divide(final int scale) {
             return new Loss(inheritanceLoss / scale, truthLoss / scale);
+        }
+
+        Loss multiply(final int scale) {
+            return new Loss(inheritanceLoss * scale, truthLoss * scale);
         }
 
 //        public boolean ge(final Loss other) {
@@ -1262,8 +1520,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
 
         final long numDiscoverable = maxDiscoverableMendelianAc[variantIndex];
-        final int[][] variantAlleleCounts = alleleCountsTensor.get(variantIndex);
-        final int[][] variantGenotypeQualities = genotypeQualitiesTensor.get(variantIndex);
+        final int[][] variantAlleleCounts = getTrioAlleleCountsMatrix(variantIndex);
+        final int[][] variantGenotypeQualities = getTrioGenotypeQualitiesMatrix(variantIndex);
         final int [] goodGqs = goodVariantGqs == null ? null : goodVariantGqs.getOrDefault(variantIndex, null);
         final int [] badGqs = badVariantGqs == null ? null : badVariantGqs.getOrDefault(variantIndex, null);
         final int propertyBin = propertyBins[variantIndex];
@@ -1370,8 +1628,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         maxDiscoverableMendelianAc = new int [numVariants];
         numDiscoverableMendelianAc = 0;
         for(int variantIndex = 0; variantIndex < numVariants; ++variantIndex) {
-            final int[][] variantAlleleCounts = alleleCountsTensor.get(variantIndex);
-            final int[][] variantGenotypeQualities = genotypeQualitiesTensor.get(variantIndex);
+            final int[][] variantAlleleCounts = getTrioAlleleCountsMatrix(variantIndex);
+            final int[][] variantGenotypeQualities = getTrioGenotypeQualitiesMatrix(variantIndex);
             final IntStream candidateMinGq = getCandidateMinGqs(variantAlleleCounts, variantGenotypeQualities, null);
 
             maxDiscoverableMendelianAc[variantIndex] = candidateMinGq == null ? 0 :
@@ -1383,9 +1641,9 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     }
 
     private void setPerVariantOptimalMinGq() {
-        // Get intial optimal filter qualities, optimizing each variant separately
+        // Get initial optimal filter qualities, optimizing each variant separately
         // Collect total summary stats, store min GQ
-        perVariantOptimalMinGq = new int [numVariants];
+        perVariantOptimalMinGq = new int[numVariants];
         BinnedFilterSummaries overallSummary = BinnedFilterSummaries.EMPTY;
         final BinnedFilterSummaries[] filterSummaries = new BinnedFilterSummaries[numVariants];
         for(int variantIndex = 0; variantIndex < numVariants; ++variantIndex) {
@@ -1423,11 +1681,12 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         displayHistogram("Optimal minGq histogram", Arrays.stream(perVariantOptimalMinGq), true);
     }
 
-    final int[] take(final int[] values, final int[] indices) {
+
+    static int[] take(final int[] values, final int[] indices) {
         return Arrays.stream(indices).map(i -> values[i]).toArray();
     }
 
-    final double[] take(final double[] values, final int[] indices) {
+    static double[] take(final double[] values, final int[] indices) {
         return Arrays.stream(indices).mapToDouble(i -> values[i]).toArray();
     }
 
@@ -1441,6 +1700,44 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     protected int[] getPerVariantOptimalMinGq(final int[] variantIndices) {
         return take(perVariantOptimalMinGq, variantIndices);
+    }
+
+    protected long getNumTrainableSamples(final int variantIndex) {
+        return IntStream.range(0, getNumSamples())
+                .filter(sampleIndex -> getSampleVariantIsTrainable(variantIndex, sampleIndex))
+                .count();
+    }
+    /**
+     * Get number of rows, account for the fact that unfilterable (e.g. already HOMREF) samples will not be used
+     */
+    protected long getNumTrainableSampleVariants(final int[] variantIndices) {
+        return Arrays.stream(variantIndices)
+            .mapToLong(this::getNumTrainableSamples)
+            .sum();
+    }
+
+    /**
+     *
+     * @param variantIndices
+     * @return
+     */
+    protected boolean[] getSampleVariantTruth(final int[] variantIndices) {
+        final int numRows = (int) getNumTrainableSampleVariants(variantIndices);
+        final boolean[] sampleVariantTruth = new boolean[numRows];
+
+        int flatIndex = 0;
+        for(final int variantIndex : variantIndices) {
+            final int minGq = perVariantOptimalMinGq[variantIndex];
+            for(int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex) {
+                if(!getSampleVariantIsTrainable(variantIndex, sampleIndex)) {
+                    continue;
+                }
+                final int gq = sampleVariantGq.get(variantIndex)[sampleIndex];
+                sampleVariantTruth[flatIndex] = gq >= minGq;
+                ++flatIndex;
+            }
+        }
+        return sampleVariantTruth;
     }
 
     @SuppressWarnings("SameParameterValue")
@@ -1488,11 +1785,44 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             .forEach(minGq -> System.out.println(minGq + ": " + displayValuesMap.get(minGq)));
     }
 
+    @SuppressWarnings("SameParameterValue")
+    protected void displayHistogram(final String description, final DoubleStream doubleStream, final int numBins, final double minValue, final double maxValue) {
+        final double eps = FastMath.max(FastMath.ulp(FastMath.abs(minValue)), FastMath.ulp(FastMath.abs(maxValue)));
+        final double binScale = (numBins - 2 * eps) / (maxValue - minValue);
+        final double binOffset = minValue * binScale - eps;
+        final long[] valueBins = new long [numBins];
+        double[] valueRange = new double[] {Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY};
+        doubleStream.forEach(value -> {
+            final int bin = (int)FastMath.floor(value * binScale - binOffset);
+            ++valueBins[bin];
+            if(value < valueRange[0]) {
+                valueRange[0] = value;
+            }
+            if(value > valueRange[1]) {
+                valueRange[1] = value;
+            }
+        });
+        final long numValues = Arrays.stream(valueBins).count();
+        if(valueRange[0] > valueRange[1]) {
+            System.out.println(description + ": no data");
+        } else {
+            System.out.format("%s: %d values\n", description, numValues);
+            System.out.format("\tactual range: [%f, %f]\n", valueRange[0], valueRange[1]);
+            System.out.println("\t low - high    %");
+            double high = minValue;
+            for(int bin = 0; bin < numBins; ++bin) {
+                double low = high;
+                high = low + 1.0 / binScale;
+                System.out.format("\t%.2f - %.2f   %.1f\n", low, high, valueBins[bin] * 100.0 / numValues);
+            }
+        }
+    }
+
     void printDebugInfo() {
         System.out.println("########################################");
         System.out.println("numVariants: " + numVariants);
         System.out.println("numTrios: " + numTrios);
-        System.out.println("numProperties: " + numProperties);
+        System.out.println("numProperties: " + getNumProperties());
         System.out.println("index\tpropertyName\tpropertyBaseline\tpropertyScale");
         int idx = 0;
         for(final String propertyName : propertyNames) {
@@ -1518,16 +1848,17 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             ++idx;
         }
 
-        final IntStream acStream = alleleCountsTensor.stream().flatMapToInt(
-                acArr -> Arrays.stream(acArr).flatMapToInt(Arrays::stream)
-        );
-        final IntStream gqStream = genotypeQualitiesTensor.stream().flatMapToInt(
-                gqArr -> Arrays.stream(gqArr).flatMapToInt(Arrays::stream)
-        );
+        final IntStream acStream = sampleVariantAlleleCounts.stream().flatMapToInt(Arrays::stream);
+        final IntStream gqStream = sampleVariantGenotypeQualities.stream().flatMapToInt(Arrays::stream);
         displayHistogram("Filterable alleles Gq histogram:",
                             streamFilterableGq(acStream, gqStream),true);
 
         System.out.println("########################################");
+    }
+
+    protected Loss getLoss(final float[] pSampleVariantGood, final int[] variantIndices) {
+        final boolean[] sampleVariantIsGood = getSampleVariantTruth(variantIndices);
+        return new Loss(pSampleVariantGood, sampleVariantIsGood);
     }
 
     protected Loss getLoss(final int[] minGq, final int[] variantIndices) {
@@ -1670,10 +2001,20 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     }
 
     protected abstract boolean needsZScore();
-    protected abstract int predict(final double[] variantProperties);
+    protected abstract float predict(final float[] sampleVariantProperties);
     protected abstract void trainFilter();
     protected abstract void saveModel(final OutputStream outputStream);
     protected abstract void loadModel(final InputStream inputStream);
+
+    protected int phredScale(final float p) {
+        return (int)FastMath.round(-10 * FastMath.log10(p));
+    }
+    protected int phredScale(final double p) {
+        return (int)FastMath.round(-10 * FastMath.log10(p));
+    }
+    protected int adjustedGq(final float[] sampleVariantProperties) {
+        return phredScale(predict(sampleVariantProperties));
+    }
 
     @Override
     public Object onTraversalSuccess() {
@@ -1681,15 +2022,13 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             if(numVariants == 0) {
                 throw new GATKException("No variants contained in vcf: " + drivingVariantFile);
             }
-            numTrios = alleleCountsTensor.get(0).length; // note: this is number of complete trios in intersection of pedigree file and VCF
-            if(numTrios == 0) {
-                throw new UserException.BadInput("There are no trios from the pedigree file that are fully represented in the vcf");
-            }
-            if(goodVariantSamples != null) {  // these aren't needed anymore, free memory
-                goodVariantSamples.clear();
-                goodVariantSamples = null;
-                badVariantSamples.clear();
-                badVariantSamples = null;
+
+            if(goodSampleVariants != null) {
+                // no longer needed, clear them out
+                goodSampleVariants.clear();
+                goodSampleVariants = null;
+                badSampleVariants.clear();
+                badSampleVariants = null;
             }
 
             collectVariantPropertiesMap();

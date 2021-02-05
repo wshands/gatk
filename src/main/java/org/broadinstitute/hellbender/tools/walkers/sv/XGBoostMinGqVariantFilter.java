@@ -10,9 +10,8 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 
 import java.io.*;
 import java.util.*;
+import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
-
-import static org.apache.commons.math3.util.FastMath.*;
 
 @CommandLineProgramProperties(
         summary = "Extract matrix of properties for each variant. Also extract, num_variants x num_trios x 3 tensors of" +
@@ -47,47 +46,54 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
     public double minChildWeight = 1.0;
     @Argument(fullName="prediction-scale-factor", doc="Scale factor for raw predictions from xgboost", optional=true)
     public double predictionScaleFactor = 100.0;
+    @Argument(fullName="max-minibatch-size", shortName="mbs", doc="Max number of sample variants to include in any mini batch",
+              optional=true)
+    public int maxMiniBatchSize = 100000;
 
     private Booster booster = null;
     private static final String TRAIN_MAT_KEY = "train";
     private static final String VALIDATION_MAT_KEY = "validation";
 
 
-    protected float[] getRowMajorVariantProperties(int[] rowIndices) {
-        if(rowIndices == null) {
-            rowIndices = IntStream.range(0, getNumVariants()).toArray();
-        }
-        final int numRows = rowIndices.length;
+    protected float[] getRowMajorSampleProperties(int[] variantIndices) {
+        // Get number of rows, account for the fact that unfilterable (e.g. already HOMREF) samples will not be used
+        final int numRows = (int) getNumTrainableSampleVariants(variantIndices);
+
         final float[] rowMajorVariantProperties = new float[numRows * getNumProperties()];
+        // Loop over variants and filterable samples. Store properties for each sample in a single flat array
         int flatIndex = 0;
-        for(final int rowIndex : rowIndices) {
-            for(final String propertyName : getPropertyNames()) {
-                rowMajorVariantProperties[flatIndex] = (float)variantPropertiesMap.get(propertyName)[rowIndex];
-                ++flatIndex;
+        for(final int variantIndex : variantIndices) {
+            for(int sampleIndex = 0; sampleIndex < getNumSamples(); ++sampleIndex) {
+                if(!getSampleVariantIsTrainable(variantIndex, sampleIndex)) {
+                    continue;
+                }
+                for (final String propertyName : getVariantPropertyNames()) {
+                    rowMajorVariantProperties[flatIndex] = (float) variantPropertiesMap.get(propertyName)[variantIndex];
+                    ++flatIndex;
+                }
+                for(final String propertyName : getSampleVariantPropertyNames()) {
+                    rowMajorVariantProperties[flatIndex] = (float) sampleVariantPropertiesMap.get(propertyName)[variantIndex][sampleIndex];
+                    ++flatIndex;
+                }
             }
         }
+
         return rowMajorVariantProperties;
     }
 
     private DMatrix getDMatrix(final int[] variantIndices) {
-        final float[] propertiesArr = getRowMajorVariantProperties(variantIndices);
-        final int[] perVariantOptimalMinGq = getPerVariantOptimalMinGq(variantIndices);
-        if(propertiesArr.length != variantIndices.length * getNumProperties()) {
-            throw new GATKException("rowMajorVariantProperties has length " + propertiesArr.length + ", should be " + variantIndices.length * getNumProperties());
-        }
-        return getDMatrix(propertiesArr, perVariantOptimalMinGq, variantIndices.length, getNumProperties());
+        final float[] propertiesArr = getRowMajorSampleProperties(variantIndices);
+        final boolean[] sampleVariantTruth = getSampleVariantTruth(variantIndices);
+        final int numRows = sampleVariantTruth.length;
+        return getDMatrix(propertiesArr, sampleVariantTruth, numRows, getNumProperties());
     }
 
-    private DMatrix getDMatrix(final double[] variantProperties) {
-        final float[] arr = new float[variantProperties.length];
-        final int[] perVariantOptimalMinGq = new int[1];
-        for(int i = 0; i < variantProperties.length; ++i) {
-            arr[i] = (float)variantProperties[i];
-        }
-        return getDMatrix(arr, perVariantOptimalMinGq, 1, variantProperties.length);
+    private DMatrix getDMatrix(final float[] sampleVariantProperties) {
+        final boolean[] sampleIsGood = new boolean[1];
+        return getDMatrix(sampleVariantProperties, sampleIsGood, 1, sampleVariantProperties.length);
     }
 
-    private DMatrix getDMatrix(final float[] propertiesArr, final int[] perVariantOptimalMinGq,
+    private DMatrix getDMatrix(final float[] propertiesArr, final boolean[] sampleVariantTruth,
                                final int numRows, final int numColumns) {
         try {
             for(final float val : propertiesArr) {
@@ -99,16 +105,13 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                     propertiesArr, numRows, numColumns, Float.NaN
             );
             // Set baseline (initial prediction for min GQ)
-            //final int baselineGq = getGenotypeQualitiesQuantile(initialMinGqQuantile);
-            final int baselineGq = 0;
-            final float baselinePredict = (float)baselineGq / (float)predictionScaleFactor;
             final float[] baseline = new float[numRows];
             final float[] weights = new float[numRows];
             final float[] labels = new float[numRows];
             for(int idx = 0; idx < numRows; ++idx) {
-                baseline[idx] = baselinePredict;
-                weights[idx] = (float) maxDiscoverableMendelianAc[idx];
-                labels[idx] = (float) perVariantOptimalMinGq[idx] / (float)predictionScaleFactor;
+                baseline[idx] = 0F;
+                weights[idx] = 1F;
+                labels[idx] = sampleVariantTruth[idx] ? 1F : 0F;
             }
             dMatrix.setLabel(labels);
             dMatrix.setBaseMargin(baseline);
@@ -132,113 +135,187 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                 put("colsample_bylevel", colsampleByLevel);
                 put("min_child_weight", minChildWeight);
                 put("validate_parameters", true);
-                put("objective", "reg:squarederror");
-                put("eval_metric", "rmse");
+                put("objective", "binary:logistic");
+                put("eval_metric", "logloss");
             }
         };
     }
 
-    private float[] predictsToFloatMinGq(final float[][] predicts, float[] minGq) {
-        if(minGq == null) {
-            minGq = new float[predicts.length];
-        }
-        for(int idx = 0; idx < predicts.length; ++idx) {
-            minGq[idx] = (float)predictionScaleFactor * predicts[idx][0];
-        }
-        return minGq;
-    }
-
-    private int[] predictsToIntMinGq(final float[][] predicts, int[] minGq) {
-        if(minGq == null) {
-            minGq = new int[predicts.length];
-        }
-        for(int idx = 0; idx < predicts.length; ++idx) {
-            minGq[idx] = (int)ceil(predictionScaleFactor * predicts[idx][0]);
-        }
-        return minGq;
+    private float sigma(final float predict) {
+        return 1.0F / (1.0F + (float)FastMath.exp(-predict));
     }
 
     private class DataSubset {
-        final DMatrix dMatrix;
+        final String name;
         final int[] variantIndices;
-        final List<Float> scores;
-        final int[] intMinGq;
-        final float[] floatMinGq;
-        final float[] d1Loss;
-        final float[] d2Loss;
-        final double bestPossibleLoss;
+        final boolean isTrainingSet;
+        final int maxMiniBatchSize;
+        final int numFilterableSampleVariants;
+        final int[] miniBatchSplits;
 
+        final List<Float> scores;
         private int bestScoreInd;
         private float bestScore;
 
-        DataSubset(final DMatrix dMatrix, final int[] indices, final boolean needDerivatives) {
-            this.dMatrix = dMatrix;
-            this.variantIndices = indices;
+        final DMatrix dMatrix;
+        final float[] pSampleVariantGood;
+        final boolean[] sampleVariantTruth;
+        final float[] d1Loss;
+        final float[] d2Loss;
+        final float[][] lossDerivatives;
+        final double bestPossibleLoss;
+
+        DataSubset(final String name, final int[] variantIndices, final boolean isTrainingSet, final int maxMiniBatchSize) {
+            this.name = name;
+            this.variantIndices = variantIndices;
+            this.isTrainingSet = isTrainingSet;
+            this.maxMiniBatchSize = maxMiniBatchSize;
+            numFilterableSampleVariants = (int) getNumTrainableSampleVariants(variantIndices);
+            miniBatchSplits = getMiniBatchSplits(variantIndices, maxMiniBatchSize, numFilterableSampleVariants);
+
             scores = new ArrayList<>();
             bestScore = Float.POSITIVE_INFINITY;
             bestScoreInd = 0;
-            intMinGq = new int[indices.length];
-            floatMinGq = needDerivatives ? new float[indices.length] : null;
-            d1Loss = needDerivatives ? new float[indices.length] : null;
-            d2Loss = needDerivatives ? new float[indices.length] : null;
-            bestPossibleLoss = getLoss(getPerVariantOptimalMinGq(indices), indices).toDouble();
-            System.out.println("Best possible loss = " + bestPossibleLoss);
+
+            this.dMatrix = miniBatchSplits == null ? getDMatrix(variantIndices) : null;
+            System.out.format("DataSubset %s processed in %d mini batches\n", name, getNumMiniBatches());
+
+            pSampleVariantGood = new float[numFilterableSampleVariants];
+            d1Loss = isTrainingSet ? new float[numFilterableSampleVariants] : null;
+            d2Loss = isTrainingSet ? new float[numFilterableSampleVariants] : null;
+            lossDerivatives = new float[][] {d1Loss, d2Loss};
+
+            sampleVariantTruth = getSampleVariantTruth(variantIndices);
+            final float[] tempTruthProbs = new float[numFilterableSampleVariants];
+            for(int idx = 0; idx < numFilterableSampleVariants; ++idx) {
+                tempTruthProbs[idx] = sampleVariantTruth[idx] ? 1F : 0F;
+            }
+            bestPossibleLoss = getLoss(tempTruthProbs, variantIndices).toDouble();
+            System.out.println("Best possible " + name + " loss = " + bestPossibleLoss);
         }
 
-        public int size() { return variantIndices.length; }
-
-        public void calcScore(final float[][] rawPredictions) {
-            predictsToIntMinGq(rawPredictions, intMinGq);
-            final Loss loss = getLoss(intMinGq, variantIndices);
-            appendScore(loss.toFloat());
-            if(d1Loss != null) {
-                // calculate derivatives
-                predictsToFloatMinGq(rawPredictions, floatMinGq);
-                calculateDerivatives(loss);
+        private int[] getMiniBatchSplits(final int[] variantIndices, final int maxMiniBatchSize, final int numFilterableSampleVariants) {
+            if(maxMiniBatchSize < getNumSamples()) {
+                throw new IllegalArgumentException("in " + name + " DataSubset: maxMiniBatchSize (" + maxMiniBatchSize +
+                                                   ") is less than numSamples (" + getNumSamples() + ")");
             }
-        }
-
-        void calculateDerivativesTargets(final Loss loss) {
-            final int[] optimalMinGq = getPerVariantOptimalMinGq(variantIndices);
-            final double squareFactor = predictionScaleFactor * predictionScaleFactor;
-            final double deltaLoss = loss.toDouble() - bestPossibleLoss;
-            if(deltaLoss <= 0) {
-                throw new GATKException("Bad deltaLoss: " + deltaLoss);
+            if(numFilterableSampleVariants <= maxMiniBatchSize) {
+                return null;
             }
-            System.out.println("deltaLoss=" + deltaLoss);
-            for (int i = 0; i < variantIndices.length; ++i) {
-                final double err = floatMinGq[i] - optimalMinGq[i];
-                if(err == 0) {
-                    d1Loss[i] = 0F;
-                    d2Loss[i] = (float) (squareFactor * 2.0 / FastMath.max(deltaLoss, 1.0e-3));
-                } else {
-                    final double safeErr = FastMath.signum(err) * FastMath.max(FastMath.abs(err), deltaLoss);
-                    d1Loss[i] = (float) (predictionScaleFactor * 2.0 * deltaLoss / safeErr);
-                    d2Loss[i] = (float) (squareFactor * 2.0 * deltaLoss / (safeErr * safeErr));
+            final int[] numFilterableSamplesPerVariant = Arrays.stream(variantIndices)
+                .mapToLong(XGBoostMinGqVariantFilter.this::getNumTrainableSamples)
+                .mapToInt(i -> (int) i)
+                .toArray();
+            final List<Integer> miniBatchSplits = new ArrayList<>(2 * numFilterableSampleVariants / maxMiniBatchSize);
+            int runningCount = 0;
+            for(int i = 0; i < variantIndices.length; ++i) {
+                runningCount += numFilterableSamplesPerVariant[i];
+                if(runningCount > maxMiniBatchSize) {
+                    miniBatchSplits.add(i);
+                    runningCount = numFilterableSamplesPerVariant[i];
                 }
             }
+            miniBatchSplits.add(variantIndices.length);
+            return miniBatchSplits.stream().mapToInt(Integer::intValue).toArray();
         }
 
-        void calculateDerivatives(final Loss loss) {
-            final BinnedFilterSummaries backgroundFilterSummary
-                    = getBackgroundFilterSummary(null, variantIndices, intMinGq);
-            final double squareFactor = predictionScaleFactor * predictionScaleFactor;
-            for (int i = 0; i < variantIndices.length; ++i) {
-                final int variantIndex = variantIndices[i];
-                final BinnedFilterSummaries filterSummary = getBinnedFilterSummary(intMinGq[i], variantIndex);
-                final FilterQuality localOptimum = getOptimalVariantMinGq(
-                    variantIndex, backgroundFilterSummary.subtract(filterSummary)
-                );
-                final double err = floatMinGq[i] - localOptimum.getMinGq();
-                final double deltaLoss = loss.toDouble() - bestPossibleLoss;
-                if(err == 0 || deltaLoss == 0) {
-                    d1Loss[i] = 0F;
-                    d2Loss[i] = (float) (squareFactor * 2.0 / FastMath.max(deltaLoss, 1.0e-3));
-                } else {
-                    final double safeErr = FastMath.signum(err) * FastMath.max(FastMath.abs(err), deltaLoss);
-                    d1Loss[i] = (float) (predictionScaleFactor * 2.0 * deltaLoss / safeErr);
-                    d2Loss[i] = (float) (squareFactor * 2.0 * deltaLoss / (safeErr * safeErr));
+        public int size() { return numFilterableSampleVariants; }
+        public boolean usesMiniBatches() { return miniBatchSplits != null; }
+        public int getNumMiniBatches() { return miniBatchSplits == null ? 1 : miniBatchSplits.length; }
+
+        private int[] getBatchVariantIndices(final int miniBatchIndex) {
+            final int i1 = miniBatchIndex == 0 ? 0 : miniBatchSplits[miniBatchIndex - 1];
+            final int i2 = miniBatchSplits[miniBatchIndex];
+            return Arrays.stream(variantIndices, i1, i2).toArray();
+        }
+
+        private DMatrix getBatchDMatrix(final int miniBatchIndex) {
+            return dMatrix == null ?
+                getDMatrix(getBatchVariantIndices(miniBatchIndex)):
+                dMatrix;
+        }
+
+        private Loss getMiniBatchLoss(final Booster booster, final int miniBatchIndex) {
+            final DMatrix miniBatchDMatrix = getBatchDMatrix(miniBatchIndex);
+            final float[][] rawPredictions;
+            try {
+                rawPredictions = booster.predict(miniBatchDMatrix, true, 0);
+            } catch(XGBoostError xgBoostError) {
+                throw new GATKException("In " + name + " DataSubset: Predict error", xgBoostError);
+            }
+            final float[] pVSGood = miniBatchSplits == null ? pSampleVariantGood : new float[rawPredictions.length];
+            for(int idx = 0; idx < rawPredictions.length; ++idx) {
+                pVSGood[idx] = sigma(rawPredictions[idx][0]);
+            }
+            final Loss loss = getLoss(pVSGood, variantIndices);
+
+            if(isTrainingSet) {
+                calculateDerivatives(pVSGood);
+                if(miniBatchIndex == 0) {
+                    System.out.format("\tBoosting round %d on %s\n", 1 + getRound(), name);
                 }
+                try {
+                    booster.boost(miniBatchDMatrix, lossDerivatives[0], lossDerivatives[1]);
+                } catch(XGBoostError xgBoostError) {
+                    throw new GATKException("In " + name + " DataSubset: Boost error", xgBoostError);
+                }
+            }
+
+            return loss;
+        }
+
+        public DoubleStream streamPredictions(final Booster booster) {
+            final DoubleStream.Builder builder = DoubleStream.builder();
+            final int numMiniBatches = getNumMiniBatches();
+            for(int miniBatchIndex = 0; miniBatchIndex < numMiniBatches; ++miniBatchIndex) {
+                final DMatrix miniBatchDMatrix = getBatchDMatrix(miniBatchIndex);
+                final float[][] rawPredictions;
+                try {
+                    rawPredictions = booster.predict(miniBatchDMatrix, true, 0);
+                } catch(XGBoostError xgBoostError) {
+                    throw new GATKException("In " + name + " DataSubset: Predict error", xgBoostError);
+                }
+                for (float[] rawPrediction : rawPredictions) {
+                    builder.add(sigma(rawPrediction[0]));
+                }
+            }
+            return builder.build();
+        }
+
+        public void predictOneRound(final Booster booster) {
+            final Loss roundLoss;
+            if(miniBatchSplits == null) {
+                roundLoss = getMiniBatchLoss(booster, 0).divide(this.size());
+            } else {
+                roundLoss = IntStream.range(0, miniBatchSplits.length)
+                    .mapToObj(idx -> this.getMiniBatchLoss(booster, idx))
+                    .reduce(Loss::add)
+                    .orElseThrow(RuntimeException::new)
+                    .divide(this.size());
+            }
+            appendScore(roundLoss.toFloat());
+            if(printProgress > 0) {
+                System.out.format("\t%s: %.3f\n",name, roundLoss.toFloat());
+            }
+        }
+
+        void calculateDerivatives(final float[] pSampleVariantGood) {
+            final float[] d1Loss, d2Loss;
+            if (miniBatchSplits == null) {
+                d1Loss = this.d1Loss;
+                d2Loss = this.d2Loss;
+            } else {
+                d1Loss = new float[pSampleVariantGood.length];
+                d2Loss = new float[pSampleVariantGood.length];
+                this.lossDerivatives[0] = d1Loss;
+                this.lossDerivatives[1] = d2Loss;
+            }
+            float scale = pSampleVariantGood.length;
+            for (int i = 0; i < pSampleVariantGood.length; ++i) {
+                final float sigma = pSampleVariantGood[i];
+                final float pFalse = 1F - sigma;
+                d1Loss[i] = sampleVariantTruth[i] ? -pFalse / scale : sigma / scale;
+                d2Loss[i] = sigma * pFalse / scale;
             }
         }
 
@@ -273,11 +350,11 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
     protected boolean needsZScore() { return false; }
 
     @Override
-    protected int predict(double[] variantProperties) {
+    protected float predict(float[] variantProperties) {
         try {
-            return Math.round(
-                booster.predict(getDMatrix(variantProperties), true, 0)[0][0]
-            );
+                return sigma(
+                    booster.predict(getDMatrix(variantProperties), true, 0)[0][0]
+                );
         } catch(XGBoostError xgBoostError) {
             throw new GATKException("Error predicting", xgBoostError);
         }
@@ -301,90 +378,59 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
         }
     }
 
-    private Booster initializeBooster(final Map<String, DataSubset> dataSubsetMap) {
+    private Booster initializeBooster(final List<DataSubset> dataSubsets) {
+        final DataSubset trainingSubset = dataSubsets.stream()
+            .filter(dataSubset -> dataSubset.isTrainingSet)
+            .findFirst()
+            .orElseThrow(() -> new GATKException("dataSubsets does not contain a training set"));
         final Map<String, DMatrix> watches = new HashMap<>();
-        for(final Map.Entry<String, DataSubset> entry : dataSubsetMap.entrySet()) {
-            if(!entry.getKey().equals(TRAIN_MAT_KEY)) {
-                watches.put(entry.getKey(), entry.getValue().dMatrix);
+        // add watches for any DataSubset that a) is not the main training set, and
+        //                                     b) does not use mini batches (it can comfortably hang out in memory)
+        for(final DataSubset dataSubset : dataSubsets) {
+            if(!(dataSubset.equals(trainingSubset) || dataSubset.usesMiniBatches())) {
+                watches.put(dataSubset.name, dataSubset.dMatrix);
             }
         }
 
         try {
-            return XGBoost.train(dataSubsetMap.get(TRAIN_MAT_KEY).dMatrix, getXgboostParams(), 0, watches, null, null);
+            // Do 0 rounds of training on the first mini-batch (if using, otherwise whole dMatrix) of training DataSubset
+            return XGBoost.train(trainingSubset.getBatchDMatrix(0), getXgboostParams(), 0, watches, null, null);
         } catch(XGBoostError xgBoostError) {
             throw new GATKException("Error creating Booster", xgBoostError);
         }
     }
 
-    private boolean trainOneRound(final Booster booster, final Map<String, DataSubset> dataSubsets) {
+    private boolean trainOneRound(final Booster booster, final List<DataSubset> dataSubsets) {
         // evaluate booster on all data sets, calculate derivatives on training set
-        final DataSubset validationData = dataSubsets.get(VALIDATION_MAT_KEY);
         if(printProgress > 0) {
-            System.out.println("Evaluating round " + (validationData.getRound() + 1));
+            System.out.println("Training round " + (dataSubsets.get(0).getRound() + 1));
         }
-        for(final Map.Entry<String, DataSubset> dataSubsetEntry : dataSubsets.entrySet()) {
-            final String key = dataSubsetEntry.getKey();
-            final DataSubset dataSubset = dataSubsetEntry.getValue();
-            final float[][] predicts;
-            try {
-                predicts = booster.predict(dataSubset.dMatrix, true, 0);
-            } catch(XGBoostError xgBoostError) {
-                throw new GATKException("Error predicting " + key + " matrix, round " + dataSubset.getRound(), xgBoostError);
-            }
-            dataSubset.calcScore(predicts);
-            if(key.equals(TRAIN_MAT_KEY)) {
-                if(printProgress > 1) {
-                    final int[] perVariantOptimalMinGq = getPerVariantOptimalMinGq(dataSubset.variantIndices);
-                    System.out.println("predicts.size = [" + predicts.length + "," + predicts[0].length + "]");
-                    System.out.println("index\tminGq\toptimal\td1\td2");
-                    IntStream.range(0, dataSubset.size())
-                        .mapToObj(i -> new AbstractMap.SimpleEntry<>(i, FastMath.abs(dataSubset.intMinGq[i] - perVariantOptimalMinGq[i])))
-                        .sorted(Map.Entry.comparingByValue())
-                        .skip(dataSubset.size() - 10)
-                        .sorted(Map.Entry.comparingByKey())
-                        .forEach(
-                            entry -> {
-                                final int i = entry.getKey();
-                                System.out.format("%6d:\t%4d\t%4d\t%f\t%f%n",
-                                                  i, dataSubset.intMinGq[i], perVariantOptimalMinGq[i],
-                                                  dataSubset.d1Loss[i], dataSubset.d2Loss[i]);
-                            }
-                        );
-                }
-            }
-            if(printProgress > 0) {
-                System.out.println("\t" + key + ": " + dataSubset.getLastScore());
+
+        boolean needSaveCheckpoint = !dataSubsets.isEmpty();
+        boolean needStop = !dataSubsets.isEmpty();
+        for(final DataSubset dataSubset : dataSubsets) {
+            dataSubset.predictOneRound(booster);
+            if(!dataSubset.isTrainingSet) {
+                // check if need to stop iterating or save model checkpoint
+                needSaveCheckpoint = needSaveCheckpoint && dataSubset.isBestScore();
+                needStop = needStop && dataSubset.stop();
             }
         }
+
         // check if booster needs to be saved, or if early stopping is necessary
-        if(validationData.isBestScore()) {
+        if(needSaveCheckpoint) {
             saveModelCheckpoint();
         }
-        if(validationData.stop()) {
-            return false;
-        }
-        // boost booster
-        if(printProgress > 0) {
-            System.out.println("Boosting round " + validationData.getRound());
-        }
-        try {
-            final DataSubset trainData = dataSubsets.get(TRAIN_MAT_KEY);
-            booster.boost(trainData.dMatrix, trainData.d1Loss, trainData.d2Loss);
-        } catch(XGBoostError xgBoostError) {
-            throw new GATKException("Error boosting round " + dataSubsets.get(TRAIN_MAT_KEY).getRound(), xgBoostError);
-        }
-        return true;
+        return !needStop;
     }
 
     @Override
     protected void trainFilter() {
-        final Map<String, DataSubset> dataSubsets = new HashMap<String, DataSubset>() {
+        final List<DataSubset> dataSubsets = new ArrayList<DataSubset>() {
             private static final long serialVersionUID = 0L;
             {
-                put(TRAIN_MAT_KEY,
-                    new DataSubset(getDMatrix(getTrainingIndices()), getTrainingIndices(), true));
-                put(VALIDATION_MAT_KEY,
-                    new DataSubset(getDMatrix(getValidationIndices()), getValidationIndices(), false));
+                add(new DataSubset(TRAIN_MAT_KEY, getTrainingIndices(), true, maxMiniBatchSize));
+                add(new DataSubset(VALIDATION_MAT_KEY, getValidationIndices(), false, maxMiniBatchSize));
             }
         };
         booster = initializeBooster(dataSubsets);
@@ -393,13 +439,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             ;
 
         loadModelCheckpoint();
-        final float[][] predicts;
-        try {
-            predicts = booster.predict(dataSubsets.get(TRAIN_MAT_KEY).dMatrix, true, 0);
-        } catch(XGBoostError xgBoostError) {
-            throw new GATKException("Error predicting final training minGq", xgBoostError);
-        }
-        final int[] minGq = predictsToIntMinGq(predicts, null);
-        displayHistogram("Final training prediction histogram", Arrays.stream(minGq), true);
+        displayHistogram("Final training adjusted GQ histogram",
+                          dataSubsets.get(0).streamPredictions(booster).mapToInt(this::phredScale),true);
     }
 }
