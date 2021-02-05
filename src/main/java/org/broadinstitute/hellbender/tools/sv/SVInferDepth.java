@@ -1,7 +1,6 @@
 package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.samtools.util.QualityUtil;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
@@ -17,6 +16,7 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.utils.MathUtils;
+import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
@@ -29,23 +29,13 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.DoubleStream;
+import java.util.stream.IntStream;
 
 /**
- * Annotate a VCF with scores from a Convolutional Neural Network (CNN).
- *
- * This tool streams variants and their reference context to a python program,
- * which evaluates a pre-trained neural network on each variant.
- * The default models were trained on single-sample VCFs.
- * The default model should not be used on VCFs with annotations from joint call-sets.
- *
- * <h3>1D Model with pre-trained architecture</h3>
+ * Infer copy state posterior distributions from a depth model generated with SVTrainDepth.
  *
  * <pre>
- * gatk CNNScoreVariants \
- *   -V vcf_to_annotate.vcf.gz \
- *   -R reference.fasta \
- *   -O annotated.vcf
+ * gatk SVInferDepth ...
  * </pre>
  *
  */
@@ -85,14 +75,17 @@ public class SVInferDepth extends GATKTool {
     @Argument(fullName = "random-seed", doc = "PRNG seed", optional = true)
     private int randomSeed = 92837488;
 
-    @Argument(fullName = "predictive-samples", doc = "Number of samples per iteration for predictive distribution", optional = true)
+    @Argument(fullName = "predictive-samples", doc = "Number of samples per iteration for predictive distribution", minValue = 1, optional = true)
     private int predictiveSamples = 100;
 
-    @Argument(fullName = "predictive-iter", doc = "Number of iterations for predictive distribution", optional = true)
+    @Argument(fullName = "predictive-iter", doc = "Number of iterations for predictive distribution", minValue = 1, optional = true)
     private int predictiveIter = 10;
 
-    @Argument(fullName = "discrete-samples", doc = "Number of samples per iteration for discrete distribution", optional = true)
+    @Argument(fullName = "discrete-samples", doc = "Number of samples per iteration for discrete distribution", minValue = 1, optional = true)
     private int discreteSamples = 1000;
+
+    @Argument(fullName = "min-state-prob", doc = "Minimum probability for discrete states", minValue = 0, maxValue = 1, optional = true)
+    private double minStateProbability = 1e-4;
 
     @Argument(fullName = "discrete-log-freq", doc = "Number of iterations between log messages for discrete sampling", optional = true)
     private int discreteLogFreq = 100;
@@ -107,10 +100,16 @@ public class SVInferDepth extends GATKTool {
     private VariantContextWriter vcfWriter;
     private BufferedReader modelOutput;
     private List<String> sampleList;
+    private SAMSequenceDictionary dictionary;
 
     @Override
     public void onStartup() {
         super.onStartup();
+
+        dictionary = getBestAvailableSequenceDictionary();
+        if (dictionary == null) {
+            throw new UserException.BadInput("Sequence dictionary file required.");
+        }
 
         logger.info("Reading genotype model sample list...");
         final Path sampleListPath = Paths.get(modelDir.toString(), modelName + ".sample_ids.list");
@@ -149,11 +148,6 @@ public class SVInferDepth extends GATKTool {
     }
 
     public VCFHeader composeVariantContextHeader() {
-        final SAMSequenceDictionary dictionary = getBestAvailableSequenceDictionary();
-        if (dictionary == null) {
-            throw new UserException.BadInput("Sequence dictionary file required.");
-        }
-        final SAMSequenceDictionary sequenceDictionary = getBestAvailableSequenceDictionary();
         final Set<VCFHeaderLine> vcfDefaultToolHeaderLines = getDefaultToolVCFHeaderLines();
         final VCFHeader result = new VCFHeader(Collections.emptySet(), sampleList);
 
@@ -161,7 +155,7 @@ public class SVInferDepth extends GATKTool {
         result.addMetaDataLine(new VCFHeaderLine(VCFHeaderVersion.VCF4_2.getFormatString(),
                 VCFHeaderVersion.VCF4_2.getVersionString()));
 
-        result.setSequenceDictionary(sequenceDictionary);
+        result.setSequenceDictionary(dictionary);
 
         /* add default tool header lines */
         vcfDefaultToolHeaderLines.forEach(result::addMetaDataLine);
@@ -202,6 +196,7 @@ public class SVInferDepth extends GATKTool {
 
         final VariantContextBuilder builder = new VariantContextBuilder("", contig, start, end, Arrays.asList(Allele.REF_N, Allele.SV_SIMPLE_CNV));
         builder.id(id);
+        builder.attribute(VCFConstants.END_KEY, end);
         builder.attribute(GATKSVVCFConstants.DEPTH_P_HARDY_WEINBERG_LOSS_FIELD, pHWLoss);
         builder.attribute(GATKSVVCFConstants.DEPTH_P_HARDY_WEINBERG_GAIN_FIELD, pHWGain);
         builder.attribute(GATKSVVCFConstants.DEPTH_BACKGROUND_FIELD, eps);
@@ -212,17 +207,22 @@ public class SVInferDepth extends GATKTool {
         }
         final List<Genotype> genotypes = new ArrayList<>(stateProbStringArray.length);
         for (int i = 0; i < stateProbStringArray.length; i++) {
-            final double[] sampleStateProbs = Arrays.stream(stateProbStringArray[i].split(SECOND_DIM_SEPARATOR)).mapToDouble(Double::valueOf).toArray();
-            final int[] sampleStatePhreds = DoubleStream.of(sampleStateProbs).mapToInt(p -> Math.round(QualityUtil.getPhredScoreFromErrorProbability(Math.max(Double.MIN_VALUE, p)))).toArray();
-            final int copyState = MathUtils.maxElementIndex(sampleStateProbs);
+            final double[] copyStateProbs = Arrays.stream(stateProbStringArray[i].split(SECOND_DIM_SEPARATOR)).mapToDouble(Double::valueOf).map(p -> Math.max(p, minStateProbability)).toArray();
+            final int copyState = MathUtils.maxElementIndex(copyStateProbs);
+            final int[] copyStatePhred = IntStream.range(0, copyStateProbs.length)
+                    .map(j -> Math.round(QualityUtils.errorProbToQual(Math.max(Double.MIN_VALUE, copyStateProbs[j]))))
+                    .toArray();
+            final int[] copyStatePL = IntStream.range(0, copyStatePhred.length)
+                    .map(j -> copyStatePhred[j] - copyStatePhred[copyState])
+                    .toArray();
+
             final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(sampleList.get(i));
-            genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, sampleStatePhreds);
+            genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, copyStatePL);
             genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_FIELD, copyState);
             genotypeBuilder.alleles(Collections.singletonList(Allele.NO_CALL));
             genotypes.add(genotypeBuilder.make());
         }
         builder.genotypes(genotypes);
-
         return builder.make();
     }
 

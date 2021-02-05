@@ -9,7 +9,6 @@ import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDisc
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.copynumber.formats.collections.CalledContigPloidyCollection;
-import org.broadinstitute.hellbender.tools.copynumber.gcnv.GermlineCNVIntervalVariantDecoder;
 import org.broadinstitute.hellbender.tools.sv.*;
 import org.broadinstitute.hellbender.utils.codecs.DepthEvidenceCodec;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
@@ -63,7 +62,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     @Argument(fullName = "depth-file", doc = "Read depth evidence file")
     private GATKPath depthEvidenceFilePath;
 
-    @Argument(fullName = SVCopyNumberPosteriors.CONTIG_PLOIDY_CALLS_LONG_NAME, doc = "Contig ploidy calls file. Can be specified for multiple samples.")
+    @Argument(fullName = SVAggregateDepth.CONTIG_PLOIDY_CALLS_LONG_NAME, doc = "Contig ploidy calls file. Can be specified for multiple samples.")
     private List<GATKPath> contigPloidyCallFilePaths;
 
     @Argument(fullName = "output-name", doc = "Output name")
@@ -173,8 +172,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         final Collection<CalledContigPloidyCollection> contigPloidyCollections = contigPloidyCallFilePaths.stream()
                 .map(p -> new CalledContigPloidyCollection(p.toPath().toFile()))
                 .collect(Collectors.toList());
-        final GermlineCNVIntervalVariantDecoder cnvDecoder = new GermlineCNVIntervalVariantDecoder(contigPloidyCollections);
-        sampleContigPloidyMap = cnvDecoder.getSampleContigPloidyMap();
+        sampleContigPloidyMap = DepthEvidenceAggregator.getSampleContigPloidyMap(contigPloidyCollections);
     }
 
     private List<String> getSamplesFromHeader() {
@@ -189,7 +187,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     public void apply(final DepthEvidence feature,
                       final ReadsContext readsContext,
                       final ReferenceContext referenceContext,
-                      final FeatureContext featureContext ) {
+                      final FeatureContext featureContext) {
         modelDataFileStream.println(encode(feature));
     }
 

@@ -35,6 +35,7 @@ def run(args: dict, default_dtype: torch.dtype = torch.float32):
                              mu_eps=params['mu_eps'], device=args['device'], loss=params['loss'])
     load_param_store(base_path, device=args['device'])
     data = cnv_io.load_tensors(base_path=base_path, tensor_dtype=default_dtype, device=args['device'])
+    logging.info(str(data.starts))
 
     posterior = model.run_predictive(data=data, n_samples=args['infer_predictive_samples'],
                                      n_iter=args['infer_predictive_iter'])

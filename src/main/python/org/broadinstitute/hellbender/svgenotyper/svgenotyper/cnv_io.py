@@ -23,7 +23,7 @@ def load_batch(variants_file_path: str,
             counts_list.append([int(x) for x in fifo_data[3].split(';')])
             ploidy_list.append([int(x) for x in fifo_data[4].split(';')])
     contig_np = np.asarray(contig_list)
-    start_t = torch.tensor(start_list, device=device, dtype=tensor_dtype)
+    start_t = torch.tensor(start_list, device=device, dtype=torch.int64)
     bin_size_t = torch.tensor(bin_size_list, device=device, dtype=tensor_dtype)
     counts_t = torch.tensor(counts_list, device=device, dtype=tensor_dtype)
     ploidy_t = torch.tensor(ploidy_list, device=device, dtype=tensor_dtype)
@@ -77,7 +77,7 @@ def save_list(data: list, path: str):
 def load_tensors(base_path: str, tensor_dtype: torch.dtype, device: str = 'cpu'):
     sample_per_base_depth = torch.load(base_path + ".sample_per_base_depth.pt", map_location=device).to(dtype=tensor_dtype)
     sample_ploidy = torch.load(base_path + ".sample_ploidy.pt", map_location=device).to(dtype=tensor_dtype)
-    starts = torch.load(base_path + ".starts.pt", map_location=device).to(dtype=tensor_dtype)
+    starts = torch.load(base_path + ".starts.pt", map_location=device)
     bin_size = torch.load(base_path + ".bin_size.pt", map_location=device).to(dtype=tensor_dtype)
     counts = torch.load(base_path + ".counts.pt", map_location=device).to(dtype=tensor_dtype)
     samples = np.loadtxt(base_path + ".sample_ids.list", dtype=str)

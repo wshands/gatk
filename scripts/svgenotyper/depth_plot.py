@@ -74,6 +74,11 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
     rd_median = mt_median.to_numpy()
     rd_positions = mt_median.index.values
 
+    rd_carriers_padded = np.append(rd_carriers.values, np.expand_dims(rd_carriers.values[-1, :], axis=0), axis=0)
+    rd_non_carriers_padded = np.append(rd_non_carriers.values, np.expand_dims(rd_non_carriers.values[-1, :], axis=0), axis=0)
+    rd_median_padded = np.append(rd_median, rd_median[-1])
+    rd_positions_padded = np.append(rd_positions, rd_positions[-1] + bin_size)
+
     out_path = "{}.{}.depth.png".format(args.out_name, record.id)
     figure_width = 12
     figure_height = 8
@@ -94,9 +99,9 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
 
     ax = axes[0, 0]
     if len(non_carriers) > 0:
-        ax.step(rd_positions, rd_non_carriers, color='r', linewidth=linewidth, where='post', alpha=alpha_non_carrier)
-    ax.step(rd_positions, rd_carriers, color='b', linewidth=linewidth, where='post', alpha=alpha_carrier)
-    ax.step(rd_positions, rd_median, color='k', linewidth=linewidth, where='post')
+        ax.step(rd_positions_padded, rd_non_carriers_padded, color='r', linewidth=linewidth, where='post', alpha=alpha_non_carrier)
+    ax.step(rd_positions_padded, rd_carriers_padded, color='b', linewidth=linewidth, where='post', alpha=alpha_carrier)
+    ax.step(rd_positions_padded, rd_median_padded, color='k', linewidth=linewidth, where='post')
     ax.set_title(title)
     ax.axvspan(xmin=start, xmax=end, color=span_color)
     ax.set_xticks(posteriors_start, minor=False)
@@ -142,7 +147,7 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
     ax.axvspan(xmin=start, xmax=end, color=span_color)
     ax.step(posteriors_start, posteriors_phi, where='post', color='magenta', marker='o')
     ax.step(posteriors_start, posteriors_erd, where='post', color='teal', marker='o')
-    ax.step(rd_positions, rd_median, color='k', where='post')
+    ax.step(rd_positions_padded, rd_median_padded, color='k', where='post')
     ax.set_xticks(posteriors_start, minor=False)
     ax.xaxis.grid(True, which='major', color='k', alpha=grid_alpha, linestyle='dotted')
     ax.spines['top'].set_visible(False)
