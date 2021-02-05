@@ -278,8 +278,13 @@ public final class ReblockGVCF extends VariantWalker {
             throw new GATKException("Exception thrown at " + variant.getContig() + ":" + variant.getStart() + " " + variant.toString(), e);
         }
         if (newVC != null) {
-            vcfWriter.add(newVC);
-            vcfOutputEnd = newVC.getEnd();
+            try {
+                vcfWriter.add(newVC);
+                vcfOutputEnd = newVC.getEnd();
+            } catch (Exception e) {
+                throw new GATKException("Exception thrown at " + newVC.getContig() + ":" + newVC.getStart() + " " + newVC.toString(), e);
+            }
+
             /*if (newVC.getReference().length() > 1) {
                 if (vcfOutputEnd < newVC.getStart() + newVC.getReference().length() - 1) {
                     vcfOutputEnd = newVC.getStart() + newVC.getReference().length() - 1;
@@ -513,7 +518,8 @@ public final class ReblockGVCF extends VariantWalker {
     protected boolean shouldBeReblocked(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
         return !genotype.isCalled() || (genotype.hasPL() && getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey)[0] < rgqThreshold) || genotype.isHomRef()
-                || !genotypeHasConcreteAlt(genotype) ;
+                || !genotypeHasConcreteAlt(genotype)
+                || genotype.getAlleles().stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE));
     }
 
     private boolean genotypeHasConcreteAlt(final Genotype g) {
@@ -641,7 +647,7 @@ public final class ReblockGVCF extends VariantWalker {
                     foundMatch = true;
                     break;
                 }
-                if (gtAllele.equals(Allele.NON_REF_ALLELE)) {
+                /*if (gtAllele.equals(Allele.NON_REF_ALLELE)) {
                     if (dropLowQuals) { //don't regenotype, just drop it -- this is a GQ 0 case if ever I saw one
                         return null;
                     } else {
@@ -649,7 +655,7 @@ public final class ReblockGVCF extends VariantWalker {
                         final Genotype g = gb.make();
                         return builder.alleles(Arrays.asList(g.getAllele(0), Allele.NON_REF_ALLELE)).unfiltered().log10PError(VariantContext.NO_LOG10_PERROR).attributes(attrMap).genotypes(gb.make()).make();
                     }
-                }
+                }*/
             }
             if (!foundMatch && !currAlt.isSymbolic()) {
                 allelesNeedSubsetting = true;
