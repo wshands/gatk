@@ -108,6 +108,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
     @Test
     public void testASAnnotationsAndSubsetting() throws Exception {
         //some subsetting, but never dropping the first alt
+        //also has multi-allelic that gets trimmed with ref block added
         final IntegrationTestSpec spec = new IntegrationTestSpec(
                 "-O %s -R " + b37_reference_20_21 +
                         " -drop-low-quals -do-qual-approx -V " + "src/test/resources/org/broadinstitute/hellbender/tools/walkers/CombineGVCFs/NA12878.AS.chr20snippet.g.vcf" +
@@ -169,6 +170,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("reblockedgvcf", ".vcf");
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("V", getToolTestDataDir() + "justHeader.g.vcf")
+                .addReference(hg38Reference)
                 .addOutput(output);
         runCommandLine(args);
 
@@ -192,6 +194,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("rereblockedgvcf", ".vcf");
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("V", input)
+                .addReference(hg38Reference)
                 .addOutput(output);
         runCommandLine(args);
 
@@ -231,6 +234,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("dropGQ0Dels.reblocked", ".g.vcf");
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("V", input)
+                .addReference(hg38Reference)
                 .addOutput(output);
         runCommandLine(args);
 

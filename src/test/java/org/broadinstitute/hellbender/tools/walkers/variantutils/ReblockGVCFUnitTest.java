@@ -93,7 +93,10 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         final Genotype g2 = makeG("sample1", Allele.NO_CALL,Allele.NO_CALL);
         final VariantContext noData = makeDeletionVC("noData", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g2);
         final VariantContext notCrashing = reblocker.lowQualVariantToGQ0HomRef(noData, noData).make();
-        Assert.assertTrue(notCrashing.getGenotype(0).isNoCall());
+        final Genotype outGenotype = notCrashing.getGenotype(0);
+        Assert.assertTrue(outGenotype.isHomRef());
+        Assert.assertEquals(outGenotype.getGQ(), 0);
+        Assert.assertTrue(Arrays.stream(outGenotype.getPL()).allMatch(x -> x == 0));
     }
 
     @Test
@@ -113,12 +116,21 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
     }
 
     @Test  //no-calls can be dropped or reblocked just like hom-refs, i.e. we don't have to preserve them like variants
-    public void testNoCalls() {
+    public void testBadCalls() {
         final ReblockGVCF reblocker = new ReblockGVCF();
 
         final Genotype g2 = makeG("sample1", Allele.NO_CALL,Allele.NO_CALL);
         final VariantContext noData = makeDeletionVC("noData", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g2);
         Assert.assertTrue(reblocker.shouldBeReblocked(noData));
+
+        final Genotype g3 = makeG("sample1", LONG_REF, Allele.NON_REF_ALLELE);
+        final VariantContext nonRefCall = makeDeletionVC("nonRefCall", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g3);
+        Assert.assertTrue(reblocker.shouldBeReblocked(nonRefCall));
+    }
+
+    @Test
+    public void testPosteriors() {
+        //TODO:
     }
 
     @DataProvider(name = "overlappingDeletionCases")
@@ -164,6 +176,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("V", inputFile)
             .add(ReblockGVCF.RGQ_THRESHOLD_SHORT_NAME, 10.0)
+            .addReference(b37_reference_20_21)
             .addOutput(outputFile);
         runCommandLine(args);
 
@@ -210,6 +223,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         final File outputFile = File.createTempFile(inputPrefix,".reblocked" + inputSuffix);
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("V", inputFile)
+                .addReference(b37_reference_20_21)
                 .addOutput(outputFile);
         runCommandLine(args);
 
@@ -248,7 +262,11 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
 
     //TODO: these are duplicated from PosteriorProbabilitiesUtilsUnitTest but PR #4947 modifies VariantContextTestUtils, so I'll do some refactoring before the second of the two is merged
     private Genotype makeG(final String sample, final Allele a1, final Allele a2, final int... pls) {
-        return new GenotypeBuilder(sample, Arrays.asList(a1, a2)).PL(pls).make();
+        final GenotypeBuilder gb = new GenotypeBuilder(sample, Arrays.asList(a1, a2));
+        if (pls.length > 0) {
+            gb.PL(pls);
+        }
+        return gb.make();
     }
 
     private VariantContext makeDeletionVC(final String source, final List<Allele> alleles, final int refLength, final Genotype... genotypes) {
