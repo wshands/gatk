@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.variantutils;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.sun.tools.javah.Gen;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
@@ -419,7 +420,8 @@ public final class ReblockGVCF extends MultiVariantWalker {
             bufferEnd = blockEnd;  //keep track of observed ends
         }
         homRefBlockBuffer.removeAll(completedBlocks);
-        if (variantContextToOutput.getGenotype(0).isHomRef()) {
+        final Genotype g = variantContextToOutput.getGenotype(0);
+        if (g.isHomRef() || (g.hasPL() && g.getPL()[0] == 0)) {
             final VariantContextBuilder newHomRefBlock = new VariantContextBuilder(variantContextToOutput);
             homRefBlockBuffer.add(newHomRefBlock);
         }
@@ -533,9 +535,10 @@ public final class ReblockGVCF extends MultiVariantWalker {
             throw new IllegalStateException("Variant contexts must contain genotypes to be reblocked.");
         }
         final Genotype genotype = result.getGenotype(0);
-        return !genotype.isCalled() || (genotype.hasPL() && getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey)[0] < rgqThreshold) || genotype.isHomRef()
+        return (genotype.hasPL() && getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey)[0] < rgqThreshold) || genotype.isHomRef()
                 || !genotypeHasConcreteAlt(genotype)
-                || genotype.getAlleles().stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE));
+                || genotype.getAlleles().stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE))
+                || (!genotype.hasPL() && !genotype.hasGQ());
     }
 
     private boolean genotypeHasConcreteAlt(final Genotype g) {
@@ -639,7 +642,16 @@ public final class ReblockGVCF extends MultiVariantWalker {
         Map<String, Object> attrMap = new HashMap<>();
         Map<String, Object> origMap = originalVC.getAttributes();
 
-        final Genotype genotype = result.getGenotype(0);
+        final Genotype genotype;
+        if (result.getGenotype(0).isNoCall()) {
+            final Genotype noCallGT = result.getGenotype(0);
+            final GenotypeBuilder builderToCallAlleles = new GenotypeBuilder(noCallGT);
+            GATKVariantContextUtils.makeGenotypeCall(noCallGT.getPloidy(), builderToCallAlleles, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN,
+                    noCallGT.getLikelihoods().getAsVector(), result.getAlleles(), null);
+            genotype = builderToCallAlleles.make();
+        } else {
+            genotype = result.getGenotype(0);
+        }
         VariantContextBuilder builder = new VariantContextBuilder(result);  //QUAL from result is carried through
         builder.attributes(attrMap);
 

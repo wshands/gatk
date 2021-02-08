@@ -260,6 +260,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
                 .add("V", getToolTestDataDir() + "chr20.shard2.g.vcf")
                 .add("V", getToolTestDataDir() + "chr20.shard1.g.vcf")
                 .add("V", getToolTestDataDir() + "chr20.shard0.g.vcf")
+                .addReference(hg38Reference)
                 .addOutput(output);
         runCommandLine(args);
 
@@ -267,6 +268,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         final ArgumentsBuilder args2 = new ArgumentsBuilder();
         args2.add("V", getToolTestDataDir() + "prod.chr20snippet.withRawMQ.g.vcf")
                 .add("L", "chr20:19995000-19998999")
+                .addReference(hg38Reference)
                 .addOutput(output2);
         runCommandLine(args2);
 
@@ -283,8 +285,9 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("reblockedgvcf", ".vcf");
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("V", getToolTestDataDir() + "justHeader.g.vcf") //sample "Sample"
-        .add("V", getToolTestDataDir() + "nonRefAD.g.vcf") //sample "HK017-0046"
-                .addOutput(output);
+            .add("V", getToolTestDataDir() + "nonRefAD.g.vcf") //sample "HK017-0046"
+            .addReference(hg38Reference)
+            .addOutput(output);
         runCommandLine(args);
     }
 
@@ -294,12 +297,13 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("reblockedgvcf", ".vcf");
         final ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("V", getToolTestDataDir() + "noCallGTs.g.vcf")
+                .addReference(hg38Reference)
                 .addOutput(output);
         runCommandLine(args);
 
         Pair<VCFHeader, List<VariantContext>> actual = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
         final List<VariantContext> variants = actual.getRight();
-        final List<String> variantKeys = variants.stream().map(Mutect2IntegrationTest::keyForVariant).collect(Collectors.toList());
+        final List<String> variantKeys = variants.stream().map(VariantContextTestUtils::keyForVariant).collect(Collectors.toList());
         final Map<String, VariantContext> resultMap = new LinkedHashMap<>();
         for (int i = 0; i < variants.size(); i++) {
             resultMap.put(variantKeys.get(i), variants.get(i));
