@@ -883,19 +883,6 @@ public final class ReblockGVCF extends MultiVariantWalker {
         final List<Allele> newVCAlleles = builder.getAlleles().stream().map(a -> a.isReference() ? newRefAllele : a).collect(Collectors.toList());
         builder.start(newStart).alleles(newVCAlleles).genotypes(genotypesArray);
     }
-        List<Integer> gtCount;
-        if (g.hasPL()) {
-            int minPL = MathUtils.minElementIndex(g.getPL());
-            if (minPL == 1 || minPL == 3 || minPL == 6) { //these are the ref/alt indexes; we shouldn't have more than three alleles
-                gtCount = Arrays.asList(0,1,0);
-            } else {
-                gtCount = Arrays.asList(0,0,1);
-            }
-        } else {
-            gtCount = g.getAlleles().stream().anyMatch(Allele::isReference) ? Arrays.asList(0,1,0) : Arrays.asList(0,0,1); //ExcessHet currently uses rounded/integer genotype counts, so do the same here
-        }
-        attrMap.put(GATKVCFConstants.RAW_GENOTYPE_COUNT_KEY, gtCount);
-        builder.attributes(attrMap);
 
     /**
      *
