@@ -36,7 +36,6 @@ import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.haplotype.HaplotypeBAMWriter;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
@@ -129,7 +128,7 @@ public final class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
     private static final int MINIMUM_PUTATIVE_PLOIDY_FOR_ACTIVE_REGION_DISCOVERY = 2;
 
     /**
-     * Reads with length lower than this number, after clipping off overhands outside the active region,
+     * Reads with length lower than this number, after clipping off overhangs outside the active region,
      * won't be considered for genotyping.
      */
     private static final int READ_LENGTH_FILTER_THRESHOLD = 10;
@@ -333,9 +332,9 @@ public final class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
     /**
      * @return the default set of read filters for use with the HaplotypeCaller
      */
-    public static List<ReadFilter> makeStandardHCReadFilters(final int mappingQualityThreshold) {
+    public static List<ReadFilter> makeStandardHCReadFilters() {
         List<ReadFilter> filters = new ArrayList<>();
-        filters.add(new MappingQualityReadFilter(mappingQualityThreshold));
+        filters.add(new MappingQualityReadFilter(DEFAULT_READ_QUALITY_FILTER_THRESHOLD));
         filters.add(ReadFilterLibrary.MAPPING_QUALITY_AVAILABLE);
         filters.add(ReadFilterLibrary.MAPPED);
         filters.add(ReadFilterLibrary.NOT_SECONDARY_ALIGNMENT);
@@ -381,7 +380,7 @@ public final class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
 
         if ( hcArgs.emitReferenceConfidence == ReferenceConfidenceMode.GVCF ) {
             try {
-                writer = new GVCFWriter(writer, new ArrayList<Number>(hcArgs.GVCFGQBands), hcArgs.standardArgs.genotypeArgs.samplePloidy, hcArgs.floorBlocks);
+                writer = new GVCFWriter(writer, new ArrayList<Number>(hcArgs.GVCFGQBands), hcArgs.floorBlocks);
             } catch ( IllegalArgumentException e ) {
                 throw new CommandLineException.BadArgumentValue("GQBands", "are malformed: " + e.getMessage());
             }

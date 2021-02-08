@@ -19,7 +19,7 @@
 ##INFO=<ID=AN,Number=1,Type=Integer,Description="Total number of alleles in called genotypes">
 ##INFO=<ID=AS_BaseQRankSum,Number=A,Type=Float,Description="allele specific Z-score from Wilcoxon rank sum test of each Alt Vs. Ref base qualities">
 ##INFO=<ID=AS_FS,Number=A,Type=Float,Description="allele specific phred-scaled p-value using Fisher's exact test to detect strand bias of each alt allele">
-##INFO=<ID=AS_InbreedingCoeff,Number=A,Type=Float,Description="allele specific heterozygosity as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation; relate to inbreeding coefficient">
+##INFO=<ID=AS_InbreedingCoeff,Number=A,Type=Float,Description="Allele-specific inbreeding coefficient as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation">
 ##INFO=<ID=AS_MQ,Number=A,Type=Float,Description="Allele-specific RMS Mapping Quality">
 ##INFO=<ID=AS_MQRankSum,Number=A,Type=Float,Description="Allele-specific Mapping Quality Rank Sum">
 ##INFO=<ID=AS_QD,Number=A,Type=Float,Description="Allele-specific Variant Confidence/Quality by Depth">
@@ -40,7 +40,7 @@
 ##INFO=<ID=InbreedingCoeff,Number=1,Type=Float,Description="Inbreeding coefficient as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation">
 ##INFO=<ID=MQ,Number=1,Type=Float,Description="RMS Mapping Quality">
 ##INFO=<ID=MQRankSum,Number=1,Type=Float,Description="Z-score From Wilcoxon rank sum test of Alt vs. Ref read mapping qualities">
-##INFO=<ID=MQ_DP,Number=1,Type=Integer,Description="Depth over variant samples for better MQ calculation (deprecated -- use RAW_MQandDP instead.">
+##INFO=<ID=MQ_DP,Number=1,Type=Integer,Description="Depth over variant samples for better MQ calculation (deprecated -- use RAW_MQandDP instead.)">
 ##INFO=<ID=QD,Number=1,Type=Float,Description="Variant Confidence/Quality by Depth">
 ##INFO=<ID=QUALapprox,Number=1,Type=Integer,Description="Sum of PL[0] values; used to approximate the QUAL score">
 ##INFO=<ID=RAW_GT_COUNT,Number=3,Type=Integer,Description="Counts of genotypes w.r.t. the reference allele: 0/0, 0/*, */*, i.e. all alts lumped together; for use in calculating excess heterozygosity">
@@ -76,8 +76,9 @@
 ##source=HaplotypeCaller
 ##source=SelectVariants
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	2004700237
-chr20	49884219	.	C	<NON_REF>	.	.	END=49884242	GT:DP:GQ:MIN_DP:PL	0/0:20:60:20:0,60,753
-chr20	49884221	.	C	<NON_REF>	.	.	END=49884242	GT:DP:GQ:MIN_DP:PL	0/0:13:65:13:0,65,706
-chr20	49884241	.	CG	*,C,<NON_REF>	0	.	AS_RAW_BaseQRankSum=|NaN|NaN|NaN;AS_RAW_MQ=14400.00|0.00|0.00|0.00;AS_RAW_MQRankSum=|NaN|NaN|NaN;AS_RAW_ReadPosRankSum=|NaN|NaN|NaN;AS_SB_TABLE=0,4|0,0|0,0|0,0;DP=25;RAW_GT_COUNT=0,1,0;RAW_MQandDP=88425,25	GT:AD:DP:GQ:PL:SB	0/1:4,0,0,0:4:17:17,0,196,47,202,692,63,225,477,463:0,4,0,0
-chr20	49884242	.	GAC	*,GACAC,G,<NON_REF>	174.05	.	AS_RAW_BaseQRankSum=||||;AS_RAW_MQ=0.00|3600.00|0.00|3600.00|0.00;AS_RAW_MQRankSum=||||;AS_RAW_ReadPosRankSum=||||;AS_SB_TABLE=0,0|0,0|0,0|0,0|0,0;DP=25;RAW_GT_COUNT=0,0,1;RAW_MQandDP=88425,25	GT:AD:DP:GQ:PL:SB	1/3:0,1,0,1,0:2:20:727,184,153,592,84,818,77,0,77,20,666,179,585,71,658:0,0,0,2
+chr20	49884219	.	C	<NON_REF>	.	.	END=49884234	GT:DP:GQ:MIN_DP:PL	0/0:57:41:55:0,41,659
+chr20	49884235	.	C	<NON_REF>	.	.	END=49884236	GT:DP:GQ:MIN_DP:PL	0/0:30:8:30:0,8,513
+chr20	49884237	.	C	<NON_REF>	.	.	END=49884238	GT:DP:GQ:MIN_DP:PL	0/0:25:23:25:0,23,353
+chr20	49884239	.	C	<NON_REF>	.	.	END=49884241	GT:DP:GQ:MIN_DP:PL	0/0:25:0:25:0,0,0
+chr20	49884242	.	GAC	*,G,<NON_REF>	174.05	.	AS_RAW_BaseQRankSum=|||;AS_RAW_MQ=0.00|3600.00|3600.00|0.00;AS_RAW_MQRankSum=|||;AS_RAW_ReadPosRankSum=|||;AS_SB_TABLE=0,0|0,0|0,0|0,0;DP=25;RAW_GT_COUNT=0,0,1;RAW_MQandDP=88425,25	GT:AD:DP:GQ:PL:SB	1/2:0,1,1,0:2:20:727,184,153,77,0,20,666,179,71,658:0,0,0,2
 chr20	49884245	.	A	<NON_REF>	.	.	END=49884249	GT:DP:GQ:MIN_DP:PL	0/0:25:42:25:0,42,630

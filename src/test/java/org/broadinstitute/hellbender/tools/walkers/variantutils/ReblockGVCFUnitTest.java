@@ -12,12 +12,9 @@ import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
-import org.broadinstitute.hellbender.testutils.BaseTest;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
 import org.broadinstitute.hellbender.utils.variant.writers.GVCFWriter;
 import org.testng.Assert;
@@ -97,6 +94,32 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         Assert.assertTrue(outGenotype.isHomRef());
         Assert.assertEquals(outGenotype.getGQ(), 0);
         Assert.assertTrue(Arrays.stream(outGenotype.getPL()).allMatch(x -> x == 0));
+
+        //haploid hom ref call
+        final int[] pls = {0, 35, 72};
+        final GenotypeBuilder gb = new GenotypeBuilder("male_sample", Arrays.asList(LONG_REF)).PL(pls);
+        final VariantContextBuilder vb = new VariantContextBuilder();
+        vb.chr("20").start(10001).stop(10004).alleles(Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE)).log10PError(-3.0).genotypes(gb.make());
+        final VariantContext vc = vb.make();
+
+        final VariantContext haploidRefBlock = reblocker.lowQualVariantToGQ0HomRef(vc, vc).make();
+        final Genotype newG = haploidRefBlock.getGenotype("male_sample");
+
+        Assert.assertEquals(newG.getPloidy(), 1);
+        Assert.assertEquals(newG.getGQ(), 35);
+    }
+
+    @Test
+    public void testCalledHomRefGetsAltGQ() {
+        final ReblockGVCF reblocker = new ReblockGVCF();
+
+        final Genotype g3 = makeG("sample1", LONG_REF, LONG_REF, 0, 11, 37, 100, 200, 400);
+        final VariantContext twoAltsHomRef = makeDeletionVC("lowQualVar", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g3);
+        final GenotypeBuilder takeGoodAltGQ = reblocker.changeCallToGQ0HomRef(twoAltsHomRef, new HashMap<>());
+        final Genotype nowRefBlock = takeGoodAltGQ.make();
+        Assert.assertEquals(nowRefBlock.getGQ(), 11);
+        Assert.assertEquals(nowRefBlock.getDP(), 18);
+        Assert.assertEquals((int)nowRefBlock.getExtendedAttribute(GATKVCFConstants.MIN_DP_FORMAT_KEY), 18);
     }
 
     @Test
@@ -130,7 +153,32 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
 
     @Test
     public void testPosteriors() {
-        //TODO:
+        final ReblockGVCF reblocker = new ReblockGVCF();
+        reblocker.posteriorsKey = "GP";
+
+        final GenotypeBuilder gb = new GenotypeBuilder("sample1", Arrays.asList(LONG_REF, LONG_REF));
+        final double[] posteriors = {0,2,5.01,2,4,5.01,2,4,4,5.01};
+        final int[] pls = {2,0,50,2,289,52,38,325,407,88};
+        gb.attribute("GP", posteriors).PL(pls).GQ(-2); //I kid you not, DRAGEN output a -2 GQ
+        final VariantContext vc = makeDeletionVC("DRAGEN", Arrays.asList(LONG_REF, DELETION, LONG_SNP, Allele.NON_REF_ALLELE), LONG_REF.length(), gb.make());
+//        Assert.assertTrue(reblocker.shouldBeReblocked(vc));
+//        final VariantContext out = reblocker.lowQualVariantToGQ0HomRef(vc, vc).make();
+//        Assert.assertTrue(out.getGenotype(0).isHomRef());
+//        Assert.assertTrue(out.getGenotype(0).getGQ() == 2);
+
+        final GenotypeBuilder gb2 = new GenotypeBuilder("sample1", Arrays.asList(LONG_REF, LONG_REF));
+        final double gqForNoPLs = 34.77;
+        final int inputGQ = 32;
+        Assert.assertNotEquals(gqForNoPLs, inputGQ);
+        final double[] posteriors2 = {0,gqForNoPLs,37.78,39.03,73.8,42.04};
+        gb2.attribute("GP", posteriors2).GQ(inputGQ);
+        final VariantContext vc2 = makeDeletionVC("DRAGEN", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), gb2.make());
+        final VariantContext out2 = reblocker.lowQualVariantToGQ0HomRef(vc2, vc2).make();
+        final Genotype gOut2 = out2.getGenotype(0);
+        Assert.assertTrue(gOut2.isHomRef());
+        Assert.assertEquals(gOut2.getGQ(), (int)Math.round(gqForNoPLs));
+        Assert.assertTrue(gOut2.hasPL());
+        Assert.assertEquals(gOut2.getPL().length, 3);
     }
 
     @DataProvider(name = "overlappingDeletionCases")
@@ -241,7 +289,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         final SAMSequenceDictionary dict = SAMSequenceDictionaryExtractor.extractDictionary(dictionary.toPath());
         builder.setReferenceDictionary(dict);
         final VariantContextWriter vcfWriter = builder.build();
-        final GVCFWriter gvcfWriter= new GVCFWriter(vcfWriter, Arrays.asList(20,100), HomoSapiensConstants.DEFAULT_PLOIDY);
+        final GVCFWriter gvcfWriter= new GVCFWriter(vcfWriter, Arrays.asList(20,100));
         final VCFHeader result = new VCFHeader(Collections.emptySet(), Collections.singletonList(VariantContextTestUtils.SAMPLE_NAME));
         result.setSequenceDictionary(dict);
         result.addMetaDataLine(new VCFFormatHeaderLine(VCFConstants.GENOTYPE_KEY, 1,
@@ -272,7 +320,8 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
     private VariantContext makeDeletionVC(final String source, final List<Allele> alleles, final int refLength, final Genotype... genotypes) {
         final int start = 10;
         final int stop = start+refLength-1;
-        return new VariantContextBuilder(source, "1", start, stop, alleles).genotypes(Arrays.asList(genotypes)).unfiltered().make();
+        return new VariantContextBuilder(source, "1", start, stop, alleles)
+                .genotypes(Arrays.asList(genotypes)).unfiltered().log10PError(-3.0).attribute(VCFConstants.DEPTH_KEY, 18).make();
     }
 
     private Genotype addAD(final Genotype g, final int... ads) {

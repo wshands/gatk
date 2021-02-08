@@ -84,7 +84,6 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         spec.executeTest("testOneSampleDropLows", this);
     }
 
-    //TODO: this isn't actually correcting non-ref GTs because I changed some args around -- separate out dropping low qual alleles and low qual sites?
     @Test  //covers non-ref AD and non-ref GT corrections
     public void testNonRefADCorrection() throws Exception {
         final IntegrationTestSpec spec = new IntegrationTestSpec(
@@ -132,6 +131,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
                 .add("drop-low-quals", true)
                 .add("rgq-threshold", "10")
                 .add("L", "chr20")
+                .addReference(hg38Reference)
                 .addOutput(output);
         runCommandLine(args);
 
@@ -226,6 +226,10 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
                         " --" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE + " false",
                 Arrays.asList(getToolTestDataDir() + "expected.overlappingDeletions.g.vcf"));
         spec.executeTest("testOverlappingDeletions", this);
+
+        //Note that there's a star in the output that's not associated with any deletion, which isn't great, but
+        //it is covered by a lot of deletions, just each deletion by itself is very low quality.
+        //This could be resolved by this tool, but at the expense of a lot more complexity.
     }
 
     @Test
@@ -241,8 +245,9 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         final List<VariantContext> inputVCs = VariantContextTestUtils.readEntireVCFIntoMemory(input.getAbsolutePath()).getRight();
         final List<VariantContext> outputVCs = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath()).getRight();
 
-        Assert.assertEquals(outputVCs.size(), 1);
+        Assert.assertEquals(outputVCs.size(), 3);
         Assert.assertEquals(outputVCs.get(0).getStart(), inputVCs.get(0).getStart());
-        Assert.assertEquals(outputVCs.get(0).getEnd(), inputVCs.get(inputVCs.size()-1).getEnd());
+        Assert.assertEquals(outputVCs.get(outputVCs.size()-1).getEnd(), inputVCs.get(inputVCs.size()-1).getEnd());
+        Assert.assertEquals(outputVCs.get(1).getGenotype(0).getGQ(), 0);  //there should be a GQ0 block in the middle from a crap variant in the input
     }
 }

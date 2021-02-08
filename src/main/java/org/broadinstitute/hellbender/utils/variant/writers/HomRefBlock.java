@@ -91,9 +91,9 @@ final class HomRefBlock extends GVCFBlock {
     @Override
     public void add(final int pos, final int newEnd, final Genotype genotype) {
         Utils.nonNull(genotype, "genotype cannot be null");
-        if ( ! genotype.hasPL() ) { throw new IllegalArgumentException("genotype must have PL field");}
-        if ( pos > end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
-        if ( pos < getStart())  { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contained in block with start " + getStart()); }
+        //if ( pos > end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
+        //if ( pos < getStart())  { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contained in block with start " + getStart()); }
+        if ( pos != end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
         if ( genotype.getPloidy() != ploidy) { throw new IllegalArgumentException("cannot add a genotype with a different ploidy: " + genotype.getPloidy() + " != " + ploidy); }
         // Make sure the GQ is within the bounds of this band. Treat GQs > 99 as 99.
         if ( !withinBounds(Math.min(genotype.getGQ(), VCFConstants.MAX_GENOTYPE_QUAL))) {
