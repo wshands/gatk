@@ -316,7 +316,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(altAllelesByPosition.get(10020042).basesMatch(Allele.ALT_C)); //tumor G->C, normal G->A
         Assert.assertTrue(altAllelesByPosition.get(10020124).basesMatch(Allele.ALT_G)); //tumor A->G, normal A->T
     }
-    
+
     // test on an artificial bam with several contrived MNPs
     @Test
     public void testMnps() {

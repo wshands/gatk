@@ -84,7 +84,7 @@ public abstract class GVCFBlock implements Locatable {
     }
 
     /**
-     * Allow overlapping blocks to be merged, as can occur in reblocking
+     * Allow overlapping input blocks, as in the case where shards are split with duplicate boundary events
      * @param vc
      * @return
      */

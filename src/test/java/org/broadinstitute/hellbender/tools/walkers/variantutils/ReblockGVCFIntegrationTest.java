@@ -8,20 +8,19 @@ import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.CommandLineProgramTester;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.walkers.mutect.Mutect2IntegrationTest;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
@@ -249,5 +248,78 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         Assert.assertEquals(outputVCs.get(0).getStart(), inputVCs.get(0).getStart());
         Assert.assertEquals(outputVCs.get(outputVCs.size()-1).getEnd(), inputVCs.get(inputVCs.size()-1).getEnd());
         Assert.assertEquals(outputVCs.get(1).getGenotype(0).getGQ(), 0);  //there should be a GQ0 block in the middle from a crap variant in the input
+    }
+
+    @Test
+    public void testMultipleInputs() {
+        //run with multiple inputs split from chr20:19995000-19998999 of prod.chr20snippet.withRawMQ.g.vcf
+        //note that an event is duplicated in shard1 and shard2 because it spans the boundary
+        final File output = createTempFile("multi-input", ".vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", getToolTestDataDir() + "chr20.shard3.g.vcf")
+                .add("V", getToolTestDataDir() + "chr20.shard2.g.vcf")
+                .add("V", getToolTestDataDir() + "chr20.shard1.g.vcf")
+                .add("V", getToolTestDataDir() + "chr20.shard0.g.vcf")
+                .addOutput(output);
+        runCommandLine(args);
+
+        final File output2 = createTempFile("single-input",".vcf");
+        final ArgumentsBuilder args2 = new ArgumentsBuilder();
+        args2.add("V", getToolTestDataDir() + "prod.chr20snippet.withRawMQ.g.vcf")
+                .add("L", "chr20:19995000-19998999")
+                .addOutput(output2);
+        runCommandLine(args2);
+
+        try (final FeatureDataSource<VariantContext> actualVcs = new FeatureDataSource<>(output);
+             final FeatureDataSource<VariantContext> expectedVcs = new FeatureDataSource<>(output2)) {
+            GATKBaseTest.assertCondition(actualVcs, expectedVcs,
+                    (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqual(a, e,
+                            Collections.emptyList(), Collections.emptyList()));
+        }
+    }
+
+    @Test(expectedExceptions = UserException.class)
+    public void testMixedSamples() {
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", getToolTestDataDir() + "justHeader.g.vcf") //sample "Sample"
+        .add("V", getToolTestDataDir() + "nonRefAD.g.vcf") //sample "HK017-0046"
+                .addOutput(output);
+        runCommandLine(args);
+    }
+
+    @Test
+    //we had some external GVCFs that each went through CombineGVCFs for some reason, so GTs all went to ./.
+    public void testNoCallGenotypes() {
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", getToolTestDataDir() + "noCallGTs.g.vcf")
+                .addOutput(output);
+        runCommandLine(args);
+
+        Pair<VCFHeader, List<VariantContext>> actual = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+        final List<VariantContext> variants = actual.getRight();
+        final List<String> variantKeys = variants.stream().map(Mutect2IntegrationTest::keyForVariant).collect(Collectors.toList());
+        final Map<String, VariantContext> resultMap = new LinkedHashMap<>();
+        for (int i = 0; i < variants.size(); i++) {
+            resultMap.put(variantKeys.get(i), variants.get(i));
+        }
+
+        final List<String> expectedHomVarKeys = Arrays.asList(
+                "chr22:10514994-10514994 G*, [<NON_REF>, A]",
+                "chr22:10515170-10515170 C*, [<NON_REF>, T]",
+                "chr22:10515223-10515223 G*, [<NON_REF>, C]");
+
+        final List<String> expectedHetKeys = Arrays.asList(
+                "chr22:10515120-10515120 A*, [<NON_REF>, AAAGC]",
+                "chr22:10515223-10515223 G*, [<NON_REF>, C]");
+
+        final List<String> expectedHomRefKeys = Arrays.asList(
+                "chr22:10515118-10515118 G*, [<NON_REF>, GGAAA]");
+
+        Assert.assertTrue(variantKeys.containsAll(expectedHomVarKeys));
+        Assert.assertTrue(variantKeys.containsAll(expectedHetKeys));
+        Assert.assertTrue(variantKeys.containsAll(expectedHomRefKeys));
+        Assert.assertTrue(variants.size() == 22);
     }
 }
