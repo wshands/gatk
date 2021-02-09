@@ -13,6 +13,7 @@ import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.CommandLineProgramTester;
 import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.mutect.Mutect2IntegrationTest;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.testng.Assert;
@@ -162,6 +163,18 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
                         " --floor-blocks -GQB 10 -GQB 20 -GQB 30 -GQB 40 -GQB 50 -GQB 60",
                 Arrays.asList(getToolTestDataDir() + "expected.NA12878.AS.chr20snippet.reblocked.hiRes.g.vcf"));
         spec.executeTest("testNewCompressionScheme", this);
+    }
+
+    @Test
+    public void testAggressiveQualFiltering() throws Exception {
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                "-O %s -R " + hg38_reference_20_21 +
+                        " -drop-low-quals -do-qual-approx -V " + getToolTestDataDir() + "gvcfForReblocking.g.vcf" +
+                        " --" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE + " false" +
+                        " --floor-blocks" +
+                        " --" + GenotypeCalculationArgumentCollection.CALL_CONFIDENCE_LONG_NAME + " 65.0",
+                Arrays.asList(getToolTestDataDir() + "expected.aggressiveQualFiltering.g.vcf"));
+        spec.executeTest("testVariantQualFiltering", this);
     }
 
     @Test

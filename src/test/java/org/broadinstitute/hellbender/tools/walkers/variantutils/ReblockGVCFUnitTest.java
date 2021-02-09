@@ -15,9 +15,7 @@ import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 import htsjdk.variant.vcf.VCFConstants;
-import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
 import org.broadinstitute.hellbender.utils.variant.writers.GVCFWriter;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -42,13 +40,13 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         reblocker.doQualApprox = true;
 
         final Genotype g0 = VariantContextTestUtils.makeG("sample1", LONG_REF, DELETION, 41, 0, 37, 200, 100, 200, 400, 600, 800, 1200);
-        final Genotype g = addAD(g0,0,13,17,0);
+        final Genotype g = addAD(g0,13,17,0,0);
         final VariantContext extraAlt0 = makeDeletionVC("lowQualVar", Arrays.asList(LONG_REF, DELETION, LONG_SNP, Allele.NON_REF_ALLELE), LONG_REF.length(), g);
         final Map<String, Object> attr = new HashMap<>();
         attr.put(VCFConstants.DEPTH_KEY, 32);
         final VariantContext extraAlt = addAttributes(extraAlt0, attr);
         //we'll call this with the same VC again under the assumption that STAND_CALL_CONF is zero so no alleles/GTs change
-        final VariantContext cleaned1 = reblocker.cleanUpHighQualityVariant(extraAlt, extraAlt);
+        final VariantContext cleaned1 = reblocker.cleanUpHighQualityVariant(extraAlt);
         Assert.assertTrue(cleaned1.getAlleles().size() == 3);
         Assert.assertTrue(cleaned1.getAlleles().contains(LONG_REF));
         Assert.assertTrue(cleaned1.getAlleles().contains(DELETION));
@@ -76,11 +74,11 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         reblocker.dropLowQuals = true;
         final Genotype g = VariantContextTestUtils.makeG("sample1", LONG_REF, Allele.NON_REF_ALLELE, 200, 100, 200, 11, 0, 37);
         final VariantContext toBeNoCalled = makeDeletionVC("lowQualVar", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g);
-        final VariantContextBuilder dropped = reblocker.lowQualVariantToGQ0HomRef(toBeNoCalled, toBeNoCalled);
+        final VariantContextBuilder dropped = reblocker.lowQualVariantToGQ0HomRef(toBeNoCalled);
         Assert.assertEquals(dropped, null);
 
         reblocker.dropLowQuals = false;
-        final VariantContext modified = reblocker.lowQualVariantToGQ0HomRef(toBeNoCalled, toBeNoCalled).make();
+        final VariantContext modified = reblocker.lowQualVariantToGQ0HomRef(toBeNoCalled).make();
         Assert.assertTrue(modified.getAttributes().containsKey(VCFConstants.END_KEY));
         Assert.assertTrue(modified.getAttributes().get(VCFConstants.END_KEY).equals(13));
         Assert.assertTrue(modified.getReference().equals(SHORT_REF));
@@ -91,7 +89,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         //No-calls were throwing NPEs.  Now they're not.
         final Genotype g2 = VariantContextTestUtils.makeG("sample1", Allele.NO_CALL,Allele.NO_CALL);
         final VariantContext noData = makeDeletionVC("noData", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g2);
-        final VariantContext notCrashing = reblocker.lowQualVariantToGQ0HomRef(noData, noData).make();
+        final VariantContext notCrashing = reblocker.lowQualVariantToGQ0HomRef(noData).make();
         final Genotype outGenotype = notCrashing.getGenotype(0);
         Assert.assertTrue(outGenotype.isHomRef());
         Assert.assertEquals(outGenotype.getGQ(), 0);
@@ -104,7 +102,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         vb.chr("20").start(10001).stop(10004).alleles(Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE)).log10PError(-3.0).genotypes(gb.make());
         final VariantContext vc = vb.make();
 
-        final VariantContext haploidRefBlock = reblocker.lowQualVariantToGQ0HomRef(vc, vc).make();
+        final VariantContext haploidRefBlock = reblocker.lowQualVariantToGQ0HomRef(vc).make();
         final Genotype newG = haploidRefBlock.getGenotype("male_sample");
 
         Assert.assertEquals(newG.getPloidy(), 1);
@@ -117,7 +115,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
 
         final Genotype g3 = VariantContextTestUtils.makeG("sample1", LONG_REF, LONG_REF, 0, 11, 37, 100, 200, 400);
         final VariantContext twoAltsHomRef = makeDeletionVC("lowQualVar", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g3);
-        final GenotypeBuilder takeGoodAltGQ = reblocker.changeCallToGQ0HomRef(twoAltsHomRef, new HashMap<>());
+        final GenotypeBuilder takeGoodAltGQ = reblocker.changeCallToHomRefVersusNonRef(twoAltsHomRef, new HashMap<>());
         final Genotype nowRefBlock = takeGoodAltGQ.make();
         Assert.assertEquals(nowRefBlock.getGQ(), 11);
         Assert.assertEquals(nowRefBlock.getDP(), 18);
@@ -131,7 +129,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         final Genotype g = VariantContextTestUtils.makeG("sample1", LONG_REF, Allele.NON_REF_ALLELE, 200, 100, 200, 11, 0, 37);
         final VariantContext toBeNoCalled = makeDeletionVC("lowQualVar", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g);
         final Map<String, Object> noAttributesMap = new HashMap<>();
-        final GenotypeBuilder noCalled = reblocker.changeCallToGQ0HomRef(toBeNoCalled, noAttributesMap);
+        final GenotypeBuilder noCalled = reblocker.changeCallToHomRefVersusNonRef(toBeNoCalled, noAttributesMap);
         final Genotype newG = noCalled.make();
         Assert.assertTrue(noAttributesMap.containsKey(VCFConstants.END_KEY));
         Assert.assertTrue(noAttributesMap.get(VCFConstants.END_KEY).equals(13));
@@ -175,7 +173,7 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         final double[] posteriors2 = {0,gqForNoPLs,37.78,39.03,73.8,42.04};
         gb2.attribute("GP", posteriors2).GQ(inputGQ);
         final VariantContext vc2 = makeDeletionVC("DRAGEN", Arrays.asList(LONG_REF, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), gb2.make());
-        final VariantContext out2 = reblocker.lowQualVariantToGQ0HomRef(vc2, vc2).make();
+        final VariantContext out2 = reblocker.lowQualVariantToGQ0HomRef(vc2).make();
         final Genotype gOut2 = out2.getGenotype(0);
         Assert.assertTrue(gOut2.isHomRef());
         Assert.assertEquals(gOut2.getGQ(), (int)Math.round(gqForNoPLs));

@@ -235,6 +235,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
         }
     }
 
+    //TODO: update for DRAGEN GP tag
     private boolean hasPosteriors(final GenotypesContext gc) {
         return gc.stream().anyMatch(g -> g.hasExtendedAttribute(VCFConstants.GENOTYPE_POSTERIORS_KEY));
     }
