@@ -680,6 +680,10 @@ public final class ReblockGVCF extends MultiVariantWalker {
             final GenotypesContext gc = AlleleSubsettingUtils.subsetAlleles(variant.getGenotypes(), PLOIDY_TWO, variant.getAlleles(),
                     newAlleleSetUntrimmed, null, GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN,
                     variant.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));
+            if (!gc.get(0).hasGQ()) {
+                throw new IllegalStateException("No GQ returned for genotype at " + variant.getContig() + ":"
+                        + variant.getStart() + " -- is this really a high quality genotype? " + gc.get(0).toString());
+            }
             //note that subsetting alleles can increase GQ, e.g. with one confident reference allele and a deletion allele that's either 4 or 5 bases long
             builder.genotypes(gc).alleles(newAlleleSetUntrimmed);
             //if deletions are dropped, alleles may need trimming
