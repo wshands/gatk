@@ -552,7 +552,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         }
         final Genotype genotype = vc.getGenotype(0);
         final int[] pls = getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey);
-        return (pls != null && pls[0] < rgqThreshold) || genotype.isHomRef()
+        return (pls != null && (pls[0] < rgqThreshold || pls[0] == 0)) || genotype.isHomRef()
                 || !genotypeHasConcreteAlt(genotype)
                 || genotype.getAlleles().stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE))
                 || (!genotype.hasPL() && !genotype.hasGQ());
