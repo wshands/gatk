@@ -637,7 +637,15 @@ public final class ReblockGVCF extends MultiVariantWalker {
                 final GenotypesContext context = AlleleSubsettingUtils.subsetAlleles(result.getGenotypes(),
                         genotype.getPloidy(), result.getAlleles(), Arrays.asList(result.getReference(), bestAlt),
                         null, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL, result.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));  //BEST_MATCH to avoid no-calling low qual genotypes
-                gb = new GenotypeBuilder(context.get(0)).noAttributes();  //remove attributes because hom ref blocks shouldn't have posteriors
+                final Genotype subsetG = context.get(0);
+                gb = new GenotypeBuilder(subsetG).noAttributes();  //remove attributes because hom ref blocks shouldn't have posteriors
+                //subsetting may strip GQ and PLs for low qual genotypes
+                if (!subsetG.hasGQ()) {
+                    gb.GQ(0);
+                }
+                if (!subsetG.hasPL()) {
+                    gb.PL(new int[GenotypeLikelihoods.numLikelihoods(2, genotype.getPloidy())]);  //2 alleles for ref and non-ref
+                }
             }
         }
         if (result.hasAttribute(VCFConstants.DEPTH_KEY)) {
