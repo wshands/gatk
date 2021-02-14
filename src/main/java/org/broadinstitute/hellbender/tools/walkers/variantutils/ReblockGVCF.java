@@ -282,7 +282,9 @@ public final class ReblockGVCF extends MultiVariantWalker {
         if (newVC != null) {
             try {
                 vcfWriter.add(newVC);
-                vcfOutputEnd = newVC.getEnd();
+                if (newVC.getEnd() > vcfOutputEnd) {
+                    vcfOutputEnd = newVC.getEnd();
+                }
             } catch (Exception e) {
                 throw new GATKException("Exception thrown at " + newVC.getContig() + ":" + newVC.getStart() + " " + newVC.toString(), e);
             }
