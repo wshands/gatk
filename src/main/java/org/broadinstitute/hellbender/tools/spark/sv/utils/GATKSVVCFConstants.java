@@ -100,7 +100,7 @@ public final class GATKSVVCFConstants {
     // evidence metrics
     public static final String COPY_NUMBER_LOG_POSTERIORS_KEY = "CNLP";
     public static final String NEUTRAL_COPY_NUMBER_KEY = "NCN";
-    public static final String DEPTH_OVERLAP_KEY = "RDO";
+    public static final String DEPTH_OVERLAP_KEY = "RDOV";
     public static final String DEPTH_P_HARDY_WEINBERG_LOSS_FIELD = "PHW_L";
     public static final String DEPTH_P_HARDY_WEINBERG_GAIN_FIELD = "PHW_G";
     public static final String DEPTH_BACKGROUND_FIELD = "ERD";

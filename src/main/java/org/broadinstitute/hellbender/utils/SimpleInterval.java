@@ -32,7 +32,7 @@ public final class SimpleInterval implements Locatable, Serializable {
      * @param end  1-based inclusive end position
      */
     public SimpleInterval(final String contig, final int start, final int end){
-        //validatePositions(contig, start, end);
+        validatePositions(contig, start, end);
         this.contig = contig;
         this.start = start;
         this.end = end;

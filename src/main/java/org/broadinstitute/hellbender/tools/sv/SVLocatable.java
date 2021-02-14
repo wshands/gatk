@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.util.CoordMath;
+import htsjdk.variant.variantcontext.StructuralVariantType;
 
 /**
  * Any class with loci that are potentially on different chromosomes should implement this interface.
@@ -31,6 +32,16 @@ public interface SVLocatable {
      * @return 1-based second position
      */
     int getPositionB();
+
+    /**
+     * @return variant type
+     */
+    StructuralVariantType getType();
+
+    /**
+     * @return variant size in bp (-1 if undefined)
+     */
+    int getLength();
 
     /**
      * @return number of bases of reference covered by this interval, or 0 if coordinates on different contigs

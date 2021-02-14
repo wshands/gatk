@@ -1,10 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypesContext;
-import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFFormatHeaderLine;
 import htsjdk.variant.vcf.VCFHeader;
@@ -28,7 +25,6 @@ import java.nio.charset.Charset;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -197,18 +193,23 @@ public final class SVCluster extends VariantWalker {
         }
     }
 
+    private Genotype setCallGenotypeAlleles(final Genotype g) {
+        final GenotypeBuilder builder = new GenotypeBuilder(g);
+        builder.alleles(Arrays.asList(Allele.REF_N, Allele.NON_REF_ALLELE));
+        return builder.make();
+    }
+
     @Override
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
-        final Predicate<Genotype> genotypeFilter = g -> SVCallRecord.isRawCall(g);
-        final Function<Genotype, Map<String,Object>> attributeGenerator = g -> Collections.emptyMap();
         final SVCallRecord originalCall = SVCallRecordUtils.create(variant);
-        final GenotypesContext filteredGenotypes = SVCallRecordUtils.filterAndAddGenotypeAttributes(originalCall.getGenotypes(), genotypeFilter, attributeGenerator, false);
-        final List<Allele> refAlleles = Arrays.asList(Allele.REF_N, Allele.REF_N);
-        final List<Allele> nonRefAlleles = Arrays.asList(Allele.REF_N, Allele.NON_REF_ALLELE);
-        final Predicate<Genotype> nonRefPredicate = g -> SVCallRecord.isRawCall(g);
-        final GenotypesContext genotypes = SVCallRecordUtils.predicateGenotypeAlleles(filteredGenotypes, nonRefPredicate, nonRefAlleles, refAlleles);
-        final SVCallRecord call = SVCallRecordUtils.copyCallWithNewGenotypes(originalCall, genotypes);
+        final ArrayList<Genotype> filteredGenotypeList = new ArrayList<>(originalCall.getGenotypes().size());
+        originalCall.getGenotypes().stream()
+                .filter(SVCallRecord::isRawCall)
+                .map(this::setCallGenotypeAlleles)
+                .forEach(filteredGenotypeList::add);
+        final GenotypesContext filteredGenotypes = GenotypesContext.create(filteredGenotypeList);
+        final SVCallRecord call = SVCallRecordUtils.copyCallWithNewGenotypes(originalCall, filteredGenotypes);
 
         // Flush clusters if we hit the next contig
         if (!call.getContigA().equals(currentContig)) {
@@ -272,19 +273,14 @@ public final class SVCluster extends VariantWalker {
     }
 
     public VariantContext buildVariantContext(final SVCallRecordWithEvidence call) {
-        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithEmptyGenotypes(call.getGenotypes(), samples);
-
-        final Function<Genotype, Map<String,Object>> attributeGenerator =
-                g -> Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, g.hasAnyAttribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE) ? GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE : GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
-        final GenotypesContext rawCallSetGenotypes = SVCallRecordUtils.filterAndAddGenotypeAttributes(filledGenotypes, g -> true, attributeGenerator, false);
-
-        final GenotypesContext nonCallGenotypes = SVCallRecordUtils.predicateGenotypeAlleles(rawCallSetGenotypes, g -> true, Collections.emptyList(), Collections.emptyList());
+        final Map<String, Object> nonCallAttributes = Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
+        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), samples, nonCallAttributes);
         final String newId = String.format("%s%08x", variantPrefix, numVariantsWritten++);
         final SVCallRecordWithEvidence finalCall = new SVCallRecordWithEvidence(newId, call.getContigA(), call.getPositionA(), call.getStrandA(), call.getContigB(),
                 call.getPositionB(), call.getStrandB(), call.getType(), call.getLength(), call.getAlgorithms(),
-                nonCallGenotypes, call.getStartSplitReadSites(), call.getEndSplitReadSites(), call.getDiscordantPairs(),
+                filledGenotypes, call.getStartSplitReadSites(), call.getEndSplitReadSites(), call.getDiscordantPairs(),
                 call.getCopyNumberDistribution());
-        return SVCallRecordUtils.createBuilderWithEvidence(SVCallRecordUtils.copyCallWithNewGenotypes(finalCall, nonCallGenotypes)).make();
+        return SVCallRecordUtils.createBuilderWithEvidence(finalCall).make();
     }
 
 }

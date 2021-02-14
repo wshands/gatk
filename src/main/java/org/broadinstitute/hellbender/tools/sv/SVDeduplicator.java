@@ -5,6 +5,7 @@ import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -20,8 +21,16 @@ public class SVDeduplicator<T extends SVLocatable> {
     }
 
     public List<T> deduplicateItems(final List<T> items) {
-        Utils.nonNull(dictionary);
-        final List<T> sortedItems = items.stream().sorted(SVCallRecordUtils.getSVLocatableComparator(dictionary)).collect(Collectors.toList());
+        return deduplicateSortedItems(items.stream().sorted(SVCallRecordUtils.getSVLocatableComparator(dictionary)).collect(Collectors.toList()));
+    }
+
+    public List<T> deduplicateSortedItems(final List<T> sortedItems) {
+        Utils.nonNull(sortedItems);
+        if (sortedItems.isEmpty()) {
+            return Collections.emptyList();
+        } else if (sortedItems.size() == 1) {
+            return Collections.singletonList(sortedItems.get(0));
+        }
         final List<T> deduplicatedList = new ArrayList<>();
         int i = 0;
         while (i < sortedItems.size()) {
@@ -49,7 +58,9 @@ public class SVDeduplicator<T extends SVLocatable> {
     }
 
     public boolean itemsAreIdentical(final T a, final T b) {
-        return a.getContigA().equals(b.getContigA())
+        return a.getType().equals(b.getType())
+                && a.getLength() == b.getLength()
+                && a.getContigA().equals(b.getContigA())
                 && a.getPositionA() == b.getPositionA()
                 && a.getContigB().equals(b.getContigB())
                 && a.getPositionB() == b.getPositionB();
