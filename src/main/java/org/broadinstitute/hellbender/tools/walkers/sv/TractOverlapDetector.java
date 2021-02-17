@@ -78,7 +78,7 @@ public class TractOverlapDetector {
         }
         return !(
             setIntersect(getPrimaryOverlapperIds(location1), getOtherOverlapperIds(location2)).isEmpty()
-            && setIntersect(getPrimaryOverlapperIds(location2), getOtherOverlapperIds(location1)).isEmpty()
+            || setIntersect(getPrimaryOverlapperIds(location2), getOtherOverlapperIds(location1)).isEmpty()
         );
     }
 

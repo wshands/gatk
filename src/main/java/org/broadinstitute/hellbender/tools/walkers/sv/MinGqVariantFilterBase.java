@@ -8,7 +8,6 @@ import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 import net.minidev.json.JSONValue;
 import net.minidev.json.parser.ParseException;
-import org.apache.arrow.memory.OutOfMemoryException;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.*;
@@ -103,7 +102,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     static final Map<String, double[]> propertyBinsMap = new HashMap<String, double[]>() {
         private static final long serialVersionUID = 0;
         {
-            put(AF_PROPERTY_NAME, new double[] {0.05, 0.5});
+            put(VCFConstants.ALLELE_FREQUENCY_KEY, new double[] {0.05, 0.5});
             put(SVLEN_KEY, new double[] {500.0, 5000.0});
         }
     };
@@ -113,10 +112,9 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     protected int[][] trioSampleIndices = null; // numTrios x 3 matrix of sample indices (paternal, maternal, child) for each trio
     protected Set<Integer> allTrioSampleIndices; // set of all sample indices that are in a trio
     protected final Map<String, Integer> trainingSampleIndices = new HashMap<>(); // map from sampleId to numerical index, for samples used in training
-    // map from propertyName to numVariants-length array of variant properties
-    protected Map<String, double[]> variantPropertiesMap = null;
-    // map from property name to numVariants x numSamples matrix of variant sample properties
-    protected Map<String, double[][]> sampleVariantPropertiesMap = null;
+    protected final PropertiesTable propertiesTable = new PropertiesTable();
+
+
     // numVariants x numSamples matrix of allele counts:
     protected List<int[]> sampleVariantAlleleCounts = new ArrayList<>();
     // numVariants x numSamples matrix of genotype qualities:
@@ -128,6 +126,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     protected final Map<Integer, Set<Integer>> badSampleVariantIndices = new HashMap<>();
     // map from variantIndex to array of known bad GQ values for that variant
     protected Map<Integer, int[]> badVariantGqs = null;
+
     // numVariants array of property-category bins
     protected int[] propertyBins = null;
     int numPropertyBins;
@@ -146,11 +145,10 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private static final int BREAKPOINT_HALF_WIDTH = 50; // how wide to make breakpoint intervals for tract overlap
     private static final String SVLEN_KEY = "SVLEN";
     private static final String EVIDENCE_KEY = "EVIDENCE";
+    private static final String FILTER_KEY = "FILTER";
     private static final String NO_EVIDENCE = "NO_EVIDENCE";
     private static final String ALGORITHMS_KEY = "ALGORITHMS";
     private static final String NO_ALGORITHM = "NO_ALGORITHM";
-    private static final String AF_PROPERTY_NAME = "AF";
-    private static final String GQ_PROPERTY_NAME = "GQ";
     private static final String MIN_GQ_KEY = "MINGQ";
     private static final String EXCESSIVE_MIN_GQ_FILTER_KEY = "LOW_QUALITY";
     private static final String MULTIALLELIC_FILTER = "MULTIALLELIC";
@@ -167,39 +165,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     // properties used to gather main matrix / tensors during apply()
     private Set<Trio> pedTrios = null;
-    private final List<Double> alleleFrequencies = new ArrayList<>();
-    private final List<String> svTypes = new ArrayList<>();
-    private final List<Integer> svLens = new ArrayList<>();
-    private final List<Set<String>> variantFilters = new ArrayList<>();
-    private final List<Set<String>> variantEvidence = new ArrayList<>();
-    private final List<Set<String>> variantAlgorithms = new ArrayList<>();
     private Map<String, Set<String>> goodSampleVariants = null;
     private Map<String, Set<String>> badSampleVariants = null;
-    private final Map<String, List<Double>> tractOverlapProperties = new HashMap<>();
-    private final List<int[]> sampleVariantGq = new ArrayList<>();
-    private final List<int[]> sampleVariantPeGq = new ArrayList<>();
-    private final List<int[]> sampleVariantRdGq = new ArrayList<>();
-    private final List<int[]> sampleVariantSrGq = new ArrayList<>();
-    protected float[] sampleVariantPropertiesBuffer = null;
-
-    // saved initial values
-    private List<String> allEvidenceTypes = null;
-    private List<String> allAlgorithmTypes = null;
-    private List<String> allFilterTypes = null;
-    private List<String> allSvTypes = null;
-    private List<String> propertyNames = null;
-    private List<String> variantPropertyNames = null;
-    private List<String> sampleVariantPropertyNames = null;
-    private Map<String, Double> propertyBaseline = null;
-    private Map<String, Double> propertyScale = null;
-    protected final PropertiesTable variantPropertiesTable = new PropertiesTable();
-    protected List<PropertiesTable> sampleVariantPropertiesTables = null;
-    private static final String ALL_EVIDENCE_TYPES_KEY = "allEvidenceTypes";
-    private static final String ALL_FILTER_TYPES_KEY = "allFilterTypes";
-    private static final String ALL_SV_TYPES_KEY = "allSvTypes";
-    private static final String PROPERTY_NAMES_KEY = "propertyNames";
-    private static final String PROPERTY_BASELINE_KEY = "propertyBaseline";
-    private static final String PROPERTY_SCALE_KEY = "propertyScale";
 
     // train/validation split indices
     private int[] trainingIndices;
@@ -214,15 +181,10 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     protected int[] maxDiscoverableMendelianAc = null;
     long numDiscoverableMendelianAc = 0;
 
-    protected final int getNumVariants() { return numVariants; }
+    protected final int getNumVariants() { return propertiesTable.getNumRows(); }
     protected final int getNumSamples() { return numSamples; }
     protected final int getNumTrios() { return numTrios; }
-    protected final int getNumVariantProperties() { return variantPropertiesMap.size(); }
-    protected final int getNumSampleVariantProperties() { return sampleVariantPropertiesMap.size(); }
-    protected final int getNumProperties() { return getNumVariantProperties() + getNumSampleVariantProperties(); }
-    protected final List<String> getPropertyNames() { return propertyNames; }
-    protected final List<String> getVariantPropertyNames() { return variantPropertyNames; }
-    protected final List<String> getSampleVariantPropertyNames() { return sampleVariantPropertyNames; }
+    protected final int getNumProperties() { return propertiesTable.getNumProperties(); }
     protected final int[] getTrainingIndices() { return trainingIndices; }
     protected final int[] getValidationIndices() { return validationIndices; }
 
@@ -337,7 +299,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             .collect(Collectors.toList());
     }
 
-
     private void initializeVcfWriter() {
         vcfWriter = createVCFWriter(outputFile);
         final Set<VCFHeaderLine> hInfo = new LinkedHashSet<>(getHeaderForVariants().getMetaDataInInputOrder());
@@ -348,8 +309,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                                "More than " + (100 * reportMinGqFilterThreshold) + "% of sample GTs were masked as no-call GTs due to low GQ"));
         vcfWriter.writeHeader(new VCFHeader(hInfo, getHeaderForVariants().getGenotypeSamples()));
     }
-
-
 
     @Override
     public void onTraversalStart() {
@@ -368,10 +327,10 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             loadVariantTruthData(); // load variant truth data from JSON file
             setTrainingSampleIds(); // set data organizing training samples
             numSamples = trainingSampleIndices.size();
-
         } else {
             initializeVcfWriter();  // initialize vcfWriter and write header
             numFilteredGenotypes = 0;
+            propertiesTable.setNumAllocatedRows(1);
         }
     }
 
@@ -460,17 +419,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
     }
 
-    private void setTractOverlapProperty(final String propertyName, final double propertyValue, final String variantId) {
-        try {
-            if (!tractOverlapProperties.containsKey(propertyName)) {
-                tractOverlapProperties.put(propertyName, new ArrayList<>());
-            }
-            tractOverlapProperties.get(propertyName).add(propertyValue);
-        } catch(OutOfMemoryError outOfMemoryError) {
-            throw new OutOfMemoryException("Out of memory calculating " + propertyName + " for variant " + variantId, outOfMemoryError);
-        }
-    }
-
     private boolean hasDistalTarget(final VariantContext variantContext) {
         return variantContext.hasAttribute(CHR2_KEY) && variantContext.hasAttribute(END2_KEY) && variantContext.hasAttribute(POS2_KEY);
     }
@@ -524,53 +472,46 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
         if(tractOverlapDetector.hasOther()) {
             // get main overlap
-            setTractOverlapProperty(
-                    tractOverlapDetector.getName() + "_center",
-                    center == null ?
-                            0.0 :
-                            tractOverlapDetector.getPrimaryOverlapFraction(center)
-                            + tractOverlapDetector.getOtherOverlapfraction(center),
-                    variantContext.getID()
+            propertiesTable.append(
+                tractOverlapDetector.getName() + "_center",
+                center == null ?
+                        0.0 :
+                        tractOverlapDetector.getPrimaryOverlapFraction(center)
+                                + tractOverlapDetector.getOtherOverlapfraction(center)
             );
             // get left breakpoint overlap
-            setTractOverlapProperty(
+            propertiesTable.append(
                     tractOverlapDetector.getName() + "_left",
                     tractOverlapDetector.getPrimaryOverlapFraction(left)
-                                  + tractOverlapDetector.getOtherOverlapfraction(left),
-                    variantContext.getID()
+                            + tractOverlapDetector.getOtherOverlapfraction(left)
             );
             // get right breakpoint overlap
-            setTractOverlapProperty(
-                    tractOverlapDetector.getName() + "_right",
-                    tractOverlapDetector.getPrimaryOverlapFraction(right)
-                                  + tractOverlapDetector.getOtherOverlapfraction(right),
-                    variantContext.getID()
+            propertiesTable.append(
+                tractOverlapDetector.getName() + "_right",
+                tractOverlapDetector.getPrimaryOverlapFraction(right)
+                        + tractOverlapDetector.getOtherOverlapfraction(right)
             );
 
             // check if variant spans
-            setTractOverlapProperty(
+            propertiesTable.append(
                     tractOverlapDetector.getName() + "_spans",
-                    tractOverlapDetector.spansPrimaryAndOther(left, right) ? 1.0 : 0.0,
-                    variantContext.getID()
+                    tractOverlapDetector.spansPrimaryAndOther(left, right)
             );
         } else {
             // get main overlap
-            setTractOverlapProperty(
-                    tractOverlapDetector.getName() + "_center",
-                    center == null ? 0.0 : tractOverlapDetector.getPrimaryOverlapFraction(center),
-                    variantContext.getID()
+            propertiesTable.append(
+                tractOverlapDetector.getName() + "_center",
+                center == null ? 0.0 : tractOverlapDetector.getPrimaryOverlapFraction(center)
             );
             // get left breakpoint overlap
-            setTractOverlapProperty(
-                    tractOverlapDetector.getName() + "_left",
-                    tractOverlapDetector.getPrimaryOverlapFraction(left),
-                    variantContext.getID()
+            propertiesTable.append(
+                tractOverlapDetector.getName() + "_left",
+                tractOverlapDetector.getPrimaryOverlapFraction(left)
             );
             // get right breakpoint overlap
-            setTractOverlapProperty(
-                    tractOverlapDetector.getName() + "_right",
-                    tractOverlapDetector.getPrimaryOverlapFraction(right),
-                    variantContext.getID()
+            propertiesTable.append(
+                tractOverlapDetector.getName() + "_right",
+                tractOverlapDetector.getPrimaryOverlapFraction(right)
             );
         }
     }
@@ -628,21 +569,21 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             final int numAlleles = variantContext.getGenotypes().stream().mapToInt(Genotype::getPloidy).sum();
             alleleFrequency = sampleAlleleCounts.values().stream().mapToInt(Integer::intValue).sum() / (double) numAlleles;
         }
-        alleleFrequencies.add(alleleFrequency);
+        propertiesTable.append(VCFConstants.ALLELE_FREQUENCY_KEY, alleleFrequency);
 
         final String svType = variantContext.getAttributeAsString(VCFConstants.SVTYPE, null);
         if(svType == null) {
             throw new GATKException("Missing " + VCFConstants.SVTYPE + " for variant " + variantContext.getID());
         }
-        svTypes.add(svType);
+        propertiesTable.append(VCFConstants.SVTYPE, svType);
 
         final int svLen = variantContext.getAttributeAsInt(SVLEN_KEY, Integer.MIN_VALUE);
         if(svLen == Integer.MIN_VALUE) {
             throw new GATKException("Missing " + SVLEN_KEY + " for variant " + variantContext.getID());
         }
-        svLens.add(svLen);
+        propertiesTable.append(SVLEN_KEY, svLen);
 
-        variantFilters.add(variantContext.getFilters());
+        propertiesTable.append(FILTER_KEY, variantContext.getFilters());
 
         final Set<String> vcEvidence = Arrays.stream(
                     variantContext.getAttributeAsString(EVIDENCE_KEY, NO_EVIDENCE)
@@ -651,7 +592,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         if(vcEvidence.isEmpty()) {
             throw new GATKException("Missing " + EVIDENCE_KEY + " for variant " + variantContext.getID());
         }
-        variantEvidence.add(vcEvidence);
+        propertiesTable.append(EVIDENCE_KEY, vcEvidence);
+
 
         final Set<String> vcAlgorithms = Arrays.stream(
                 variantContext.getAttributeAsString(ALGORITHMS_KEY, NO_ALGORITHM)
@@ -660,20 +602,24 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         if(vcAlgorithms.isEmpty()) {
             throw new GATKException("Missing " + ALGORITHMS_KEY + " for variant " + variantContext.getID());
         }
-        variantAlgorithms.add(vcAlgorithms);
+        propertiesTable.append(ALGORITHMS_KEY, vcAlgorithms);
 
         for(final TractOverlapDetector tractOverlapDetector : tractOverlapDetectors) {
             getTractProperties(tractOverlapDetector, variantContext);
         }
 
         final Iterable<Genotype> sampleGenotypes = variantContext.getGenotypesOrderedBy(trainingSampleIds);
-        sampleVariantGq.add(
-                StreamSupport.stream(sampleGenotypes.spliterator(), false).mapToInt(Genotype::getGQ).toArray()
+        propertiesTable.append(
+            VCFConstants.GENOTYPE_QUALITY_KEY,
+            StreamSupport.stream(sampleGenotypes.spliterator(), false).mapToInt(Genotype::getGQ).toArray()
         );
 
-        sampleVariantPeGq.add( getGenotypeAttributeAsInt(sampleGenotypes, PE_GQ_KEY, MISSING_GQ_VAL) );
-        sampleVariantRdGq.add( getGenotypeAttributeAsInt(sampleGenotypes, RD_GQ_KEY, MISSING_GQ_VAL) );
-        sampleVariantSrGq.add( getGenotypeAttributeAsInt(sampleGenotypes, SR_GQ_KEY, MISSING_GQ_VAL) );
+        Stream.of(PE_GQ_KEY, RD_GQ_KEY, SR_GQ_KEY).forEach(
+            intGenotypeAttributeKey -> propertiesTable.append(
+                    intGenotypeAttributeKey,
+                    getGenotypeAttributeAsInt(sampleGenotypes, intGenotypeAttributeKey, MISSING_GQ_VAL)
+            )
+        );
 
         if(runMode == RunMode.TRAIN) {
             // get per-sample genotype qualities as a map indexed by sample ID
@@ -732,29 +678,10 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 trainingSampleIds.stream().mapToInt(sampleGenotypeQualities::get).toArray()
             );
         } else {
-            collectVariantPropertiesMap();
-
-
+            propertiesTable.validateAndFinalize();
             vcfWriter.add(filterVariantContext(variantContext));
+            propertiesTable.clearRows();
         }
-    }
-
-    protected float[] getSampleVariantProperties(final int variantIndex, final int sampleIndex) {
-        if(sampleVariantPropertiesBuffer == null) {
-            sampleVariantPropertiesBuffer = new float[getNumSampleVariantProperties()];
-        }
-        int propertyIndex = 0;
-        for (final String propertyName : getVariantPropertyNames()) {
-            sampleVariantPropertiesBuffer[propertyIndex] =
-                (float)variantPropertiesMap.get(propertyName)[variantIndex];
-            ++propertyIndex;
-        }
-        for(final String propertyName : getSampleVariantPropertyNames()) {
-            sampleVariantPropertiesBuffer[propertyIndex] =
-                (float)sampleVariantPropertiesMap.get(propertyName)[variantIndex][sampleIndex];
-            ++propertyIndex;;
-        }
-        return sampleVariantPropertiesBuffer;
     }
 
     private VariantContext filterVariantContext(final VariantContext variantContext) {
@@ -762,15 +689,21 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         int numFiltered = 0;
         int sampleIndex = 0;
         for(final Genotype genotype : variantContext.getGenotypes()) {
-            final int gq = getSampleVariantIsFilterable(0, sampleIndex) ?
-                    adjustedGq(getSampleVariantProperties(0, sampleIndex)) :
-                    variantContext.getGenotype(sampleIndex).getGQ();
-            if(gq >= minGQ) {
-                genotypes[sampleIndex] = new GenotypeBuilder(genotype).GQ(gq).make();
+            if(getSampleVariantIsFilterable(0, sampleIndex)) {
+                final int gq = adjustedGq(
+                    propertiesTable.getPropertiesRow(0, sampleIndex, needsNormalizedProperties())
+                );
+                if (gq >= minGQ) {
+                    genotypes[sampleIndex] = new GenotypeBuilder(genotype).GQ(gq).make();
 
-            } else {
-                genotypes[sampleIndex] = new GenotypeBuilder(genotype).alleles(GATKVariantContextUtils.noCallAlleles(genotype.getPloidy())).make();
-                ++numFiltered;
+                } else {
+                    genotypes[sampleIndex] = new GenotypeBuilder(genotype)
+                        .alleles(GATKVariantContextUtils.noCallAlleles(genotype.getPloidy()))
+                        .make();
+                    ++numFiltered;
+                }
+            } else{
+                genotypes[sampleIndex] = genotype;
             }
             ++sampleIndex;
         }
@@ -784,252 +717,14 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         return variantContextBuilder.make();
     }
 
-    private double getBaselineOrdered(final double[] orderedValues) {
-        // get baseline as median of values
-        return orderedValues.length == 0 ?
-                0 :
-                orderedValues.length % 2 == 1 ?
-                        orderedValues[orderedValues.length / 2] :
-                        (orderedValues[orderedValues.length / 2 - 1] + orderedValues[orderedValues.length / 2]) / 2.0;
-    }
-
-    private double getScaleOrdered(final double[] orderedValues, final double baseline) {
-        // get scale as root-mean-square difference from baseline, over central half of data (to exclude outliers)
-        switch(orderedValues.length) {
-            case 0:
-            case 1:
-                return 1.0;
-            default:
-                final int start = orderedValues.length / 4;
-                final int stop = 3 * orderedValues.length / 4;
-                double scale = 0.0;
-                for(int idx = start; idx < stop; ++idx) {
-                    scale += (orderedValues[idx] - baseline) * (orderedValues[idx] - baseline);
-                }
-                return FastMath.max(FastMath.sqrt(scale / (1 + stop - start)), 1.0e-6);
-        }
-    }
-
-    private static double[] zScore(final double[] values, final double baseline, final double scale) {
-        return Arrays.stream(values).map(x -> (x - baseline) / scale).toArray();
-    }
-
-    private static double[] zScore(final int[] values, final double baseline, final double scale) {
-        return Arrays.stream(values).mapToDouble(x -> (x - baseline) / scale).toArray();
-    }
-
-    private static double[] zScore(final boolean[] values, final double baseline, final double scale) {
-        return IntStream.range(0, values.length).mapToDouble(i -> ((values[i] ? 1 : 0) - baseline) / scale).toArray();
-    }
-
-    @SuppressWarnings("SameParameterValue")
-    private double[] getPropertyAsDoubles(final String propertyName, final double[] values) {
-        // Compute baseline and scale regardless, since this info is saved in model file
-        if (propertyBaseline == null) {
-            propertyBaseline = new HashMap<>();
-        }
-        if (propertyScale == null) {
-            propertyScale = new HashMap<>();
-        }
-        if (!propertyBaseline.containsKey(propertyName)) {
-            final double[] orderedValues = Arrays.stream(values).sorted().toArray();
-            propertyBaseline.put(propertyName, getBaselineOrdered(orderedValues));
-            propertyScale.put(propertyName,
-                    getScaleOrdered(orderedValues, propertyBaseline.get(propertyName)));
-        }
-        if(needsZScore()) {
-            return zScore(values, propertyBaseline.get(propertyName), propertyScale.get(propertyName));
-        } else {
-            return values;
-        }
-    }
-
-    @SuppressWarnings("SameParameterValue")
-    private double[] getPropertyAsDoubles(final String propertyName, final int[] values) {
-        // Compute baseline and scale regardless, since this info is saved in model file
-        if (propertyBaseline == null) {
-            propertyBaseline = new HashMap<>();
-        }
-        if (propertyScale == null) {
-            propertyScale = new HashMap<>();
-        }
-        if (!propertyBaseline.containsKey(propertyName)) {
-            final double[] orderedValues = Arrays.stream(values).sorted().mapToDouble(i -> i).toArray();
-            propertyBaseline.put(propertyName, getBaselineOrdered(orderedValues));
-            propertyScale.put(propertyName,
-                    getScaleOrdered(orderedValues, propertyBaseline.get(propertyName)));
-        }
-        if(needsZScore()) {
-            return zScore(values, propertyBaseline.get(propertyName), propertyScale.get(propertyName));
-        } else {
-            return Arrays.stream(values).mapToDouble(i -> (double)i).toArray();
-        }
-    }
-
-    @SuppressWarnings("SameParameterValue")
-    private double[][] getPropertyAsDoubles(final String propertyName, final int[][] values) {
-        // Compute baseline and scale regardless, since this info is saved in model file
-        if (propertyBaseline == null) {
-            propertyBaseline = new HashMap<>();
-        }
-        if (propertyScale == null) {
-            propertyScale = new HashMap<>();
-        }
-        if (!propertyBaseline.containsKey(propertyName)) {
-            final double[] orderedValues = Arrays.stream(values)
-                .flatMapToInt(Arrays::stream)
-                .sorted()
-                .mapToDouble(i -> i)
-                .toArray();
-            propertyBaseline.put(propertyName, getBaselineOrdered(orderedValues));
-            propertyScale.put(propertyName,
-                    getScaleOrdered(orderedValues, propertyBaseline.get(propertyName)));
-        }
-        return Arrays.stream(values)
-            .map(needsZScore() ?
-                    iArr -> zScore(iArr, propertyBaseline.get(propertyName), propertyScale.get(propertyName)) :
-                    iArr -> Arrays.stream(iArr).mapToDouble(i -> i).toArray())
-            .toArray(double[][]::new);
-    }
-
-    private double[] getPropertyAsDoubles(final String propertyName, final boolean[] values) {
-        // Compute baseline and scale regardless, since this info is saved in model file
-        if (propertyBaseline == null) {
-            propertyBaseline = new HashMap<>();
-        }
-        if (propertyScale == null) {
-            propertyScale = new HashMap<>();
-        }
-        if (!propertyBaseline.containsKey(propertyName)) {
-            final long numTrue = IntStream.range(0, values.length).filter(i -> values[i]).count();
-            final long numFalse = values.length - numTrue;
-            final double baseline = numTrue / (double) values.length;
-            final double scale = numTrue == 0 || numFalse == 0 ?
-                    1.0 : FastMath.sqrt(numTrue * numFalse / (values.length * (double) values.length));
-            propertyBaseline.put(propertyName, baseline);
-            propertyScale.put(propertyName, scale);
-        }
-        if(needsZScore()) {
-            return zScore(values, propertyBaseline.get(propertyName), propertyScale.get(propertyName));
-        } else {
-            return IntStream.range(0, values.length).mapToDouble(i -> values[i] ? 1.0 : 0.0).toArray();
-        }
-    }
-
-    private List<String> assignAllLabels(final List<String> labelsList, List<String> allLabels) {
-        return allLabels == null ?
-               labelsList.stream().sorted().distinct().collect(Collectors.toList()) :
-               allLabels;
-    }
-
-    private List<String> assignAllSetLabels(final List<Set<String>> labelsList, List<String> allLabels) {
-        return allLabels == null ?
-               labelsList.stream().flatMap(Set::stream).sorted().distinct().collect(Collectors.toList()) :
-               allLabels;
-    }
-
-    private Map<String, double[]> labelsToLabelStatus(final List<String> labels, List<String> allLabels) {
-        return labelsListsToLabelStatus(
-                labels.stream().map(Collections::singleton).collect(Collectors.toList()),
-                allLabels
-        );
-    }
-
-    private Map<String, double[]> labelsListsToLabelStatus(final List<Set<String>> labelsList, List<String> allLabels) {
-        final Map<String, boolean[]> labelStatus = allLabels.stream()
-                .collect(Collectors.toMap(
-                        label -> label, label -> new boolean[labelsList.size()]
-                ));
-        int variantIdx = 0;
-        for (final Set<String> variantLabels : labelsList) {
-            final int idx = variantIdx; // need final or "effectively final" variable for lambda expression
-                //variantLabels.forEach(label -> labelStatus.get(label)[idx] = true);
-                for(final String label : variantLabels) {
-                    try {
-                        labelStatus.get(label)[idx] = true;
-                    } catch(java.lang.NullPointerException exception) {
-                        throw new GATKException(
-                            "error processing " + label + ". allLabels=" + allLabels + ". labelsList.size=" + labelsList.size(),
-                            exception
-                        );
-                    }
-                }
-            ++variantIdx;
-        }
-        return labelStatus.entrySet().stream().collect(Collectors.toMap(
-                Map.Entry::getKey,
-                e -> getPropertyAsDoubles(e.getKey(), e.getValue())
-        ));
-    }
-
-    private void collectVariantPropertiesMap() {
-        // keep track of supplied property names
-        List<String> suppliedPropertyNames = propertyNames == null ? null : new ArrayList<>(propertyNames);
-
-        allEvidenceTypes = assignAllSetLabels(variantEvidence, allEvidenceTypes);
-        allAlgorithmTypes = assignAllSetLabels(variantAlgorithms, allAlgorithmTypes);
-        allFilterTypes = assignAllSetLabels(variantFilters, allFilterTypes);
-        allSvTypes = assignAllLabels(svTypes, allSvTypes);
-        variantPropertiesMap = Stream.of(
-            labelsListsToLabelStatus(variantEvidence, allEvidenceTypes),
-            labelsListsToLabelStatus(variantAlgorithms, allAlgorithmTypes),
-            labelsListsToLabelStatus(variantFilters, allFilterTypes),
-            labelsToLabelStatus(svTypes, allSvTypes),
-            Collections.singletonMap(
-                AF_PROPERTY_NAME, getPropertyAsDoubles(AF_PROPERTY_NAME, alleleFrequencies.stream().mapToDouble(Double::doubleValue).toArray())
-            ),
-            Collections.singletonMap(
-                SVLEN_KEY, getPropertyAsDoubles(SVLEN_KEY, svLens.stream().mapToInt(x -> x).toArray())
-            )
-        ).flatMap(e -> e.entrySet().stream())
-            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        for(final Map.Entry<String, List<Double>> tractEntry : tractOverlapProperties.entrySet()) {
-            variantPropertiesMap.put(
-                tractEntry.getKey(),
-                getPropertyAsDoubles(tractEntry.getKey(), tractEntry.getValue().stream().mapToDouble(x -> x).toArray())
-            );
-        }
-        variantPropertyNames = variantPropertiesMap.keySet().stream().sorted().collect(Collectors.toList());
-
-        sampleVariantPropertiesMap = Stream.of(
-            Collections.singletonMap(GQ_PROPERTY_NAME, getPropertyAsDoubles(GQ_PROPERTY_NAME, sampleVariantGq.toArray(new int[0][]))),
-            Collections.singletonMap(PE_GQ_KEY, getPropertyAsDoubles(PE_GQ_KEY, sampleVariantPeGq.toArray(new int[0][]))),
-            Collections.singletonMap(RD_GQ_KEY, getPropertyAsDoubles(RD_GQ_KEY, sampleVariantRdGq.toArray(new int[0][]))),
-            Collections.singletonMap(SR_GQ_KEY, getPropertyAsDoubles(SR_GQ_KEY, sampleVariantSrGq.toArray(new int[0][])))
-        ).flatMap(e -> e.entrySet().stream())
-            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        sampleVariantPropertyNames = sampleVariantPropertiesMap.keySet().stream().sorted().collect(Collectors.toList());
-
-        propertyNames = Stream.of(variantPropertiesMap.keySet(), sampleVariantPropertiesMap.keySet())
-            .flatMap(Collection::stream)
-            .sorted()
-            .collect(Collectors.toList());
-        if(suppliedPropertyNames != null && !suppliedPropertyNames.equals(propertyNames)) {
-            throw new GATKException("Extracted properties not compatible with existing propertyNames."
-                                    + "\nSupplied: " + suppliedPropertyNames
-                                    + "\nExtracted: " + propertyNames);
-        }
-
-        // Clear raw columns:
-        //   in FILTER mode, want to start from scratch with each variant
-        //   in TRAIN mode, no reason to keep this data in memory
-        variantEvidence.clear();
-        variantFilters.clear();
-        svTypes.clear();
-        svLens.clear();
-        alleleFrequencies.clear();
-    }
 
     private void setPropertyBins() {
         propertyBins = new int[numVariants]; // guaranteed to be all zeros by Java spec
-        propertyBinsMap.forEach((propertyName, rawBins) -> {
-            final double[] bins = needsZScore() ?
-                zScore(rawBins, propertyBaseline.get(propertyName), propertyScale.get(propertyName)) :
-                rawBins;
+        propertyBinsMap.forEach((propertyName, bins) -> {
+            final PropertiesTable.Property property = propertiesTable.get(propertyName);
             final int binsScale = bins.length + 1;
-            final double[] properties = variantPropertiesMap.get(propertyName);
             IntStream.range(0, numVariants).forEach(variantIndex -> {
-                int bin = Arrays.binarySearch(bins, properties[variantIndex]);
+                int bin = Arrays.binarySearch(bins, property.getAsFloat(variantIndex, 0, false));
                 if(bin < 0) { bin = ~bin; }
                 propertyBins[variantIndex] = binsScale * propertyBins[variantIndex] + bin;
             });
@@ -1133,7 +828,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         final int maxAc = (fatherAc > 0 ? 1 : 0) + (motherAc > 0 ? 1 : 0);
         return childAc <= maxAc;
     }
-
 
 
     static protected class FilterSummary {
@@ -1690,14 +1384,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         return Arrays.stream(indices).mapToDouble(i -> values[i]).toArray();
     }
 
-    protected Map<String, double[]> getVariantProperties(final int [] rowIndices) {
-        final Map<String, double[]> subMap = new HashMap<>();
-        for(final Map.Entry<String, double[]> entry : variantPropertiesMap.entrySet()) {
-            subMap.put(entry.getKey(), take(entry.getValue(), rowIndices));
-        }
-        return subMap;
-    }
-
     protected int[] getPerVariantOptimalMinGq(final int[] variantIndices) {
         return take(perVariantOptimalMinGq, variantIndices);
     }
@@ -1726,13 +1412,14 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         final boolean[] sampleVariantTruth = new boolean[numRows];
 
         int flatIndex = 0;
+        final PropertiesTable.Property gqMat = propertiesTable.get(VCFConstants.GENOTYPE_QUALITY_KEY);
         for(final int variantIndex : variantIndices) {
             final int minGq = perVariantOptimalMinGq[variantIndex];
             for(int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex) {
                 if(!getSampleVariantIsTrainable(variantIndex, sampleIndex)) {
                     continue;
                 }
-                final int gq = sampleVariantGq.get(variantIndex)[sampleIndex];
+                final int gq = gqMat.getAsInt(variantIndex, sampleIndex);
                 sampleVariantTruth[flatIndex] = gq >= minGq;
                 ++flatIndex;
             }
@@ -1786,15 +1473,25 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     }
 
     @SuppressWarnings("SameParameterValue")
-    protected void displayHistogram(final String description, final DoubleStream doubleStream, final int numBins, final double minValue, final double maxValue) {
-        final double eps = FastMath.max(FastMath.ulp(FastMath.abs(minValue)), FastMath.ulp(FastMath.abs(maxValue)));
-        final double binScale = (numBins - 2 * eps) / (maxValue - minValue);
-        final double binOffset = minValue * binScale - eps;
+    protected void displayHistogram(final String description, final DoubleStream doubleStream, final int numBins,
+                                    final double minValue, final double maxValue) {
+        final double safety = 100;
+        final double valueEps = safety * FastMath.max(FastMath.ulp(FastMath.abs(minValue)),
+                                                      FastMath.ulp(FastMath.abs(maxValue)));
+        final double numBinsEps = safety * FastMath.ulp((double)numBins);
+        final double valueOffset = minValue - valueEps;
+        final double binScale = (numBins - numBinsEps) / (maxValue - valueOffset);
         final long[] valueBins = new long [numBins];
         double[] valueRange = new double[] {Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY};
         doubleStream.forEach(value -> {
-            final int bin = (int)FastMath.floor(value * binScale - binOffset);
-            ++valueBins[bin];
+            final int bin = (int)FastMath.floor((value - valueOffset) * binScale);
+            try {
+                ++valueBins[bin];
+            } catch(ArrayIndexOutOfBoundsException arrayIndexOutOfBoundsException) {
+                final String errStr = String.format("bad bin: min: %f, max: %f, scale: %f, offset: %f, value: %f\n",
+                                                    minValue, maxValue, binScale, valueOffset, value);
+                throw new GATKException(errStr, arrayIndexOutOfBoundsException);
+            }
             if(value < valueRange[0]) {
                 valueRange[0] = value;
             }
@@ -1802,7 +1499,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 valueRange[1] = value;
             }
         });
-        final long numValues = Arrays.stream(valueBins).count();
+        final long numValues = Arrays.stream(valueBins).sum();
         if(valueRange[0] > valueRange[1]) {
             System.out.println(description + ": no data");
         } else {
@@ -1825,27 +1522,18 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         System.out.println("numProperties: " + getNumProperties());
         System.out.println("index\tpropertyName\tpropertyBaseline\tpropertyScale");
         int idx = 0;
-        for(final String propertyName : propertyNames) {
-            System.out.println(idx + "\t" + propertyName + "\t" + propertyBaseline.get(propertyName) + "\t" + propertyScale.get(propertyName));
+        for(final PropertiesTable.Property property : propertiesTable) {
+            System.out.println(idx + "\t" + property.name + "\t" + property.getBaseline() + "\t" + property.getScale());
             ++idx;
         }
-        System.out.println("filter types:");
-        idx = 0;
-        for(final String filterType : allFilterTypes) {
-            System.out.println(idx + "\t" + filterType);
-            ++idx;
-        }
-        System.out.println("evidence types:");
-        idx = 0;
-        for(final String evidenceType : allEvidenceTypes) {
-            System.out.println(idx + "\t" + evidenceType);
-            ++idx;
-        }
-        System.out.println("sv types:");
-        idx = 0;
-        for(final String svType : allSvTypes) {
-            System.out.println(idx + "\t" + svType);
-            ++idx;
+
+        final Map<String, List<String>> labelsEncoding = propertiesTable.getLabelsEncoding();
+        for(final Map.Entry<String, List<String>> entry : labelsEncoding.entrySet()) {
+            System.out.println(entry.getKey() + ":");
+            idx = 0;
+            for(final String label : entry.getValue()) {
+                System.out.println(idx + "\t" + label);
+            }
         }
 
         final IntStream acStream = sampleVariantAlleleCounts.stream().flatMapToInt(Arrays::stream);
@@ -1893,38 +1581,11 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                     // don't close the stream in one of the subroutines
                 }
             };
-            saveDataPropertiesSummaryStats(unclosableOutputStream);
+            propertiesTable.saveDataEncoding(unclosableOutputStream);
             unclosableOutputStream.write("\n".getBytes());
             saveModel(unclosableOutputStream);
         } catch(IOException ioException) {
             throw new GATKException("Error saving modelFile " + modelFile, ioException);
-        }
-    }
-
-    private void saveDataPropertiesSummaryStats(final OutputStream outputStream) {
-        final JSONArray evidenceTypes = new JSONArray(); evidenceTypes.addAll(allEvidenceTypes);
-        final JSONArray filterTypes = new JSONArray(); filterTypes.addAll(allFilterTypes);
-        final JSONArray svTypes = new JSONArray(); svTypes.addAll(allSvTypes);
-        final JSONArray propNames = new JSONArray();
-        final JSONArray propBase = new JSONArray();
-        final JSONArray propScale = new JSONArray();
-        for(final String propName : propertyNames) {
-            propNames.add(propName);
-            propBase.add(propertyBaseline.get(propName));
-            propScale.add(propertyScale.get(propName));
-        }
-        final JSONObject jsonObject = new JSONObject();
-        jsonObject.put(ALL_EVIDENCE_TYPES_KEY, evidenceTypes);
-        jsonObject.put(ALL_FILTER_TYPES_KEY, filterTypes);
-        jsonObject.put(ALL_SV_TYPES_KEY, svTypes);
-        jsonObject.put(PROPERTY_NAMES_KEY, propNames);
-        jsonObject.put(PROPERTY_BASELINE_KEY, propBase);
-        jsonObject.put(PROPERTY_SCALE_KEY, propScale);
-
-        try {
-            outputStream.write(jsonObject.toJSONString().getBytes());
-        } catch(IOException ioException) {
-            throw new GATKException("Error saving data summary json", ioException);
         }
     }
 
@@ -1942,7 +1603,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                     // don't close the stream in one of the subroutines
                 }
             };
-            loadDataPropertiesSummaryStats(unclosableInputStream);
+            propertiesTable.loadDataEncoding(unclosableInputStream);
             loadModel(unclosableInputStream );
         } catch (Exception exception) {
             throw new GATKException("Error loading modelFile " + modelFile + " (malformed file?)", exception);
@@ -1963,30 +1624,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         return ((JSONArray)jsonObject).stream().map(o -> (String)o).collect(Collectors.toList());
     }
 
-    private void loadDataPropertiesSummaryStats(final InputStream inputStream) {
-        final JSONObject jsonObject;
-        try {
-            jsonObject = (JSONObject) JSONValue.parseWithException(inputStream);
-        } catch (IOException | ParseException ioException) {
-            throw new GATKException("Unable to parse JSON from inputStream", ioException);
-        }
-        allEvidenceTypes = getStringListFromJSON(jsonObject.get(ALL_EVIDENCE_TYPES_KEY));
-        allFilterTypes = getStringListFromJSON(jsonObject.get(ALL_FILTER_TYPES_KEY));
-        allSvTypes = getStringListFromJSON(jsonObject.get(ALL_SV_TYPES_KEY));
-        final JSONArray propNames = ((JSONArray) jsonObject.get(PROPERTY_NAMES_KEY));
-        final JSONArray propBase = ((JSONArray) jsonObject.get(PROPERTY_BASELINE_KEY));
-        final JSONArray propScale = ((JSONArray) jsonObject.get(PROPERTY_SCALE_KEY));
-        propertyNames = new ArrayList<>();
-        propertyBaseline = new HashMap<>();
-        propertyScale = new HashMap<>();
-        for (int idx = 0; idx < propNames.size(); ++idx) {
-            final String propName = (String) propNames.get(idx);
-            propertyNames.add(propName);
-            propertyBaseline.put(propName, getDoubleFromJSON(propBase.get(idx)));
-            propertyScale.put(propName, getDoubleFromJSON(propScale.get(idx)));
-        }
-    }
-
     private byte[] modelCheckpoint = null;
 
     protected void saveModelCheckpoint() {
@@ -2000,7 +1637,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         loadModel(inputStream);
     }
 
-    protected abstract boolean needsZScore();
+    protected abstract boolean needsNormalizedProperties();
     protected abstract float predict(final float[] sampleVariantProperties);
     protected abstract void trainFilter();
     protected abstract void saveModel(final OutputStream outputStream);
@@ -2031,7 +1668,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 badSampleVariants = null;
             }
 
-            collectVariantPropertiesMap();
+            propertiesTable.validateAndFinalize();
             setPropertyBins();
             setTrainingAndValidationIndices();
             setMaxDiscoverableMendelianAc();

@@ -10,6 +10,7 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 
 import java.io.*;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 
@@ -45,10 +46,10 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
     @Argument(fullName="min-child-weight", doc="Proportion of columns selected for each level of each tree", optional=true, minValue=0.0)
     public double minChildWeight = 1.0;
     @Argument(fullName="prediction-scale-factor", doc="Scale factor for raw predictions from xgboost", optional=true)
-    public double predictionScaleFactor = 100.0;
+    public double predictionScaleFactor = 1.0;
     @Argument(fullName="max-minibatch-size", shortName="mbs", doc="Max number of sample variants to include in any mini batch",
               optional=true)
-    public int maxMiniBatchSize = 100000;
+    public int maxMiniBatchSize = Integer.MAX_VALUE; // 100000;
 
     private Booster booster = null;
     private static final String TRAIN_MAT_KEY = "train";
@@ -67,14 +68,9 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                 if(!getSampleVariantIsTrainable(variantIndex, sampleIndex)) {
                     continue;
                 }
-                for (final String propertyName : getVariantPropertyNames()) {
-                    rowMajorVariantProperties[flatIndex] = (float) variantPropertiesMap.get(propertyName)[variantIndex];
-                    ++flatIndex;
-                }
-                for(final String propertyName : getSampleVariantPropertyNames()) {
-                    rowMajorVariantProperties[flatIndex] = (float) sampleVariantPropertiesMap.get(propertyName)[variantIndex][sampleIndex];
-                    ++flatIndex;
-                }
+                flatIndex = propertiesTable.copyPropertiesRow(
+                    rowMajorVariantProperties, flatIndex, variantIndex, sampleIndex, needsNormalizedProperties()
+                );
             }
         }
 
@@ -142,7 +138,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
     }
 
     private float sigma(final float predict) {
-        return 1.0F / (1.0F + (float)FastMath.exp(-predict));
+        return 1.0F / (1.0F + (float)FastMath.exp(-predictionScaleFactor * predict));
     }
 
     private class DataSubset {
@@ -180,9 +176,12 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             this.dMatrix = miniBatchSplits == null ? getDMatrix(variantIndices) : null;
             System.out.format("DataSubset %s processed in %d mini batches\n", name, getNumMiniBatches());
 
-            pSampleVariantGood = new float[numFilterableSampleVariants];
-            d1Loss = isTrainingSet ? new float[numFilterableSampleVariants] : null;
-            d2Loss = isTrainingSet ? new float[numFilterableSampleVariants] : null;
+            // pre-allocate results if they are needed and we're not doing mini-batches
+            final boolean preAllocateResults = miniBatchSplits == null;
+            final boolean preAllocateDerivs = preAllocateResults && isTrainingSet;
+            pSampleVariantGood = preAllocateResults ? new float[numFilterableSampleVariants] : null;
+            d1Loss = preAllocateDerivs ? new float[numFilterableSampleVariants] : null;
+            d2Loss = preAllocateDerivs ? new float[numFilterableSampleVariants] : null;
             lossDerivatives = new float[][] {d1Loss, d2Loss};
 
             sampleVariantTruth = getSampleVariantTruth(variantIndices);
@@ -235,15 +234,38 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                 dMatrix;
         }
 
-        private Loss getMiniBatchLoss(final Booster booster, final int miniBatchIndex) {
-            final DMatrix miniBatchDMatrix = getBatchDMatrix(miniBatchIndex);
-            final float[][] rawPredictions;
+        private float[][] getRawPredictions(final Booster booster, final DMatrix dMatrix) {
             try {
-                rawPredictions = booster.predict(miniBatchDMatrix, true, 0);
+                return booster.predict(dMatrix, true, 0);
             } catch(XGBoostError xgBoostError) {
                 throw new GATKException("In " + name + " DataSubset: Predict error", xgBoostError);
             }
-            final float[] pVSGood = miniBatchSplits == null ? pSampleVariantGood : new float[rawPredictions.length];
+        }
+
+        private void displayFloatHistogram(final float[] arr, final String description, final int numBins) {
+            double minValue = arr[0];
+            double maxValue = arr[0];
+            DoubleStream.Builder builder = DoubleStream.builder();
+            for(final float val : arr) {
+                if(val < minValue) {
+                    minValue = val;
+                } else if(val > maxValue) {
+                    maxValue = val;
+                }
+                builder.add(val);
+            }
+            if(maxValue - minValue < 1e-3) {
+                System.out.println(description);
+                System.out.format("\t%f: 100%%\n", minValue);
+            } else {
+                displayHistogram(description, builder.build(), numBins, minValue, maxValue);
+            }
+        }
+
+        private Loss getMiniBatchLoss(final Booster booster, final int miniBatchIndex) {
+            final DMatrix miniBatchDMatrix = getBatchDMatrix(miniBatchIndex);
+            final float[][] rawPredictions = getRawPredictions(booster, miniBatchDMatrix);
+            final float[] pVSGood = pSampleVariantGood == null ? new float[rawPredictions.length] : pSampleVariantGood;
             for(int idx = 0; idx < rawPredictions.length; ++idx) {
                 pVSGood[idx] = sigma(rawPredictions[idx][0]);
             }
@@ -269,12 +291,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             final int numMiniBatches = getNumMiniBatches();
             for(int miniBatchIndex = 0; miniBatchIndex < numMiniBatches; ++miniBatchIndex) {
                 final DMatrix miniBatchDMatrix = getBatchDMatrix(miniBatchIndex);
-                final float[][] rawPredictions;
-                try {
-                    rawPredictions = booster.predict(miniBatchDMatrix, true, 0);
-                } catch(XGBoostError xgBoostError) {
-                    throw new GATKException("In " + name + " DataSubset: Predict error", xgBoostError);
-                }
+                final float[][] rawPredictions = getRawPredictions(booster, miniBatchDMatrix);
                 for (float[] rawPrediction : rawPredictions) {
                     builder.add(sigma(rawPrediction[0]));
                 }
@@ -299,23 +316,23 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             }
         }
 
-        void calculateDerivatives(final float[] pSampleVariantGood) {
+        void calculateDerivatives(final float[] pGood) {
             final float[] d1Loss, d2Loss;
             if (miniBatchSplits == null) {
                 d1Loss = this.d1Loss;
                 d2Loss = this.d2Loss;
             } else {
-                d1Loss = new float[pSampleVariantGood.length];
-                d2Loss = new float[pSampleVariantGood.length];
+                d1Loss = new float[pGood.length];
+                d2Loss = new float[pGood.length];
                 this.lossDerivatives[0] = d1Loss;
                 this.lossDerivatives[1] = d2Loss;
             }
-            float scale = pSampleVariantGood.length;
-            for (int i = 0; i < pSampleVariantGood.length; ++i) {
-                final float sigma = pSampleVariantGood[i];
-                final float pFalse = 1F - sigma;
-                d1Loss[i] = sampleVariantTruth[i] ? -pFalse / scale : sigma / scale;
-                d2Loss[i] = sigma * pFalse / scale;
+            float scale = 1F; // pGood.length;
+            for (int i = 0; i < pGood.length; ++i) {
+                final float pTrue = pGood[i];
+                final float pFalse = 1F - pTrue;
+                d1Loss[i] = sampleVariantTruth[i] ? -pFalse / scale : pTrue / scale;
+                d2Loss[i] = pTrue * pFalse / scale;
             }
         }
 
@@ -347,7 +364,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
     }
 
     @Override
-    protected boolean needsZScore() { return false; }
+    protected boolean needsNormalizedProperties() { return false; }
 
     @Override
     protected float predict(float[] variantProperties) {
@@ -424,6 +441,27 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
         return !needStop;
     }
 
+    void displayFeatureImportance(final Booster booster) {
+        final List<String> propertyNames = propertiesTable.getPropertyNames();
+        final Map<String, Integer> featureScore;
+        try {
+            featureScore = booster.getFeatureScore((String) null).entrySet().stream()
+                .collect(
+                    Collectors.toMap(
+                        entry -> propertyNames.get(Integer.parseInt(entry.getKey().substring(1))),
+                        Map.Entry::getValue
+                    )
+                );
+        } catch(XGBoostError xgBoostError) {
+            throw new GATKException("Error getting feature score", xgBoostError);
+        }
+
+        System.out.println("Feature importance:");
+        featureScore.entrySet().stream()
+            .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+            .forEachOrdered(entry -> System.out.format("\t%s: %d\n", entry.getKey(), entry.getValue()));
+    }
+
     @Override
     protected void trainFilter() {
         final List<DataSubset> dataSubsets = new ArrayList<DataSubset>() {
@@ -440,6 +478,9 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
 
         loadModelCheckpoint();
         displayHistogram("Final training adjusted GQ histogram",
-                          dataSubsets.get(0).streamPredictions(booster).mapToInt(this::phredScale),true);
+                          dataSubsets.get(0).streamPredictions(booster).mapToInt(p -> phredScale(1.0 - p)),true);
+        displayHistogram("Final training probability histogram",
+                          dataSubsets.get(0).streamPredictions(booster),20, 0.0, 1.0);
+        displayFeatureImportance(booster);
     }
 }
