@@ -25,7 +25,7 @@ else
 fi
 echo "Docker build done =========="
 echo "Putting the newly built docker image into the json parameters"
-CROMWELL_TEST_DIR="${WORKING_DIR}/gatk/scripts/variantstore_cromwell_tests"
+CROMWELL_TEST_DIR="${WORKING_DIR}/gatk/scripts/variantstore/cromwell_tests"
 sed -r "s/__GATK_DOCKER__/broadinstitute\/gatk\:$HASH_TO_USE/g" $CROMWELL_TEST_DIR/import_array_manifest_test.json >$WORKING_DIR/import_array_manifest_test_tmp.json
 sed -r "s/__GATK_DOCKER__/broadinstitute\/gatk\:$HASH_TO_USE/g" $CROMWELL_TEST_DIR/import_arrays_test.json >$WORKING_DIR/import_arrays_test_tmp.json
 sed -r "s/__TABLE_NAME__/$UUID/g" $WORKING_DIR/import_array_manifest_test_tmp.json > $WORKING_DIR/import_array_manifest_test_mod.json
@@ -40,8 +40,7 @@ echo "Updated local_backend.conf with service account"
 
 echo "Running ImportGenomes WDL through cromwell"
 ln -fs $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.wdl .
-ln -fs $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.example.inputs.json .
-sudo java -Dconfig.file=$WORKING_DIR/set_up.conf -jar $CROMWELL_JAR run $WORKING_DIR/gatk/scripts/variantstore_wdl/ImportGenomes.wdl -i $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.example.inputs.json
+sudo java -Dconfig.file=$WORKING_DIR/set_up.conf -jar $CROMWELL_JAR run $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.wdl -i $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.example.inputs.json
 
 #TURN OFF TESTING FOR NOW
 #echo "Running ImportArrayManifest WDL through cromwell"
