@@ -38,6 +38,11 @@ cat $WORKING_DIR/import_arrays_test_mod.json
 sed -r "s|__SERVICE_ACCOUNT__|$GOOGLE_APPLICATION_CREDENTIALS|g" $CROMWELL_TEST_DIR/local-with-gcs.conf >$WORKING_DIR/set_up.conf
 echo "Updated local_backend.conf with service account"
 
+echo "Running ImportGenomes WDL through cromwell"
+ln -fs $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.wdl .
+ln -fs $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.example.inputs.json .
+sudo java -Dconfig.file=$WORKING_DIR/set_up.conf -jar $CROMWELL_JAR run $WORKING_DIR/gatk/scripts/variantstore_wdl/ImportGenomes.wdl -i $WORKING_DIR/gatk/scripts/variantstore/wdl/ImportGenomes.example.inputs.json
+
 #TURN OFF TESTING FOR NOW
 #echo "Running ImportArrayManifest WDL through cromwell"
 #ln -fs $WORKING_DIR/gatk/scripts/variantstore_wdl/ImportArrayManifest.wdl
