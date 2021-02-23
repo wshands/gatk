@@ -145,7 +145,7 @@ public final class SVCluster extends VariantWalker {
         breakpointRefiner = new BreakpointRefiner(sampleCoverageMap, dictionary);
         evidenceCollector = new PairedEndAndSplitReadEvidenceAggregator(splitReadSource, discordantPairSource, dictionary, null);
 
-        final Function<Collection<SVCallRecordWithEvidence>,SVCallRecordWithEvidence> collapser = SVCallRecordUtils::deduplicateWithRawCallAttributeWithEvidence;
+        final Function<Collection<SVCallRecordWithEvidence>,SVCallRecordWithEvidence> collapser = items -> SVCallRecordUtils.deduplicateWithRawCallAttributeWithEvidence(items, SVCallRecordUtils.ALLELE_COLLAPSER_DIPLOID_NO_CALL);
         deduplicator = new SVCallRecordDeduplicator<>(collapser, dictionary);
 
         writer = createVCFWriter(Paths.get(outputFile));
@@ -274,7 +274,8 @@ public final class SVCluster extends VariantWalker {
 
     public VariantContext buildVariantContext(final SVCallRecordWithEvidence call) {
         final Map<String, Object> nonCallAttributes = Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
-        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), samples, nonCallAttributes);
+        final List<Allele> missingAlleles = Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
+        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), missingAlleles, samples, nonCallAttributes);
         final String newId = String.format("%s%08x", variantPrefix, numVariantsWritten++);
         final SVCallRecordWithEvidence finalCall = new SVCallRecordWithEvidence(newId, call.getContigA(), call.getPositionA(), call.getStrandA(), call.getContigB(),
                 call.getPositionB(), call.getStrandB(), call.getType(), call.getLength(), call.getAlgorithms(),

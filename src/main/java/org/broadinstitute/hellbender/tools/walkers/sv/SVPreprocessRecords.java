@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.*;
@@ -14,23 +14,27 @@ import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFHeaderLines;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecordDeduplicator;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Creates multi-sample structural variant (SV) VCF from a collection of SV VCFs. Supported types include biallelic DEL,
- * DUP, INS, INV, and BND. Inputs may contain different samples and/or different variants.
+ * DUP, INS, INV, and BND. Input files may contain mutually exclusive samples and/or variants.
  *
  * Each record must have the following INFO fields:
  * <ul>
- *     <li>END Integer, end coordinate on CHROM, may not precede POS.</li>
- *     <li>SVLEN Integer, the length of the event or -1 if undefined, e.g. for BNDs.</li>
- *     <li>SVTYPE String, type of event, i.e. the symbolic ALT allele without angle brackets.</li>
- *     <li>STRANDS String, from the set {'++', '+-', '-+', '--'}.</li>
- *     <li>ALGORITHMS String list, SV calling algorithms or "depth" if from a CNV caller.</li>
- *     <li>CHR2 String and END2 Integer, mate coordinate, expected only for BNDs.</li>
+ *     <li>END Integer, end coordinate on CHROM, may not precede POS</li>
+ *     <li>SVLEN Integer, the length of the event or -1 if undefined, e.g. for BND.</li>
+ *     <li>SVTYPE String, type of structural variant</li>
+ *     <li>STRANDS String, from the set {'++', '+-', '-+', '--'} (INV/BND only)</li>
+ *     <li>ALGORITHMS String list, SV calling algorithms or "depth" if from a CNV caller</li>
+ *     <li>CHR2 String and END2 Integer, mate coordinate (BND only)</li>
  * </ul>
  *
  * Additional INFO and FORMAT fields are cleared from each variant. Samples with non-reference genotypes are flagged
@@ -72,7 +76,7 @@ import java.util.function.Function;
 )
 @ExperimentalFeature
 @DocumentedFeature
-public final class MergeSVRecords extends MultiVariantWalker {
+public final class SVPreprocessRecords extends MultiVariantWalker {
     @Argument(
             doc = "Output combined VCF",
             fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
@@ -101,7 +105,7 @@ public final class MergeSVRecords extends MultiVariantWalker {
         writer = createVCFWriter(outputFile);
         writer.writeHeader(createVcfHeader());
 
-        final Function<Collection<SVCallRecord>, SVCallRecord> collapser = SVCallRecordUtils::deduplicateWithRawCallAttribute;
+        final Function<Collection<SVCallRecord>, SVCallRecord> collapser = items -> SVCallRecordUtils.deduplicateWithRawCallAttribute(items, SVCallRecordUtils.ALLELE_COLLAPSER_DIPLOID_NO_CALL);
         deduplicator = new SVCallRecordDeduplicator<>(collapser, dictionary);
     }
 
@@ -118,6 +122,7 @@ public final class MergeSVRecords extends MultiVariantWalker {
                       final ReferenceContext referenceContext,
                       final FeatureContext featureContext) {
         Utils.validate(variant.getNSamples() == 1, "VCFs must be single-sample");
+        Utils.validate(variant.getNAlleles() == 2, "Records must be biallelic");
         final SVCallRecord record = sanitizeInputGenotypes(SVCallRecordUtils.create(variant));
         if (record.getPositionA() != currentPosition || !record.getContigA().equals(currentContig)) {
             flushRecords();
@@ -149,21 +154,35 @@ public final class MergeSVRecords extends MultiVariantWalker {
 
     private Genotype sanitizeInputGenotype(final Genotype g) {
         final GenotypeBuilder builder = new GenotypeBuilder(g.getSampleName());
+        builder.alleles(Arrays.asList(Allele.NO_CALL, Allele.NO_CALL));
         final int value = SVCallRecord.isCarrier(g) ? GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE : GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE;
         builder.attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, value);
         return builder.make();
     }
 
+    private Allele getReferenceAllele(final Collection<Allele> alleles) {
+        final List<Allele> refAlleles = alleles.stream().filter(Allele::isReference).collect(Collectors.toList());
+        if (refAlleles.isEmpty()) {
+            throw new UserException.BadInput("Record has no reference allele");
+        } else if (refAlleles.size() > 1) {
+            throw new UserException.BadInput("Record has multiple reference alleles");
+        }
+        return refAlleles.get(0);
+    }
+
     private VariantContext createVariant(final SVCallRecord call) {
         final VariantContextBuilder builder = SVCallRecordUtils.getVariantBuilder(call);
         final Map<String, Object> nonCallAttributes = Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
-        builder.genotypes(SVCallRecordUtils.fillMissingSamplesWithGenotypes(builder.getGenotypes(), samples, nonCallAttributes));
+        final List<Allele> missingAlleles = Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
+        builder.genotypes(SVCallRecordUtils.fillMissingSamplesWithGenotypes(builder.getGenotypes(), missingAlleles, samples, nonCallAttributes));
         return builder.make();
     }
 
     private VCFHeader createVcfHeader() {
         final VCFHeader header = new VCFHeader(getDefaultToolVCFHeaderLines(), samples);
         header.setSequenceDictionary(dictionary);
+
+        // Info lines
         header.addMetaDataLine(VCFStandardHeaderLines.getInfoLine(VCFConstants.END_KEY));
         header.addMetaDataLine(GATKSVVCFHeaderLines.getInfoLine(GATKSVVCFConstants.SVLEN));
         header.addMetaDataLine(GATKSVVCFHeaderLines.getInfoLine(GATKSVVCFConstants.SVTYPE));
@@ -171,7 +190,11 @@ public final class MergeSVRecords extends MultiVariantWalker {
         header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.CONTIG2_ATTRIBUTE, 1, VCFHeaderLineType.String, "Second contig"));
         header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.STRANDS_ATTRIBUTE, 1, VCFHeaderLineType.String, "First and second strands"));
         header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE, 1, VCFHeaderLineType.String, "List of calling algorithms"));
+
+        // Format lines
+        header.addMetaDataLine(VCFStandardHeaderLines.getFormatLine(VCFConstants.GENOTYPE_KEY));
         header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Sample non-reference in raw calls"));
+
         return header;
     }
 }

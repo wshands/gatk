@@ -16,18 +16,13 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public final class SVCallRecordUtils {
 
-    public final static List<String> nonDepthCallerAttributes = Arrays.asList(
-            VCFConstants.END_KEY,
-            GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE,
-            GATKSVVCFConstants.STRANDS_ATTRIBUTE,
-            GATKSVVCFConstants.SVLEN,
-            GATKSVVCFConstants.SVTYPE
-    );
+    public static final Function<Collection<Genotype>, List<Allele>> ALLELE_COLLAPSER_DIPLOID_NO_CALL = genotypes -> Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
 
     /**
      * Create a variant from a call for VCF interoperability
@@ -51,6 +46,7 @@ public final class SVCallRecordUtils {
         } else {
             end2 = call.getPositionB();
         }
+
         final VariantContextBuilder builder = new VariantContextBuilder(call.getId(), call.getContigA(), call.getPositionA(),
                 end, Lists.newArrayList(refAllele, altAllele));
         builder.id(call.getId());
@@ -66,6 +62,7 @@ public final class SVCallRecordUtils {
     }
 
     public static GenotypesContext fillMissingSamplesWithGenotypes(final GenotypesContext genotypes,
+                                                                   final List<Allele> alleles,
                                                                    final Set<String> samples,
                                                                    final Map<String,Object> attributes) {
         Utils.nonNull(genotypes);
@@ -81,6 +78,7 @@ public final class SVCallRecordUtils {
             if (attributes != null) {
                 genotypeBuilder.attributes(attributes);
             }
+            genotypeBuilder.alleles(alleles);
             newGenotypes.add(genotypeBuilder.make());
         }
         return GenotypesContext.copy(newGenotypes);
@@ -347,7 +345,14 @@ public final class SVCallRecordUtils {
         Utils.nonNull(type);
         final String strandsAttr = variant.getAttributeAsString(GATKSVVCFConstants.STRANDS_ATTRIBUTE, null);
         if (strandsAttr == null) {
-            throw new UserException.BadInput("Missing variant attribute " + GATKSVVCFConstants.STRANDS_ATTRIBUTE);
+            if (type.equals(StructuralVariantType.DEL) || type.equals(StructuralVariantType.INS)) {
+                return SVCallRecord.STRAND_PLUS + SVCallRecord.STRAND_MINUS;
+            } else if (type.equals(StructuralVariantType.DUP)) {
+                return SVCallRecord.STRAND_MINUS + SVCallRecord.STRAND_PLUS;
+            } else {
+                throw new UserException.BadInput("Record of type " + type.name() + " missing required attribute "
+                        + GATKSVVCFConstants.STRANDS_ATTRIBUTE);
+            }
         }
         if (strandsAttr.length() != 2) {
             throw new IllegalArgumentException("Strands field is not 2 characters long");
@@ -458,12 +463,13 @@ public final class SVCallRecordUtils {
      * @param items records to collapse
      * @return representative record, or null if the input is empty
      */
-    public static SVCallRecord deduplicateWithRawCallAttribute(final Collection<SVCallRecord> items) {
+    public static SVCallRecord deduplicateWithRawCallAttribute(final Collection<SVCallRecord> items,
+                                                               final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
         Utils.nonNull(items);
         if (items.isEmpty()) {
             return null;
         }
-        final List<Genotype> genotypes = collapseRecordGenotypesWithRawCallAttribute(items);
+        final List<Genotype> genotypes = collapseRecordGenotypesWithRawCallAttribute(items, alleleCollapser);
         final List<String> algorithms = collapseAlgorithms(items);
         final SVCallRecord example = items.iterator().next();
         return new SVCallRecord(
@@ -481,16 +487,17 @@ public final class SVCallRecordUtils {
     }
 
     /**
-     * Same as {@link SVCallRecordUtils#deduplicateWithRawCallAttribute(Collection)} but for {@link SVCallRecordWithEvidence}s.
+     * Same as {@link SVCallRecordUtils#deduplicateWithRawCallAttribute(Collection, Function)} but for {@link SVCallRecordWithEvidence}s.
      * @param items records to collapse
      * @return representative record, or null if the input is empty
      */
-    public static SVCallRecordWithEvidence deduplicateWithRawCallAttributeWithEvidence(final Collection<SVCallRecordWithEvidence> items) {
+    public static SVCallRecordWithEvidence deduplicateWithRawCallAttributeWithEvidence(final Collection<SVCallRecordWithEvidence> items,
+                                                                                       final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
         Utils.nonNull(items);
         if (items.isEmpty()) {
             return null;
         }
-        final List<Genotype> genotypes = collapseRecordGenotypesWithRawCallAttribute(items);
+        final List<Genotype> genotypes = collapseRecordGenotypesWithRawCallAttribute(items, alleleCollapser);
         final List<String> algorithms = collapseAlgorithms(items);
         final SVCallRecordWithEvidence example = items.iterator().next();
         return new SVCallRecordWithEvidence(
@@ -516,23 +523,28 @@ public final class SVCallRecordUtils {
      * @param records
      * @return
      */
-    private static List<Genotype> collapseRecordGenotypesWithRawCallAttribute(final Collection<? extends SVCallRecord> records) {
+    private static List<Genotype> collapseRecordGenotypesWithRawCallAttribute(final Collection<? extends SVCallRecord> records,
+                                                                              final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
         return records.stream()
                 .map(SVCallRecord::getGenotypes)
                 .flatMap(g -> g.stream())
                 .collect(Collectors.groupingBy(Genotype::getSampleName))
                 .values()
                 .stream()
-                .map(SVCallRecordUtils::collapseSampleGenotypesWithRawCallAttribute)
+                .map(genotypes -> collapseSampleGenotypesWithRawCallAttribute(genotypes, alleleCollapser))
                 .collect(Collectors.toList());
     }
 
-    private static Genotype collapseSampleGenotypesWithRawCallAttribute(final Collection<Genotype> genotypes) {
+    private static Genotype collapseSampleGenotypesWithRawCallAttribute(final Collection<Genotype> genotypes,
+                                                                        final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
         final GenotypeBuilder builder = new GenotypeBuilder(genotypes.iterator().next().getSampleName());
         if (genotypes.stream().anyMatch(SVCallRecord::isRawCall)) {
             builder.attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE);
         } else {
             builder.attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
+        }
+        if (alleleCollapser != null) {
+            builder.alleles(alleleCollapser.apply(genotypes));
         }
         return builder.make();
     }
