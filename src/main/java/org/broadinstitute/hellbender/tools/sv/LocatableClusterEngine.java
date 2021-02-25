@@ -5,11 +5,9 @@ import org.broadinstitute.hellbender.utils.GenomeLoc;
 import org.broadinstitute.hellbender.utils.GenomeLocParser;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
-import scala.Tuple2;
 
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
@@ -23,12 +21,15 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     }
 
     protected final SAMSequenceDictionary dictionary;
-    private final List<Tuple2<SimpleInterval, List<Long>>> currentClusters; // Pairs of cluster start interval with item IDs
-    private final Map<Long,T> idToItemMap;
+    private Map<Integer, Cluster> idToClusterMap; // Active clusters
+    private final List<Cluster> processedClusters; // Processed clusters, needed for redundancy check
     private final List<T> outputBuffer;
-    private final CLUSTERING_TYPE clusteringType;
-    private long currentItemId;
+    protected final CLUSTERING_TYPE clusteringType;
     private String currentContig;
+
+    private final Map<Integer, T> idToItemMap;
+    private int nextItemId;
+    private int nextClusterId;
 
 
     public LocatableClusterEngine(final SAMSequenceDictionary dictionary,
@@ -36,11 +37,14 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
                                   final List<GenomeLoc> coverageIntervals) {
         this.dictionary = dictionary;
         this.clusteringType = clusteringType;
-        this.currentClusters = new LinkedList<>();
-        this.idToItemMap = new HashMap<>();
+        this.idToClusterMap = new HashMap<>();
+        this.processedClusters = new LinkedList<>();
         this.outputBuffer = new ArrayList<>();
-        currentItemId = 0;
         currentContig = null;
+
+        idToItemMap = new HashMap<>();
+        nextItemId = 0;
+        nextClusterId = 0;
 
         parser = new GenomeLocParser(this.dictionary);
         if (coverageIntervals != null) {
@@ -60,6 +64,20 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     abstract protected T flattenCluster(final Collection<T> cluster);
     abstract protected SVDeduplicator<T> getDeduplicator();
 
+    protected SimpleInterval getClusteringInterval(final Collection<Integer> itemIds) {
+        Utils.nonNull(itemIds);
+        Utils.nonEmpty(itemIds);
+        final List<T> items = itemIds.stream().map(this::getItem).collect(Collectors.toList());
+        final List<String> contigA = items.stream().map(T::getContigA).distinct().collect(Collectors.toList());
+        if (contigA.size() > 1) {
+            throw new IllegalArgumentException("Items start on multiple contigs");
+        }
+        final List<SimpleInterval> clusteringIntervals = items.stream().map(item -> getClusteringInterval(item, null)).collect(Collectors.toList());
+        final int minStart = clusteringIntervals.stream().mapToInt(SimpleInterval::getStart).min().getAsInt();
+        final int maxEnd = clusteringIntervals.stream().mapToInt(SimpleInterval::getEnd).max().getAsInt();
+        return new SimpleInterval(contigA.get(0), minStart, maxEnd);
+    }
+
     public List<T> getOutput() {
         flushClusters();
         final List<T> output;
@@ -72,14 +90,14 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return output;
     }
 
-    private void resetItemIds() {
-        Utils.validate(currentClusters.isEmpty(), "Current cluster collection not empty");
-        currentItemId = 0;
-        idToItemMap.clear();
-    }
-
     public boolean isEmpty() {
         return currentContig == null;
+    }
+
+    private int registerItem(final T item) {
+        final int itemId = nextItemId++;
+        idToItemMap.put(itemId, item);
+        return itemId;
     }
 
     public void add(final T item) {
@@ -88,18 +106,13 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         if (!item.getContigA().equals(currentContig)) {
             flushClusters();
             currentContig = item.getContigA();
-            idToItemMap.put(currentItemId, item);
-            seedCluster(currentItemId);
-            currentItemId++;
+            seedCluster(registerItem(item));
             return;
         }
 
-        // Keep track of a unique id for each item
-        idToItemMap.put(currentItemId, item);
-        final List<Integer> clusterIdsToProcess = cluster(item);
+        final int itemId = registerItem(item);
+        final List<Integer> clusterIdsToProcess = cluster(itemId);
         processFinalizedClusters(clusterIdsToProcess);
-        deleteRedundantClusters();
-        currentItemId++;
     }
 
     public String getCurrentContig() {
@@ -108,182 +121,233 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
     /**
      * Add a new {@param <T>} to the current clusters and determine which are complete
-     * @param item to be added
+     * @param itemId
      * @return the IDs for clusters that are complete and ready for processing
      */
-    private List<Integer> cluster(final T item) {
-
+    private List<Integer> cluster(final Integer itemId) {
+        final T item = getItem(itemId);
         // Get list of item IDs from active clusters that cluster with this item
-        final Set<Long> linkedItemIds = idToItemMap.entrySet().stream()
-                .filter(other -> other.getKey().intValue() != currentItemId && clusterTogether(item, other.getValue()))
-                .map(Map.Entry::getKey)
+        final Set<Integer> linkedItems = idToClusterMap.values().stream().map(Cluster::getItemIds)
+                .flatMap(List::stream)
+                .distinct()
+                .filter(other -> !other.equals(itemId) && clusterTogether(item, getItem(other)))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
         // Find clusters to which this item belongs, and which active clusters we're definitely done with
-        int clusterIndex = 0;
         final List<Integer> clusterIdsToProcess = new ArrayList<>();
-        final List<Integer> clustersToAdd = new ArrayList<>();
-        final List<Integer> clustersToSeedWith = new ArrayList<>();
-        for (final Tuple2<SimpleInterval, List<Long>> cluster : currentClusters) {
-            final SimpleInterval clusterInterval = cluster._1;
-            final List<Long> clusterItemIds = cluster._2;
+        final List<Integer> clustersToAugment = new ArrayList<>();
+        final Set<List<Integer>> clustersToSeedWith = new HashSet<>();    // Use set to prevent creating duplicate clusters
+        for (final Map.Entry<Integer, Cluster> entry : idToClusterMap.entrySet()) {
+            final Integer clusterIndex = entry.getKey();
+            final Cluster cluster = entry.getValue();
+            final SimpleInterval clusterInterval = cluster.getInterval();
+            final List<Integer> clusterItems = cluster.getItemIds();
             if (getClusteringInterval(item, null).getStart() > clusterInterval.getEnd()) {
                 clusterIdsToProcess.add(clusterIndex);  //this cluster is complete -- process it when we're done
             } else {
                 if (clusteringType.equals(CLUSTERING_TYPE.MAX_CLIQUE)) {
-                    final int n = (int) clusterItemIds.stream().filter(linkedItemIds::contains).count();
-                    if (n == clusterItemIds.size()) {
-                        clustersToAdd.add(clusterIndex);
-                    } else if (n > 0) {
-                        clustersToSeedWith.add(clusterIndex);
+                    final List<Integer> linkedClusterItems = clusterItems.stream().filter(linkedItems::contains).collect(Collectors.toList());
+                    final int numLinkedItems = linkedClusterItems.size();
+                    if (numLinkedItems == clusterItems.size()) {
+                        clustersToAugment.add(clusterIndex);
+                    } else if (numLinkedItems > 0) {
+                        clustersToSeedWith.add(linkedClusterItems);
                     }
                 } else if (clusteringType.equals(CLUSTERING_TYPE.SINGLE_LINKAGE)) {
-                    final boolean matchesCluster = clusterItemIds.stream().anyMatch(linkedItemIds::contains);
+                    final boolean matchesCluster = clusterItems.stream().anyMatch(linkedItems::contains);
                     if (matchesCluster) {
-                        clustersToAdd.add(clusterIndex);
+                        clustersToAugment.add(clusterIndex);
                     }
                 } else {
                     throw new IllegalArgumentException("Clustering algorithm for type " + clusteringType.name() + " not implemented");
                 }
             }
-            clusterIndex++;
         }
 
-        // Add to item clusters
-        for (final int index : clustersToAdd) {
-            addToCluster(index, currentItemId);
+        // Add to or merge existing clusters
+        if (clusteringType.equals(CLUSTERING_TYPE.SINGLE_LINKAGE)) {
+            if (!clustersToAugment.isEmpty()) {
+                combineClusters(clustersToAugment, itemId);
+            }
+        } else {
+            for (final Integer clusterId : clustersToAugment) {
+                addToCluster(clusterId, itemId);
+            }
         }
-        // Create new clusters/cliques
-        for (final int index : clustersToSeedWith) {
-            seedWithExistingCluster(currentItemId, index, linkedItemIds);
+        // Create new clusters from subsets (max-clique only)
+        for (final List<Integer> seedItems : clustersToSeedWith) {
+            final Set<Integer> seedItemSet = new HashSet<>(seedItems);
+            // Check that this cluster is not a sub-cluster of any of the others being created
+            if (clustersToSeedWith.stream().anyMatch(c -> c != seedItems && isSubsetOf(seedItemSet, c))
+                    || clustersToAugment.stream()
+                        .map(idToClusterMap::get)
+                        .map(Cluster::getItemIds)
+                        .anyMatch(c -> c != seedItems && isSubsetOf(seedItemSet, c))) {
+                seedWithExistingCluster(itemId, seedItems);
+            }
         }
         // If there weren't any matches, create a new singleton cluster
-        if (clustersToAdd.isEmpty() && clustersToSeedWith.isEmpty()) {
-            seedCluster(currentItemId);
+        if (clustersToAugment.isEmpty() && clustersToSeedWith.isEmpty()) {
+            seedCluster(itemId);
         }
         return clusterIdsToProcess;
     }
 
+    private void combineClusters(final Collection<Integer> clusterIds, final Integer itemId) {
+        final List<Cluster> clusters = clusterIds.stream().map(this::getCluster).collect(Collectors.toList());
+        clusterIds.stream().forEach(idToClusterMap::remove);
+        final List<Integer> clusterItems = clusters.stream()
+                .map(Cluster::getItemIds)
+                .flatMap(List::stream)
+                .distinct()
+                .collect(Collectors.toList());
+        final List<Integer> newClusterItems = new ArrayList<>(clusterItems.size() + 1);
+        newClusterItems.addAll(clusterItems);
+        newClusterItems.add(itemId);
+        idToClusterMap.put(nextClusterId++, new Cluster(getClusteringInterval(newClusterItems), newClusterItems));
+    }
+
     private void processCluster(final int clusterIndex) {
-        final Tuple2<SimpleInterval, List<Long>> cluster = validateClusterIndex(clusterIndex);
-        final List<Long> clusterItemIds = cluster._2;
-        currentClusters.remove(clusterIndex);
-        final List<T> clusterItems = clusterItemIds.stream().map(idToItemMap::get).collect(Collectors.toList());
-        outputBuffer.add(flattenCluster(clusterItems));
+        final Cluster cluster = getCluster(clusterIndex);
+        idToClusterMap.remove(clusterIndex);
+        if (clusteringType == CLUSTERING_TYPE.SINGLE_LINKAGE || !isSubclusterOf(cluster, processedClusters)) {
+            outputBuffer.add(flattenCluster(cluster.getItemIds().stream().map(idToItemMap::get).collect(Collectors.toList())));
+            processedClusters.add(cluster);
+        }
     }
 
     private void processFinalizedClusters(final List<Integer> clusterIdsToProcess) {
-        final Set<Integer> activeClusterIds = IntStream.range(0, currentClusters.size()).boxed().collect(Collectors.toSet());
-        activeClusterIds.removeAll(clusterIdsToProcess);
-        final Set<Long> activeClusterItemIds = activeClusterIds.stream().flatMap(i -> currentClusters.get(i)._2.stream()).collect(Collectors.toSet());
-        final Set<Long> finalizedItemIds = clusterIdsToProcess.stream()
-                .flatMap(i -> currentClusters.get(i)._2.stream())
-                .filter(i -> !activeClusterItemIds.contains(i))
-                .collect(Collectors.toSet());
         for (int i = clusterIdsToProcess.size() - 1; i >= 0; i--) {
             processCluster(clusterIdsToProcess.get(i));
         }
-        finalizedItemIds.stream().forEach(idToItemMap::remove);
     }
 
-    private void deleteRedundantClusters() {
-        final Set<Integer> redundantClusterSet = new HashSet<>();
-        for (int i = 0; i < currentClusters.size(); i++) {
-            final Set<Long> clusterSetA = new HashSet<>(currentClusters.get(i)._2);
-            for (int j = 0; j < i; j++) {
-                final Set<Long> clusterSetB = new HashSet<>(currentClusters.get(j)._2);
-                if (clusterSetA.containsAll(clusterSetB)) {
-                    redundantClusterSet.add(j);
-                } else if (clusterSetA.size() != clusterSetB.size() && clusterSetB.containsAll(clusterSetA)) {
-                    redundantClusterSet.add(i);
-                }
+    private boolean isSubsetOf(final Set<Integer> items, final List<Integer> superSet) {
+        int numContains = 0;
+        for (final Integer item : superSet) {
+            if (items.contains(item)) {
+                numContains++;
             }
         }
-        final List<Integer> redundantClustersList = new ArrayList<>(redundantClusterSet);
-        redundantClustersList.sort(Comparator.naturalOrder());
-        for (int i = redundantClustersList.size() - 1; i >= 0; i--) {
-            currentClusters.remove((int)redundantClustersList.get(i));
+        return numContains == items.size();
+    }
+
+    private boolean isSubclusterOf(final Cluster cluster, final Collection<Cluster> clusterList) {
+        final Set<Integer> clusterItems = new HashSet<>(cluster.getItemIds());
+        for (final Cluster testCluster : clusterList) {
+            final List<Integer> testItems = testCluster.getItemIds();
+            if (isSubsetOf(clusterItems, testItems)) {
+                return true;
+            }
         }
+        return false;
     }
 
     private void flushClusters() {
-        while (!currentClusters.isEmpty()) {
-            processCluster(0);
+        final List<Integer> clustersToFlush = new ArrayList<>(idToClusterMap.keySet());
+        for (final Integer clusterId : clustersToFlush) {
+            processCluster(clusterId);
         }
-        resetItemIds();
+        idToItemMap.clear();
+        nextItemId = 0;
+        nextClusterId = 0;
     }
 
-    private void seedCluster(final long seedId) {
-        final T seed = validateItemIndex(seedId);
-        final List<Long> newCluster = new ArrayList<>(1);
-        newCluster.add(seedId);
-        currentClusters.add(new Tuple2<>(getClusteringInterval(seed, null), newCluster));
+    private void seedCluster(final Integer item) {
+        final List<Integer> newClusters = new ArrayList<>(1);
+        newClusters.add(item);
+        idToClusterMap.put(nextClusterId++, new Cluster(getClusteringInterval(getItem(item), null), newClusters));
     }
 
     /**
      * Create a new cluster
-     * @param seedId    itemId
-     * @param existingClusterIndex
-     * @param clusteringIds
+     * @param item
+     * @param seedItems
      */
-    private void seedWithExistingCluster(final Long seedId, final int existingClusterIndex, final Set<Long> clusteringIds) {
-        final T seed = validateItemIndex(seedId);
-        final List<Long> existingCluster = currentClusters.get(existingClusterIndex)._2;
-        final List<Long> validClusterIds = existingCluster.stream().filter(clusteringIds::contains).collect(Collectors.toList());
-        final List<Long> newCluster = new ArrayList<>(1 + validClusterIds.size());
-        newCluster.addAll(validClusterIds);
-        newCluster.add(seedId);
-        currentClusters.add(new Tuple2<>(getClusteringInterval(seed, currentClusters.get(existingClusterIndex)._1), newCluster));
+    private void seedWithExistingCluster(final Integer item, final List<Integer> seedItems) {
+        final List<Integer> newClusterItems = new ArrayList<>(1 + seedItems.size());
+        newClusterItems.addAll(seedItems);
+        newClusterItems.add(item);
+        final Cluster newCluster = new Cluster(getClusteringInterval(getItem(item), null), newClusterItems);
+
+        //Do not add duplicates
+        if (!idToClusterMap.entrySet().contains(newCluster)) {
+            idToClusterMap.put(nextClusterId++, newCluster);
+        }
     }
 
-    private T validateItemIndex(final long index) {
-        final T item = idToItemMap.get(index);
-        if (item == null) {
-            throw new IllegalArgumentException("Item id " + index + " not found in table");
+    protected Cluster getCluster(final int id) {
+        if (!idToClusterMap.containsKey(id)) {
+            throw new IllegalArgumentException("Specified cluster ID " + id + " does not exist.");
         }
-        if (!currentContig.equals(item.getContigA())) {
-            throw new IllegalArgumentException("Attempted to seed new cluster with item on contig " + item.getContigA() + " but the current contig is " + currentContig);
-        }
-        return item;
+        return idToClusterMap.get(id);
     }
 
-    private Tuple2<SimpleInterval, List<Long>> validateClusterIndex(final int index) {
-        if (index < 0 || index >= currentClusters.size()) {
-            throw new IllegalArgumentException("Specified cluster index " + index + " is out of range.");
+    protected T getItem(final int id) {
+        if (!idToItemMap.containsKey(id)) {
+            throw new IllegalArgumentException("Specified item ID " + id + " does not exist.");
         }
-        final Tuple2<SimpleInterval, List<Long>> cluster = currentClusters.get(index);
-        final List<Long> clusterItemIds = cluster._2;
-        if (clusterItemIds.isEmpty()) {
-            throw new IllegalArgumentException("Encountered empty cluster");
-        }
-        return cluster;
+        return idToItemMap.get(id);
     }
 
     /**
      * Add the item specified by {@param itemId} to the cluster specified by {@param clusterIndex}
      * and expand the clustering interval
-     * @param clusterIndex
+     * @param clusterId
      * @param itemId
      */
-    private void addToCluster(final int clusterIndex, final long itemId) {
-        final T item = idToItemMap.get(itemId);
-        if (item == null) {
-            throw new IllegalArgumentException("Item id " + item + " not found in table");
-        }
-        if (!currentContig.equals(item.getContigA())) {
-            throw new IllegalArgumentException("Attempted to add new item on contig " + item.getContigA() + " but the current contig is " + currentContig);
-        }
-        if (clusterIndex >= currentClusters.size()) {
-            throw new IllegalArgumentException("Specified cluster index " + clusterIndex + " is greater than the largest index.");
-        }
-        final Tuple2<SimpleInterval, List<Long>> cluster = currentClusters.get(clusterIndex);
-        final SimpleInterval clusterInterval = cluster._1;
-        final List<Long> clusterItems = cluster._2;
+    private void addToCluster(final int clusterId, final Integer itemId) {
+        final Cluster cluster = getCluster(clusterId);
+        final T item = getItem(itemId);
+        final SimpleInterval clusterInterval = cluster.getInterval();
+        final List<Integer> clusterItems = cluster.getItemIds();
         clusterItems.add(itemId);
         final SimpleInterval clusteringStartInterval = getClusteringInterval(item, clusterInterval);
         if (clusteringStartInterval.getStart() != clusterInterval.getStart() || clusteringStartInterval.getEnd() != clusterInterval.getEnd()) {
-            currentClusters.remove(clusterIndex);
-            currentClusters.add(clusterIndex, new Tuple2<>(clusteringStartInterval, clusterItems));
+            idToClusterMap.put(clusterId, new Cluster(clusteringStartInterval, clusterItems));
+        }
+    }
+
+    protected final class Cluster {
+        private final SimpleInterval interval;
+        private final List<Integer> itemIds;
+        private boolean collapsed;
+
+        public Cluster(final SimpleInterval interval, final List<Integer> itemIds) {
+            Utils.nonNull(interval);
+            Utils.nonNull(itemIds);
+            this.interval = interval;
+            this.itemIds = itemIds;
+            this.collapsed = false;
+        }
+
+        public boolean wasCollapsed() {
+            return collapsed;
+        }
+
+        public void setCollapsed(final boolean collapsed) {
+            this.collapsed = collapsed;
+        }
+
+        public SimpleInterval getInterval() {
+            return interval;
+        }
+
+        public List<Integer> getItemIds() {
+            return itemIds;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o.getClass().equals(Cluster.class))) return false;
+            Cluster cluster = (Cluster) o;
+            return Objects.equals(interval, cluster.interval) && Objects.equals(itemIds, cluster.itemIds);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(interval, itemIds);
         }
     }
 

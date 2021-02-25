@@ -21,7 +21,6 @@ import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
  * Creates multi-sample structural variant (SV) VCF from a collection of SV VCFs. Supported types include biallelic DEL,
@@ -121,7 +120,6 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
                       final ReadsContext readsContext,
                       final ReferenceContext referenceContext,
                       final FeatureContext featureContext) {
-        Utils.validate(variant.getNSamples() == 1, "VCFs must be single-sample");
         Utils.validate(variant.getNAlleles() == 2, "Records must be biallelic");
         final SVCallRecord record = sanitizeInputGenotypes(SVCallRecordUtils.create(variant));
         if (record.getPositionA() != currentPosition || !record.getContigA().equals(currentContig)) {
@@ -155,19 +153,9 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
     private Genotype sanitizeInputGenotype(final Genotype g) {
         final GenotypeBuilder builder = new GenotypeBuilder(g.getSampleName());
         builder.alleles(Arrays.asList(Allele.NO_CALL, Allele.NO_CALL));
-        final int value = SVCallRecord.isCarrier(g) ? GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE : GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE;
+        final int value = SVCallRecord.isCarrier(g) || SVCallRecord.isRawCall(g) ? GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE : GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE;
         builder.attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, value);
         return builder.make();
-    }
-
-    private Allele getReferenceAllele(final Collection<Allele> alleles) {
-        final List<Allele> refAlleles = alleles.stream().filter(Allele::isReference).collect(Collectors.toList());
-        if (refAlleles.isEmpty()) {
-            throw new UserException.BadInput("Record has no reference allele");
-        } else if (refAlleles.size() > 1) {
-            throw new UserException.BadInput("Record has multiple reference alleles");
-        }
-        return refAlleles.get(0);
     }
 
     private VariantContext createVariant(final SVCallRecord call) {

@@ -3,29 +3,24 @@ package org.broadinstitute.hellbender.tools.walkers.sv;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
-import htsjdk.variant.vcf.VCFFormatHeaderLine;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
-import htsjdk.variant.vcf.VCFHeaderLineType;
-import org.apache.commons.io.IOUtils;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.argparser.ExperimentalFeature;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
-import org.broadinstitute.hellbender.engine.*;
+import org.broadinstitute.hellbender.engine.FeatureContext;
+import org.broadinstitute.hellbender.engine.ReadsContext;
+import org.broadinstitute.hellbender.engine.ReferenceContext;
+import org.broadinstitute.hellbender.engine.VariantWalker;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.*;
-import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 
-import java.io.IOException;
-import java.nio.charset.Charset;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -70,31 +65,7 @@ import java.util.stream.Stream;
 @ExperimentalFeature
 @DocumentedFeature
 public final class SVCluster extends VariantWalker {
-    public static final String SPLIT_READ_LONG_NAME = "split-reads-file";
-    public static final String DISCORDANT_PAIRS_LONG_NAME = "discordant-pairs-file";
-    public static final String SAMPLE_COVERAGE_LONG_NAME = "sample-coverage";
-    public static final String MIN_SIZE_LONG_NAME = "min-size";
-    public static final String DEPTH_ONLY_INCLUDE_INTERVAL_OVERLAP_LONG_NAME = "depth-include-overlap";
-    public static final String MIN_DEPTH_SIZE_LONG_NAME = "min-depth-size";
     public static final String VARIANT_PREFIX_LONG_NAME = "variant-prefix";
-
-    @Argument(
-            doc = "Split reads evidence file",
-            fullName = SPLIT_READ_LONG_NAME
-    )
-    private GATKPath splitReadsFile;
-
-    @Argument(
-            doc = "Discordant pairs evidence file",
-            fullName = DISCORDANT_PAIRS_LONG_NAME
-    )
-    private GATKPath discordantPairsFile;
-
-    @Argument(
-            doc = "Tab-delimited table with sample IDs in the first column and expected per-base coverage per sample in the second column",
-            fullName = SAMPLE_COVERAGE_LONG_NAME
-    )
-    private GATKPath sampleCoverageFile;
 
     @Argument(
             doc = "Output VCF",
@@ -112,21 +83,13 @@ public final class SVCluster extends VariantWalker {
 
     private SAMSequenceDictionary dictionary;
     private VariantContextWriter writer;
-    private FeatureDataSource<SplitReadEvidence> splitReadSource;
-    private FeatureDataSource<DiscordantPairEvidence> discordantPairSource;
     private SVDepthOnlyCallDefragmenter defragmenter;
     private List<SVCallRecord> nonDepthRawCallsBuffer;
-    private SVClusterEngine clusterEngine;
-    private BreakpointRefiner breakpointRefiner;
-    private PairedEndAndSplitReadEvidenceAggregator evidenceCollector;
-    private SVCallRecordDeduplicator<SVCallRecordWithEvidence> deduplicator;
-    private Map<String,Double> sampleCoverageMap;
+    private SVClusterEngine singleLinkageEngine;
+    private SVClusterEngine maxCliqueEngine;
     private Set<String> samples;
     private String currentContig;
     private int numVariantsWritten = 0;
-
-    private final int SPLIT_READ_QUERY_LOOKAHEAD = 0;
-    private final int DISCORDANT_PAIR_QUERY_LOOKAHEAD = 0;
 
     @Override
     public void onTraversalStart() {
@@ -135,18 +98,16 @@ public final class SVCluster extends VariantWalker {
             throw new UserException("Reference sequence dictionary required");
         }
         samples = new LinkedHashSet<>(getHeaderForVariants().getSampleNamesInOrder());
-        loadSampleCoverage();
-        initializeSplitReadEvidenceDataSource();
-        initializeDiscordantPairDataSource();
 
         defragmenter = new SVDepthOnlyCallDefragmenter(dictionary);
         nonDepthRawCallsBuffer = new ArrayList<>();
-        clusterEngine = new SVClusterEngineNoCNV(dictionary, false, SVClusterEngine.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
-        breakpointRefiner = new BreakpointRefiner(sampleCoverageMap, dictionary);
-        evidenceCollector = new PairedEndAndSplitReadEvidenceAggregator(splitReadSource, discordantPairSource, dictionary, null);
 
-        final Function<Collection<SVCallRecordWithEvidence>,SVCallRecordWithEvidence> collapser = items -> SVCallRecordUtils.deduplicateWithRawCallAttributeWithEvidence(items, SVCallRecordUtils.ALLELE_COLLAPSER_DIPLOID_NO_CALL);
-        deduplicator = new SVCallRecordDeduplicator<>(collapser, dictionary);
+        singleLinkageEngine = new SVClusterEngineNoCNV(dictionary, true, SVClusterEngine.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
+        singleLinkageEngine.setDepthOnlyParams(new SVClusterEngine.DepthClusteringParameters(0.9, 0, 0));
+        singleLinkageEngine.setMixedParams(new SVClusterEngine.MixedClusteringParameters(0.9, 50, 50));
+        singleLinkageEngine.setEvidenceParams(new SVClusterEngine.EvidenceClusteringParameters(0.9, 50, 50));
+
+        maxCliqueEngine = new SVClusterEngineNoCNV(dictionary, false, SVClusterEngine.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
 
         writer = createVCFWriter(Paths.get(outputFile));
         writeVCFHeader();
@@ -158,45 +119,15 @@ public final class SVCluster extends VariantWalker {
         if (!defragmenter.isEmpty() || !nonDepthRawCallsBuffer.isEmpty()) {
             processClusters();
         }
-        writer.close();
-        return null;
+        return super.onTraversalSuccess();
     }
 
-    private void initializeSplitReadEvidenceDataSource() {
-        splitReadSource = new FeatureDataSource<>(
-                splitReadsFile.toString(),
-                "splitReadsFile",
-                SPLIT_READ_QUERY_LOOKAHEAD,
-                SplitReadEvidence.class,
-                cloudPrefetchBuffer,
-                cloudIndexPrefetchBuffer);
-    }
-
-    private void initializeDiscordantPairDataSource() {
-        discordantPairSource = new FeatureDataSource<>(
-                discordantPairsFile.toString(),
-                "discordantPairsFile",
-                DISCORDANT_PAIR_QUERY_LOOKAHEAD,
-                DiscordantPairEvidence.class,
-                cloudPrefetchBuffer,
-                cloudIndexPrefetchBuffer);
-    }
-
-    private void loadSampleCoverage() {
-        final String fileString = sampleCoverageFile.toString();
-        try {
-            sampleCoverageMap = IOUtils.readLines(BucketUtils.openFile(fileString), Charset.defaultCharset()).stream()
-                    .map(line -> line.split("\t"))
-                    .collect(Collectors.toMap(tokens -> tokens[0], tokens -> Double.valueOf(tokens[1])));
-        } catch (final IOException e) {
-            throw new UserException.CouldNotReadInputFile(fileString, e);
+    @Override
+    public void closeTool() {
+        super.closeTool();
+        if (writer != null) {
+            writer.close();
         }
-    }
-
-    private Genotype setCallGenotypeAlleles(final Genotype g) {
-        final GenotypeBuilder builder = new GenotypeBuilder(g);
-        builder.alleles(Arrays.asList(Allele.REF_N, Allele.NON_REF_ALLELE));
-        return builder.make();
     }
 
     @Override
@@ -206,7 +137,6 @@ public final class SVCluster extends VariantWalker {
         final ArrayList<Genotype> filteredGenotypeList = new ArrayList<>(originalCall.getGenotypes().size());
         originalCall.getGenotypes().stream()
                 .filter(SVCallRecord::isRawCall)
-                .map(this::setCallGenotypeAlleles)
                 .forEach(filteredGenotypeList::add);
         final GenotypesContext filteredGenotypes = GenotypesContext.create(filteredGenotypeList);
         final SVCallRecord call = SVCallRecordUtils.copyCallWithNewGenotypes(originalCall, filteredGenotypes);
@@ -228,32 +158,28 @@ public final class SVCluster extends VariantWalker {
     }
 
     private void processClusters() {
-        logger.info("Processing contig " + currentContig);
+        logger.info("Processing contig " + currentContig + "...");
         final Stream<SVCallRecord> defragmentedStream = defragmenter.getOutput().stream();
         final Stream<SVCallRecord> nonDepthStream = nonDepthRawCallsBuffer.stream()
                 .flatMap(SVCallRecordUtils::convertInversionsToBreakends);
         //Combine and sort depth and non-depth calls because they must be added in dictionary order
         Stream.concat(defragmentedStream, nonDepthStream)
                 .sorted(SVCallRecordUtils.getCallComparator(dictionary))
-                .forEachOrdered(clusterEngine::add);
+                .forEachOrdered(singleLinkageEngine::add);
         nonDepthRawCallsBuffer.clear();
-        logger.info("Clustering...");
-        final List<SVCallRecord> clusteredCalls = clusterEngine.getOutput();
-        logger.info("Aggregating evidence...");
-        final List<SVCallRecordWithEvidence> callsWithEvidence = evidenceCollector.collectEvidence(clusteredCalls);
-        logger.info("Filtering and refining breakpoints...");
-        final List<SVCallRecordWithEvidence> refinedCalls = callsWithEvidence.stream()
-                .map(breakpointRefiner::refineCall)
-                .sorted(SVCallRecordUtils.getCallComparator(dictionary))
-                .collect(Collectors.toList());
-        logger.info("Deduplicating variants...");
-        final List<SVCallRecordWithEvidence> finalCalls = deduplicator.deduplicateItems(refinedCalls);
+        logger.info("Clustering with single-linkage...");
+        final List<SVCallRecord> singleLinkageCalls = singleLinkageEngine.getOutput();
+
+        logger.info("Clustering with maximal clique...");
+        //singleLinkageCalls.stream().forEachOrdered(maxCliqueEngine::add); TODO
+        //final List<SVCallRecord> clusteredCalls = maxCliqueEngine.getOutput();
+
         logger.info("Writing to file...");
-        write(finalCalls);
-        logger.info("Contig " + currentContig + " successfully processed");
+        write(singleLinkageCalls);
+        logger.info("Contig " + currentContig + " completed");
     }
 
-    private void write(final List<SVCallRecordWithEvidence> calls) {
+    private void write(final List<SVCallRecord> calls) {
         calls.stream()
                 .sorted(SVCallRecordUtils.getCallComparator(dictionary))
                 .map(this::buildVariantContext)
@@ -266,22 +192,18 @@ public final class SVCluster extends VariantWalker {
         for (final VCFHeaderLine line : getHeaderForVariants().getMetaDataInInputOrder()) {
             header.addMetaDataLine(line);
         }
-        header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.START_SPLIT_READ_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Split read count at start of variant"));
-        header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.END_SPLIT_READ_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Split read count at end of variant"));
-        header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.DISCORDANT_PAIR_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Discordant pair count"));
         writer.writeHeader(header);
     }
 
-    public VariantContext buildVariantContext(final SVCallRecordWithEvidence call) {
+    public VariantContext buildVariantContext(final SVCallRecord call) {
         final Map<String, Object> nonCallAttributes = Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
         final List<Allele> missingAlleles = Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
         final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), missingAlleles, samples, nonCallAttributes);
         final String newId = String.format("%s%08x", variantPrefix, numVariantsWritten++);
-        final SVCallRecordWithEvidence finalCall = new SVCallRecordWithEvidence(newId, call.getContigA(), call.getPositionA(), call.getStrandA(), call.getContigB(),
+        final SVCallRecord finalCall = new SVCallRecord(newId, call.getContigA(), call.getPositionA(), call.getStrandA(), call.getContigB(),
                 call.getPositionB(), call.getStrandB(), call.getType(), call.getLength(), call.getAlgorithms(),
-                filledGenotypes, call.getStartSplitReadSites(), call.getEndSplitReadSites(), call.getDiscordantPairs(),
-                call.getCopyNumberDistribution());
-        return SVCallRecordUtils.createBuilderWithEvidence(finalCall).make();
+                filledGenotypes);
+        return SVCallRecordUtils.getVariantBuilder(finalCall).make();
     }
 
 }

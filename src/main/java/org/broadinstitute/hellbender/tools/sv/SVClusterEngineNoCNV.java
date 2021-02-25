@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.sv;
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.Utils;
 
 public class SVClusterEngineNoCNV extends SVClusterEngine {
 
@@ -10,40 +11,64 @@ public class SVClusterEngineNoCNV extends SVClusterEngine {
         super(dictionary);
     }
 
-    public SVClusterEngineNoCNV(final SAMSequenceDictionary dictionary, boolean depthOnly, BreakpointSummaryStrategy strategy) {
-        super(dictionary, depthOnly, strategy);
+    public SVClusterEngineNoCNV(final SAMSequenceDictionary dictionary, boolean singleLinkage, BreakpointSummaryStrategy strategy) {
+        super(dictionary, singleLinkage, strategy);
     }
 
     @Override
     protected boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
-        if (!a.getType().equals(b.getType())) {
+        if (!a.getType().equals(b.getType()) || a.getStrandA() != b.getStrandA() || a.getStrandB() != b.getStrandB()) {
             return false;
         }
-        final boolean depthOnlyA = isDepthOnlyCall(a);
-        final boolean depthOnlyB = isDepthOnlyCall(b);
-        if (depthOnlyA && depthOnlyB) {
-            return clusterTogetherBothDepthOnly(a, b);
-        } else if (depthOnlyA != depthOnlyB) {
-            return clusterTogetherMixedEvidence(a, b);
-        } else {
-            return clusterTogetherBothWithEvidence(a, b);
-        }
+        return super.clusterTogether(a, b);
     }
-
 
     // TODO optimize intervals
     @Override
     protected SimpleInterval getClusteringInterval(final SVCallRecord call, final SimpleInterval clusterMinStartInterval) {
-        final int padding = (int) Math.ceil(Math.max(Math.max(getEndpointClusteringPadding(call), call.getLength() * MIN_RECIPROCAL_OVERLAP_DEPTH), MIXED_CLUSTERING_WINDOW));
-        final int minStart = call.getPositionA() - padding;
-        final int maxStart = call.getPositionA() + padding;
-        final String currentContig = getCurrentContig();
+        final SimpleInterval itemInterval = getClusteringInterval(call);
         if (clusterMinStartInterval == null) {
-            return IntervalUtils.trimIntervalToContig(currentContig, minStart, maxStart, dictionary.getSequence(currentContig).getSequenceLength());
+            return itemInterval;
+        } else {
+            return restrictIntervalsForClustering(itemInterval, clusterMinStartInterval);
         }
-        //NOTE: this is an approximation -- best method would back calculate cluster bounds, then rederive start and end based on call + cluster
-        final int newMinStart = Math.min(minStart, clusterMinStartInterval.getStart());
-        final int newMaxStart = Math.max(maxStart, clusterMinStartInterval.getEnd());
-        return IntervalUtils.trimIntervalToContig(currentContig, newMinStart, newMaxStart, dictionary.getSequence(currentContig).getSequenceLength());
+    }
+
+    protected SimpleInterval restrictIntervalsForClustering(final SimpleInterval a, final SimpleInterval b) {
+        Utils.validateArg(a.getContig().equals(b.getContig()), "Intervals are on different contigs");
+        final int start;
+        final int end;
+        if (clusteringType.equals(CLUSTERING_TYPE.MAX_CLIQUE)) {
+            start = Math.max(a.getStart(), b.getStart());
+            end = Math.min(a.getEnd(), b.getEnd());
+        } else {
+            start = Math.min(a.getStart(), b.getStart());
+            end = Math.max(a.getEnd(), b.getEnd());
+        }
+        final String contig = a.getContig();
+        return IntervalUtils.trimIntervalToContig(contig, start, end, dictionary.getSequence(contig).getSequenceLength());
+    }
+
+    protected SimpleInterval getClusteringInterval(final SVCallRecord call) {
+        final String contig = call.getContigA();
+        final boolean isDepthOnly = isDepthOnlyCall(call);
+        // Reciprocal overlap window
+        final SimpleInterval overlapInterval;
+        if (call.isIntrachromosomal()) {
+            final int padding = Math.max(isDepthOnly ? depthOnlyParams.getPadding() : evidenceParams.getPadding(), mixedParams.getPadding());
+            final double overlap = Math.min(isDepthOnly ? depthOnlyParams.getReciprocalOverlap() : evidenceParams.getReciprocalOverlap(), mixedParams.getReciprocalOverlap());
+            final SimpleInterval spanningInterval = new SimpleInterval(contig, call.getPositionA(), call.getPositionB()).expandWithinContig(padding, dictionary);
+            final int start = (int) (spanningInterval.getEnd() - (spanningInterval.getLengthOnReference() / overlap));
+            final int end = (int) (spanningInterval.getStart() + (1.0 - overlap) * spanningInterval.getLengthOnReference());
+            overlapInterval = IntervalUtils.trimIntervalToContig(contig, start, end, dictionary.getSequence(contig).getSequenceLength());
+        } else {
+            overlapInterval = call.getPositionAInterval();
+        }
+
+        // Breakend proximity window
+        final int window = Math.max(isDepthOnly ? depthOnlyParams.getWindow() : evidenceParams.getWindow(), mixedParams.getWindow());
+        final SimpleInterval breakendInterval = call.getPositionAInterval().expandWithinContig(window, dictionary);
+
+        return restrictIntervalsForClustering(overlapInterval, breakendInterval);
     }
 }

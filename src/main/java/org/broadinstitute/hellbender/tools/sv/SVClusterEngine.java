@@ -11,17 +11,11 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class SVClusterEngine extends LocatableClusterEngine<SVCallRecord> {
-
-    protected static final double MIN_RECIPROCAL_OVERLAP_DEPTH = 0.8;
-    public static final double BREAKEND_CLUSTERING_WINDOW_FRACTION = 0.5;
-    public static final int MIN_BREAKEND_CLUSTERING_WINDOW = 50;
-    public static final int MAX_BREAKEND_CLUSTERING_WINDOW = 300;
-    public static final int MIXED_CLUSTERING_WINDOW = 2000;
-    protected BreakpointSummaryStrategy breakpointSummaryStrategy;
 
     public enum BreakpointSummaryStrategy {
         /**
@@ -46,14 +40,118 @@ public class SVClusterEngine extends LocatableClusterEngine<SVCallRecord> {
 
     }
 
+    protected static class ClusteringParameters {
+
+        private final double reciprocalOverlap;
+        private final int window;
+        private final int padding;
+        private final boolean overlapAndProximity;
+        private final BiPredicate<SVCallRecord, SVCallRecord> validRecordsPredicate;
+
+        public ClusteringParameters(final double reciprocalOverlap, final int window, final int padding,
+                                    final boolean overlapAndProximity,
+                                    final BiPredicate<SVCallRecord, SVCallRecord> validRecordsPredicate) {
+            this.reciprocalOverlap = reciprocalOverlap;
+            this.window = window;
+            this.padding = padding;
+            this.overlapAndProximity = overlapAndProximity;
+            this.validRecordsPredicate = validRecordsPredicate;
+        }
+
+        public double getReciprocalOverlap() {
+            return reciprocalOverlap;
+        }
+
+        public int getWindow() {
+            return window;
+        }
+
+        public int getPadding() {
+            return padding;
+        }
+
+        public boolean isOverlapAndProximity() {
+            return overlapAndProximity;
+        }
+
+        public boolean isValidPair(final SVCallRecord a, final SVCallRecord b) {
+            return validRecordsPredicate.test(a, b);
+        }
+    }
+
+    public static class DepthClusteringParameters extends ClusteringParameters {
+        public DepthClusteringParameters(final double reciprocalOverlap, final int window, final int padding) {
+            super(reciprocalOverlap, window, padding, false, (a,b) -> isDepthOnlyCall(a) && isDepthOnlyCall(b));
+        }
+    }
+
+    public static class EvidenceClusteringParameters extends ClusteringParameters {
+        public EvidenceClusteringParameters(final double reciprocalOverlap, final int window, final int padding) {
+            super(reciprocalOverlap, window, padding, true, (a,b) -> !isDepthOnlyCall(a) && !isDepthOnlyCall(b));
+        }
+    }
+
+    public static class MixedClusteringParameters extends ClusteringParameters {
+        public MixedClusteringParameters(final double reciprocalOverlap, final int window, final int padding) {
+            super(reciprocalOverlap, window, padding, true, (a,b) -> isDepthOnlyCall(a) != isDepthOnlyCall(b));
+        }
+    }
+
+    protected static final ClusteringParameters DEFAULT_DEPTH_ONLY_PARAMS =
+            new DepthClusteringParameters(0.8, 1000, 0);
+    protected static final ClusteringParameters DEFAULT_MIXED_PARAMS =
+            new MixedClusteringParameters(0.5, 1000, 1000);
+    protected static final ClusteringParameters DEFAULT_EVIDENCE_PARAMS =
+            new EvidenceClusteringParameters(0.5, 500, 500);
+
+    protected ClusteringParameters depthOnlyParams;
+    protected ClusteringParameters mixedParams;
+    protected ClusteringParameters evidenceParams;
+    protected BreakpointSummaryStrategy breakpointSummaryStrategy;
+
     public SVClusterEngine(final SAMSequenceDictionary dictionary) {
         super(dictionary, CLUSTERING_TYPE.MAX_CLIQUE, null);
         this.breakpointSummaryStrategy = BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END;
+        this.depthOnlyParams = DEFAULT_DEPTH_ONLY_PARAMS;
+        this.mixedParams = DEFAULT_MIXED_PARAMS;
+        this.evidenceParams = DEFAULT_EVIDENCE_PARAMS;
     }
 
-    public SVClusterEngine(final SAMSequenceDictionary dictionary, boolean depthOnly, BreakpointSummaryStrategy strategy) {
-        super(dictionary, depthOnly ? CLUSTERING_TYPE.SINGLE_LINKAGE : CLUSTERING_TYPE.MAX_CLIQUE, null);
+    public SVClusterEngine(final SAMSequenceDictionary dictionary, boolean singleLinkage, BreakpointSummaryStrategy strategy) {
+        super(dictionary, singleLinkage ? CLUSTERING_TYPE.SINGLE_LINKAGE : CLUSTERING_TYPE.MAX_CLIQUE, null);
         this.breakpointSummaryStrategy = strategy;
+    }
+
+    public BreakpointSummaryStrategy getBreakpointSummaryStrategy() {
+        return breakpointSummaryStrategy;
+    }
+
+    public void setBreakpointSummaryStrategy(BreakpointSummaryStrategy breakpointSummaryStrategy) {
+        this.breakpointSummaryStrategy = breakpointSummaryStrategy;
+    }
+
+    public ClusteringParameters getDepthOnlyParams() {
+        return depthOnlyParams;
+    }
+
+    public void setDepthOnlyParams(ClusteringParameters depthOnlyParams) {
+        this.depthOnlyParams = depthOnlyParams;
+    }
+
+    public ClusteringParameters getMixedParams() {
+        return mixedParams;
+    }
+
+    public void setMixedParams(ClusteringParameters mixedParams) {
+        this.mixedParams = mixedParams;
+    }
+
+    public ClusteringParameters getEvidenceParams() {
+        return evidenceParams;
+    }
+
+    public void setEvidenceParams(ClusteringParameters evidenceParams) {
+        this.evidenceParams = evidenceParams;
     }
 
     /**
@@ -123,14 +221,38 @@ public class SVClusterEngine extends LocatableClusterEngine<SVCallRecord> {
     @Override
     protected boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
         //if (!a.getType().equals(b.getType())) return false;  //TODO: do we need to keep dels and dupes separate?
-        final boolean depthOnlyA = isDepthOnlyCall(a);
-        final boolean depthOnlyB = isDepthOnlyCall(b);
-        if (depthOnlyA && depthOnlyB) {
-            return clusterTogetherBothDepthOnly(a, b);
-        } else if (depthOnlyA != depthOnlyB) {
-            return clusterTogetherMixedEvidence(a, b);
+        return clusterTogetherWithParams(a, b, evidenceParams)
+                || clusterTogetherWithParams(a, b, depthOnlyParams)
+                || clusterTogetherWithParams(a, b, mixedParams);
+    }
+
+    protected boolean clusterTogetherWithParams(final SVCallRecord a, final SVCallRecord b, final ClusteringParameters params) {
+        // Type check
+        if (!params.isValidPair(a, b)) return false;
+
+        // Contigs match
+        if (!(a.getContigA().equals(b.getContigA()) && a.getContigB().equals(b.getContigB()))) return false;
+
+        // Reciprocal overlap
+        final boolean isOverlap;
+        if (a.isIntrachromosomal()) {
+            final SimpleInterval intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionB()).expandWithinContig(params.getPadding(), dictionary);
+            final SimpleInterval intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionB()).expandWithinContig(params.getPadding(), dictionary);
+            isOverlap = IntervalUtils.isReciprocalOverlap(intervalA, intervalB, params.getReciprocalOverlap());
         } else {
-            return clusterTogetherBothWithEvidence(a, b);
+            isOverlap = true;
+        }
+
+        // Breakend proximity
+        final SimpleInterval intervalA1 = a.getPositionAInterval().expandWithinContig(params.getWindow(), dictionary);
+        final SimpleInterval intervalB1 = b.getPositionAInterval().expandWithinContig(params.getWindow(), dictionary);
+        final SimpleInterval intervalA2 = a.getPositionBInterval().expandWithinContig(params.getWindow(), dictionary);
+        final SimpleInterval intervalB2 = b.getPositionBInterval().expandWithinContig(params.getWindow(), dictionary);
+        final boolean isProximity = intervalA1.overlaps(intervalB1) && intervalA2.overlaps(intervalB2);
+        if (params.isOverlapAndProximity()) {
+            return isOverlap && isProximity;
+        } else {
+            return isOverlap || isProximity;
         }
     }
 
@@ -146,11 +268,12 @@ public class SVClusterEngine extends LocatableClusterEngine<SVCallRecord> {
         final int minStart;
         final int maxStart;
         if (isDepthOnlyCall(call)) {
-            minStart = (int) (call.getPositionB() - call.getLength() / MIN_RECIPROCAL_OVERLAP_DEPTH); //start of an overlapping event such that call represents (reciprocal overlap) of that event
-            maxStart = (int) (call.getPositionA() + (1.0 - MIN_RECIPROCAL_OVERLAP_DEPTH) * call.getLength());
+            minStart = (int) (call.getPositionB() - call.getLength() / depthOnlyParams.getReciprocalOverlap()); //start of an overlapping event such that call represents (reciprocal overlap) of that event
+            maxStart = (int) (call.getPositionA() + (1.0 - depthOnlyParams.getReciprocalOverlap()) * call.getLength());
         } else {
-            minStart = call.getPositionA() - MAX_BREAKEND_CLUSTERING_WINDOW;
-            maxStart = call.getPositionA() + MAX_BREAKEND_CLUSTERING_WINDOW;
+            final int window = Math.max(mixedParams.getPadding(), Math.max(mixedParams.getWindow(), Math.max(evidenceParams.getWindow(), evidenceParams.getPadding())));
+            minStart = call.getPositionA() - window;
+            maxStart = call.getPositionA() + window;
         }
         final String currentContig = getCurrentContig();
         if (clusterMinStartInterval == null) {
@@ -168,65 +291,11 @@ public class SVClusterEngine extends LocatableClusterEngine<SVCallRecord> {
         return new SVCallRecordDeduplicator<>(collapser, dictionary);
     }
 
-    protected boolean clusterTogetherBothDepthOnly(final SVCallRecord a, final SVCallRecord b) {
-        if (!a.getContigA().equals(a.getContigB()) || !b.getContigA().equals(b.getContigB())) {
-            throw new IllegalArgumentException("Attempted to cluster depth-only calls with endpoints on different contigs");
-        }
-        final SimpleInterval intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionB());
-        final SimpleInterval intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionB());
-        return IntervalUtils.isReciprocalOverlap(intervalA, intervalB, MIN_RECIPROCAL_OVERLAP_DEPTH);
-    }
-
-    protected boolean clusterTogetherBothWithEvidence(final SVCallRecord a, final SVCallRecord b) {
-        // Reject if one is intrachromosomal and the other isn't
-        final boolean intrachromosomalA = a.getContigA().equals(a.getContigB());
-        final boolean intrachromosomalB = b.getContigB().equals(b.getContigB());
-        if (intrachromosomalA != intrachromosomalB) return false;
-
-        // Matching endpoints
-        final SimpleInterval intervalAStart =  getStartClusteringInterval(a);
-        final SimpleInterval intervalAEnd =  getEndClusteringInterval(a);
-        final SimpleInterval intervalBStart =  getStartClusteringInterval(b);
-        final SimpleInterval intervalBEnd =  getEndClusteringInterval(b);
-        return intervalAStart.overlaps(intervalBStart) && intervalAEnd.overlaps(intervalBEnd);
-    }
-
-    protected boolean clusterTogetherMixedEvidence(final SVCallRecord a, final SVCallRecord b) {
-        final boolean intrachromosomalA = a.getContigA().equals(a.getContigB());
-        final boolean intrachromosomalB = b.getContigA().equals(b.getContigB());
-        if (!(intrachromosomalA && intrachromosomalB)) return false;
-        if (!a.getContigA().equals(b.getContigA())) return false;
-        return Math.abs(a.getPositionA() - b.getPositionA()) < MIXED_CLUSTERING_WINDOW
-                && Math.abs(a.getPositionB() - b.getPositionB()) < MIXED_CLUSTERING_WINDOW;
-    }
-
-    private SimpleInterval getStartClusteringInterval(final SVCallRecord call) {
-        if (this.genomicToBinMap == null) {
-            final int padding = getEndpointClusteringPadding(call);
-            return call.getPositionAInterval().expandWithinContig(padding, dictionary);
-        } else {
-            return call.getPositionAInterval();
-        }
-    }
-
-    protected SimpleInterval getEndClusteringInterval(final SVCallRecord call) {
-        if (this.genomicToBinMap == null) {
-            final int padding = getEndpointClusteringPadding(call);
-            return call.getPositionBInterval().expandWithinContig(padding, dictionary);
-        } else {
-            return call.getPositionBInterval();
-        }
-    }
-
-    protected int getEndpointClusteringPadding(final SVCallRecord call) {
-        return (int) Math.min(MAX_BREAKEND_CLUSTERING_WINDOW, Math.max(MIN_BREAKEND_CLUSTERING_WINDOW, BREAKEND_CLUSTERING_WINDOW_FRACTION * call.getLength()));
-    }
-
     public static boolean isDepthOnlyCall(final SVCallRecord call) {
         return call.getAlgorithms().size() == 1 && call.getAlgorithms().get(0).equals(GATKSVVCFConstants.DEPTH_ALGORITHM);
     }
 
-    public static double getMinReciprocalOverlap() {
-        return MIN_RECIPROCAL_OVERLAP_DEPTH;
+    public double getMinReciprocalOverlap() {
+        return depthOnlyParams.getReciprocalOverlap();
     }
 }
