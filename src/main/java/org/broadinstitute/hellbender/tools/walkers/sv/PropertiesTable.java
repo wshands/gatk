@@ -418,6 +418,20 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         saveLabelsEncoding(outputStream);
     }
 
+    public void saveTable(final OutputStream outputStream) throws IOException {
+        final JSONObject jsonObject = new JSONObject();
+        for(final Property property : properties) {
+            jsonObject.put(property.name, property.getJSON());
+        }
+        outputStream.write(jsonObject.toJSONString().getBytes());
+    }
+
+    public void save(final OutputStream outputStream) throws IOException {
+        saveDataEncoding(outputStream);
+        outputStream.write("\n".getBytes());
+        saveTable(outputStream);
+    }
+
     protected static long getNumTrue(final boolean[] values) {
         return getNumTrue(values, values.length);
     }
@@ -602,6 +616,8 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
             throw new IllegalArgumentException("getAsLong() not defined for Property of type " + this.getClass().getSimpleName());
         }
 
+        abstract public JSONArray getJSON();
+
         public void append(final Object value) {
             if(getNumRows() >= getAllocatedRows()) {
                 setAllocatedRows(FastMath.max(DEFAULT_INITIAL_NUM_ALLOCATED_ROWS, getNumRows() * ALLOCATION_GROWTH_SCALE));
@@ -630,6 +646,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         BooleanArrProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (boolean[]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            IntStream.range(0, numRows).forEach(i -> jsonArray.add(values[i]));
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             return values[rowIndex] ? 1F : 0F;
         }
@@ -661,6 +682,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         BooleanMatProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (boolean[][]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            IntStream.range(0, numRows).forEach(i -> jsonArray.add(values[i]));
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             return values[rowIndex][hyperIndex] ? 1F : 0F;
         }
@@ -697,6 +723,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         IntArrProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (int[]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) { return values[rowIndex]; }
         @Override public int getAsInt(final int rowIndex, final int hyperIndex) { return this.values[rowIndex]; }
         @Override public int getAllocatedRows() { return values.length; }
@@ -716,6 +747,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         IntMatProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (int[][]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             return values[rowIndex][hyperIndex];
         }
@@ -743,6 +779,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         LongArrProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (long[]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) { return values[rowIndex]; }
         @Override public long getAsLong(final int rowIndex, final int hyperIndex) { return this.values[rowIndex]; }
         @Override public int getAllocatedRows() { return values.length; }
@@ -762,6 +803,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         LongMatProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (long[][]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             return values[rowIndex][hyperIndex];
         }
@@ -789,6 +835,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         FloatArrProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (float[]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            IntStream.range(0, numRows).forEach(i -> jsonArray.add(values[i]));
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) { return values[rowIndex]; }
         @Override public int getAllocatedRows() { return values.length; }
         @Override public void setAllocatedRowsUnguarded(final int numRows) {
@@ -807,6 +858,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         FloatMatProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (float[][]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            IntStream.range(0, numRows).forEach(i -> jsonArray.add(values[i]));
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             return values[rowIndex][hyperIndex];
         }
@@ -833,6 +889,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         DoubleArrProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (double[]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) { return (float)values[rowIndex]; }
         @Override public int getAllocatedRows() { return values.length; }
         @Override public void setAllocatedRowsUnguarded(final int numRows) {
@@ -851,6 +912,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         DoubleMatProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (double[][]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             return (float)values[rowIndex][hyperIndex];
         }
@@ -874,6 +940,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         StringArrProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (String[]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             throw new IllegalArgumentException("String properties cannot be converted to Float, they must be one-hot-encoded");
         }
@@ -924,6 +995,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         StringMatProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (String[][]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             throw new IllegalArgumentException("String properties cannot be converted to Float, they must be one-hot-encoded");
         }
@@ -995,6 +1071,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         StringSetArrProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (Object[]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             throw new IllegalArgumentException("String properties cannot be converted to Float, they must be one-hot-encoded");
         }
@@ -1049,6 +1130,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         StringSetMatProperty(final String name) { this(name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS); }
 
         @Override public void set(Object values) { this.values = (Set<String>[][]) values; }
+        @Override public JSONArray getJSON() {
+            final JSONArray jsonArray = new JSONArray();
+            Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
+            return jsonArray;
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             throw new IllegalArgumentException("String properties cannot be converted to Float, they must be one-hot-encoded");
         }
