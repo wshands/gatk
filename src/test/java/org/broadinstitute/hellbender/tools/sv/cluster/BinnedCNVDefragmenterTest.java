@@ -1,5 +1,7 @@
-package org.broadinstitute.hellbender.tools.sv;
+package org.broadinstitute.hellbender.tools.sv.cluster;
 
+import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
+import org.broadinstitute.hellbender.tools.sv.SVTestUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -9,11 +11,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-public class SVDepthOnlyCallDefragmenterTest {
+public class BinnedCNVDefragmenterTest {
 
-    private final static SVDepthOnlyCallDefragmenter defaultDefragmenter = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict);
+    private final static CNVDefragmenter defaultDefragmenter = new CNVDefragmenter(SVTestUtils.dict);
 
-    private final static SVDepthOnlyCallDefragmenter singleSampleDefragmenter = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, SVDepthOnlyCallDefragmenter.DEFAULT_PADDING_FRACTION, 0, SVTestUtils.targetIntervals);
+    private final static CNVDefragmenter singleSampleDefragmenter = new BinnedCNVDefragmenter(SVTestUtils.dict, CNVDefragmenter.DEFAULT_PADDING_FRACTION, 0, SVTestUtils.targetIntervals);
 
     @Test
     public void testFlattenCluster() {
@@ -87,7 +89,7 @@ public class SVDepthOnlyCallDefragmenterTest {
     @Test
     public void testAdd() {
         //single-sample merge case, ignoring sample sets
-        final SVDepthOnlyCallDefragmenter temp1 = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, SVDepthOnlyCallDefragmenter.DEFAULT_PADDING_FRACTION, 0.8, SVTestUtils.targetIntervals);
+        final CNVDefragmenter temp1 = new CNVDefragmenter(SVTestUtils.dict, CNVDefragmenter.DEFAULT_PADDING_FRACTION, 0.8, SVTestUtils.targetIntervals);
         temp1.add(SVTestUtils.call1);
         //force new cluster by adding a non-overlapping event
         temp1.add(SVTestUtils.call3);
@@ -96,7 +98,7 @@ public class SVDepthOnlyCallDefragmenterTest {
         Assert.assertEquals(SVTestUtils.call1, output1.get(0));
         Assert.assertEquals(SVTestUtils.call3, output1.get(1));
 
-        final SVDepthOnlyCallDefragmenter temp2 = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict, SVDepthOnlyCallDefragmenter.DEFAULT_PADDING_FRACTION, 0.8, SVTestUtils.targetIntervals);
+        final CNVDefragmenter temp2 = new CNVDefragmenter(SVTestUtils.dict, CNVDefragmenter.DEFAULT_PADDING_FRACTION, 0.8, SVTestUtils.targetIntervals);
         temp2.add(SVTestUtils.call1);
         temp2.add(SVTestUtils.call2);  //should overlap after padding
         //force new cluster by adding a call on another contig
@@ -108,7 +110,7 @@ public class SVDepthOnlyCallDefragmenterTest {
         Assert.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
 
         //cohort case, checking sample set overlap
-        final SVDepthOnlyCallDefragmenter temp3 = new SVDepthOnlyCallDefragmenter(SVTestUtils.dict);
+        final CNVDefragmenter temp3 = new CNVDefragmenter(SVTestUtils.dict);
         temp3.add(SVTestUtils.call1);
         temp3.add(SVTestUtils.sameBoundsSampleMismatch);
         final List<SVCallRecord> output3 = temp3.getOutput();

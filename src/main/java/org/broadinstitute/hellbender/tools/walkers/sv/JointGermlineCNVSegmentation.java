@@ -24,7 +24,10 @@ import org.broadinstitute.hellbender.tools.copynumber.PostprocessGermlineCNVCall
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFHeaderLines;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVUtils;
-import org.broadinstitute.hellbender.tools.sv.*;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecordWithEvidence;
+import org.broadinstitute.hellbender.tools.sv.cluster.*;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
@@ -93,7 +96,7 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
     private SortedSet<String> samples;
     private VariantContextWriter vcfWriter;
     private SAMSequenceDictionary dictionary;
-    private SVDepthOnlyCallDefragmenter defragmenter;
+    private CNVDefragmenter defragmenter;
     private SVClusterEngine clusterEngine;
     private List<GenomeLoc> callIntervals;
     private String currentContig;
@@ -128,16 +131,16 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
     private int minQS = 20;
 
     @Argument(fullName = MIN_SAMPLE_NUM_OVERLAP_LONG_NAME, doc = "Minimum fraction of common samples for two variants to cluster together", optional = true)
-    private double minSampleSetOverlap = 0.8;
+    private double minSampleSetOverlap = CNVDefragmenter.getDefaultSampleOverlap();
 
     @Argument(fullName = DEFRAGMENTATION_PADDING_LONG_NAME, doc = "Extend events by this fraction on each side when determining overlap to merge", optional = true)
-    private double defragmentationPadding = SVDepthOnlyCallDefragmenter.getDefaultPaddingFraction();
+    private double defragmentationPadding = CNVDefragmenter.getDefaultPaddingFraction();
 
     @Argument(fullName = MODEL_CALL_INTERVALS_LONG_NAME, doc = "gCNV model intervals created with the FilterIntervals tool.")
     private GATKPath modelCallIntervalList = null;
 
     @Argument(fullName = BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME, doc = "Strategy to use for choosing a representative value for a breakpoint cluster.", optional = true)
-    private SVClusterEngine.BreakpointSummaryStrategy breakpointSummaryStrategy = SVClusterEngine.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END;
+    private SVCollapser.BreakpointSummaryStrategy breakpointSummaryStrategy = SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END;
 
     @Argument(fullName= StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName=StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
@@ -185,8 +188,13 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
         final GenomeLocParser parser = new GenomeLocParser(this.dictionary);
         setIntervals(parser);
 
-        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary, minSampleSetOverlap, defragmentationPadding, callIntervals);
-        clusterEngine = new SVClusterEngine(dictionary, true, breakpointSummaryStrategy);
+        if (callIntervals == null) {
+            defragmenter = new BinnedCNVDefragmenter(dictionary, minSampleSetOverlap, defragmentationPadding, callIntervals);
+        } else {
+            defragmenter = new CNVDefragmenter(dictionary, minSampleSetOverlap, defragmentationPadding);
+        }
+        clusterEngine = new SVClusterEngine<>(dictionary, LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE,
+                true, (new CNVCollapser(breakpointSummaryStrategy))::collapse);
 
         vcfWriter = getVCFWriter();
 

@@ -1,7 +1,10 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.variant.variantcontext.*;
+import htsjdk.variant.variantcontext.Allele;
+import htsjdk.variant.variantcontext.Genotype;
+import htsjdk.variant.variantcontext.GenotypesContext;
+import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
@@ -17,7 +20,9 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.VariantWalker;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
-import org.broadinstitute.hellbender.tools.sv.*;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
+import org.broadinstitute.hellbender.tools.sv.cluster.*;
 
 import java.nio.file.Paths;
 import java.util.*;
@@ -81,12 +86,24 @@ public final class SVCluster extends VariantWalker {
     )
     private String variantPrefix = "SV_x";
 
+    @Argument(fullName = JointGermlineCNVSegmentation.MIN_SAMPLE_NUM_OVERLAP_LONG_NAME,
+            doc = "Minimum fraction of common samples for two variants to cluster together",
+            optional = true
+    )
+    private double minSampleSetOverlap = CNVDefragmenter.getDefaultSampleOverlap();
+
+    @Argument(fullName = JointGermlineCNVSegmentation.DEFRAGMENTATION_PADDING_LONG_NAME,
+            doc = "Extend events by this fraction on each side when determining overlap to merge",
+            optional = true
+    )
+    private double defragmentationPadding = CNVDefragmenter.getDefaultPaddingFraction();
+
     private SAMSequenceDictionary dictionary;
     private VariantContextWriter writer;
-    private SVDepthOnlyCallDefragmenter defragmenter;
+    private CNVDefragmenter defragmenter;
     private List<SVCallRecord> nonDepthRawCallsBuffer;
-    private SVClusterEngine singleLinkageEngine;
-    private SVClusterEngine maxCliqueEngine;
+    private SVClusterEngine<SVCallRecord> singleLinkageEngine;
+    private SVClusterEngine<SVCallRecord> maxCliqueEngine;
     private Set<String> samples;
     private String currentContig;
     private int numVariantsWritten = 0;
@@ -99,15 +116,16 @@ public final class SVCluster extends VariantWalker {
         }
         samples = new LinkedHashSet<>(getHeaderForVariants().getSampleNamesInOrder());
 
-        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary);
+        defragmenter = new CNVDefragmenter(dictionary, 0.5, 0.9);
         nonDepthRawCallsBuffer = new ArrayList<>();
 
-        singleLinkageEngine = new SVClusterEngineNoCNV(dictionary, true, SVClusterEngine.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
+        final SVCollapser<SVCallRecord> collapser = new SVPreprocessingRecordCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
+        singleLinkageEngine = new SVClusterEngine<>(dictionary, LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE, false, collapser::collapse);
         singleLinkageEngine.setDepthOnlyParams(new SVClusterEngine.DepthClusteringParameters(0.9, 0, 0));
         singleLinkageEngine.setMixedParams(new SVClusterEngine.MixedClusteringParameters(0.9, 50, 50));
         singleLinkageEngine.setEvidenceParams(new SVClusterEngine.EvidenceClusteringParameters(0.9, 50, 50));
 
-        maxCliqueEngine = new SVClusterEngineNoCNV(dictionary, false, SVClusterEngine.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
+        maxCliqueEngine = new SVClusterEngine<>(dictionary, LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE, false, collapser::collapse);
 
         writer = createVCFWriter(Paths.get(outputFile));
         writeVCFHeader();
@@ -150,7 +168,7 @@ public final class SVCluster extends VariantWalker {
         }
 
         // Add to clustering buffers
-        if (SVDepthOnlyCallDefragmenter.isDepthOnlyCall(call)) {
+        if (CNVDefragmenter.isDepthOnlyCall(call)) {
             defragmenter.add(call);
         } else {
             nonDepthRawCallsBuffer.add(call);

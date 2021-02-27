@@ -4,6 +4,7 @@ import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.util.Tuple;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.apache.commons.math3.special.Gamma;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;

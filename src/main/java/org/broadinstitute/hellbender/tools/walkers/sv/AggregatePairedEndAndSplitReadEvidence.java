@@ -1,7 +1,9 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.variant.variantcontext.*;
+import htsjdk.variant.variantcontext.Allele;
+import htsjdk.variant.variantcontext.GenotypesContext;
+import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFFormatHeaderLine;
 import htsjdk.variant.vcf.VCFHeader;
@@ -18,13 +20,15 @@ import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.*;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVCollapser;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVDeduplicator;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVPreprocessingRecordWithEvidenceCollapser;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -105,10 +109,9 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
     private VariantContextWriter writer;
     private FeatureDataSource<SplitReadEvidence> splitReadSource;
     private FeatureDataSource<DiscordantPairEvidence> discordantPairSource;
-    private SVDepthOnlyCallDefragmenter defragmenter;
     private BreakpointRefiner breakpointRefiner;
     private PairedEndAndSplitReadEvidenceAggregator evidenceCollector;
-    private SVCallRecordDeduplicator<SVCallRecordWithEvidence> deduplicator;
+    private SVDeduplicator<SVCallRecordWithEvidence> deduplicator;
     private Map<String,Double> sampleCoverageMap;
     private Set<String> samples;
     private int numVariantsWritten = 0;
@@ -129,12 +132,10 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
         initializeSplitReadEvidenceDataSource();
         initializeDiscordantPairDataSource();
 
-        defragmenter = new SVDepthOnlyCallDefragmenter(dictionary);
         breakpointRefiner = new BreakpointRefiner(sampleCoverageMap, dictionary);
         evidenceCollector = new PairedEndAndSplitReadEvidenceAggregator(splitReadSource, discordantPairSource, dictionary, null);
-
-        final Function<Collection<SVCallRecordWithEvidence>,SVCallRecordWithEvidence> collapser = items -> SVCallRecordUtils.deduplicateWithRawCallAttributeWithEvidence(items, SVCallRecordUtils.ALLELE_COLLAPSER_DIPLOID_NO_CALL);
-        deduplicator = new SVCallRecordDeduplicator<>(collapser, dictionary);
+        final SVCollapser<SVCallRecordWithEvidence> collapser = new SVPreprocessingRecordWithEvidenceCollapser(null);
+        deduplicator = new SVDeduplicator<>(collapser::collapse, dictionary);
         records = new ArrayList<>();
 
         writer = createVCFWriter(Paths.get(outputFile));
@@ -196,7 +197,7 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
                 .sorted(SVCallRecordUtils.getCallComparator(dictionary))
                 .collect(Collectors.toList());
         logger.info("Deduplicating variants...");
-        final List<SVCallRecordWithEvidence> finalCalls = deduplicator.deduplicateItems(refinedCalls);
+        final List<SVCallRecordWithEvidence> finalCalls = deduplicator.deduplicateSortedItems(refinedCalls);
         logger.info("Writing to file...");
         write(finalCalls);
 
@@ -232,5 +233,4 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
                 call.getCopyNumberDistribution());
         return SVCallRecordUtils.createBuilderWithEvidence(finalCall).make();
     }
-
 }

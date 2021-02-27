@@ -1,7 +1,10 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.variant.variantcontext.*;
+import htsjdk.variant.variantcontext.Allele;
+import htsjdk.variant.variantcontext.GenotypesContext;
+import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
 import org.broadinstitute.barclay.argparser.Argument;
@@ -15,12 +18,14 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFHeaderLines;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
-import org.broadinstitute.hellbender.tools.sv.SVCallRecordDeduplicator;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVCollapser;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVDeduplicator;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVPreprocessingRecordCollapser;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
-import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Creates multi-sample structural variant (SV) VCF from a collection of SV VCFs. Supported types include biallelic DEL,
@@ -87,7 +92,7 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
     private List<SVCallRecord> records;
     private Set<String> samples;
     private SAMSequenceDictionary dictionary;
-    private SVCallRecordDeduplicator<SVCallRecord> deduplicator;
+    private SVDeduplicator<SVCallRecord> deduplicator;
 
     private String currentContig;
     private int currentPosition = 0;
@@ -103,9 +108,8 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
         samples = getSamplesForVariants();
         writer = createVCFWriter(outputFile);
         writer.writeHeader(createVcfHeader());
-
-        final Function<Collection<SVCallRecord>, SVCallRecord> collapser = items -> SVCallRecordUtils.deduplicateWithRawCallAttribute(items, SVCallRecordUtils.ALLELE_COLLAPSER_DIPLOID_NO_CALL);
-        deduplicator = new SVCallRecordDeduplicator<>(collapser, dictionary);
+        final SVCollapser<SVCallRecord> collapser = new SVPreprocessingRecordCollapser(null);
+        deduplicator = new SVDeduplicator<>(collapser::collapse, dictionary);
     }
 
     @Override
@@ -145,17 +149,9 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
     }
 
     private SVCallRecord sanitizeInputGenotypes(final SVCallRecord record) {
-        final ArrayList<Genotype> genotypes = new ArrayList<>(record.getGenotypes().size());
-        record.getGenotypes().stream().map(this::sanitizeInputGenotype).forEach(genotypes::add);
-        return SVCallRecordUtils.copyCallWithNewGenotypes(record, GenotypesContext.create(genotypes));
-    }
-
-    private Genotype sanitizeInputGenotype(final Genotype g) {
-        final GenotypeBuilder builder = new GenotypeBuilder(g.getSampleName());
-        builder.alleles(Arrays.asList(Allele.NO_CALL, Allele.NO_CALL));
-        final int value = SVCallRecord.isCarrier(g) || SVCallRecord.isRawCall(g) ? GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE : GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE;
-        builder.attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, value);
-        return builder.make();
+        // Saves memory
+        final GenotypesContext nonRefGenotypes = GenotypesContext.copy(record.getGenotypes().stream().filter(g -> SVCallRecord.isRawCall(g) || SVCallRecord.isCarrier(g)).collect(Collectors.toList()));
+        return SVCallRecordUtils.copyCallWithNewGenotypes(record, nonRefGenotypes);
     }
 
     private VariantContext createVariant(final SVCallRecord call) {
@@ -185,4 +181,5 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
 
         return header;
     }
+
 }

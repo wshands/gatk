@@ -1,19 +1,15 @@
-package org.broadinstitute.hellbender.tools.sv;
+package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import org.broadinstitute.hellbender.utils.GenomeLoc;
-import org.broadinstitute.hellbender.utils.GenomeLocParser;
+import org.broadinstitute.hellbender.tools.sv.SVLocatable;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public abstract class LocatableClusterEngine<T extends SVLocatable> {
-
-    protected final TreeMap<GenomeLoc, Integer> genomicToBinMap;
-    protected final List<GenomeLoc> coverageIntervals;
-    final GenomeLocParser parser;
 
     public enum CLUSTERING_TYPE {
         SINGLE_LINKAGE,
@@ -21,12 +17,11 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     }
 
     protected final SAMSequenceDictionary dictionary;
+    private final Function<Collection<T>, T> collapser; // Flattens clusters into a single representative item for output
     private Map<Integer, Cluster> idToClusterMap; // Active clusters
-    private final List<Cluster> processedClusters; // Processed clusters, needed for redundancy check
     private final List<T> outputBuffer;
     protected final CLUSTERING_TYPE clusteringType;
     private String currentContig;
-
     private final Map<Integer, T> idToItemMap;
     private int nextItemId;
     private int nextClusterId;
@@ -34,37 +29,38 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
     public LocatableClusterEngine(final SAMSequenceDictionary dictionary,
                                   final CLUSTERING_TYPE clusteringType,
-                                  final List<GenomeLoc> coverageIntervals) {
-        this.dictionary = dictionary;
+                                  final Function<Collection<T>, T> collapser) {
+        this.dictionary = Utils.nonNull(dictionary);
         this.clusteringType = clusteringType;
-        this.idToClusterMap = new HashMap<>();
-        this.processedClusters = new LinkedList<>();
-        this.outputBuffer = new ArrayList<>();
+        this.collapser = Utils.nonNull(collapser);
+        idToClusterMap = new HashMap<>();
+        outputBuffer = new ArrayList<>();
         currentContig = null;
-
         idToItemMap = new HashMap<>();
         nextItemId = 0;
         nextClusterId = 0;
-
-        parser = new GenomeLocParser(this.dictionary);
-        if (coverageIntervals != null) {
-            this.coverageIntervals = coverageIntervals;
-            genomicToBinMap = new TreeMap<>();
-            for (int i = 0; i < coverageIntervals.size(); i++) {
-                genomicToBinMap.put(coverageIntervals.get(i),i);
-            }
-        } else {
-            genomicToBinMap = null;
-            this.coverageIntervals = null;
-        }
     }
 
     abstract protected boolean clusterTogether(final T a, final T b);
-    abstract protected SimpleInterval getClusteringInterval(final T item, final SimpleInterval currentClusterInterval);
-    abstract protected T flattenCluster(final Collection<T> cluster);
-    abstract protected SVDeduplicator<T> getDeduplicator();
+    abstract protected SimpleInterval getClusteringInterval(final T item);
 
-    protected SimpleInterval getClusteringInterval(final Collection<Integer> itemIds) {
+    protected SimpleInterval getClusteringInterval(final T item, final SimpleInterval clusterMinStartInterval) {
+        final SimpleInterval itemInterval = getClusteringInterval(item);
+        if (clusterMinStartInterval == null) {
+            return itemInterval;
+        } else {
+            return restrictIntervalsForClustering(itemInterval, clusterMinStartInterval);
+        }
+    }
+
+    protected final SimpleInterval restrictIntervalsForClustering(final SimpleInterval a, final SimpleInterval b) {
+        Utils.validateArg(a.getContig().equals(b.getContig()), "Intervals are on different contigs");
+        final int start = Math.min(a.getStart(), b.getStart());
+        final int end = Math.max(a.getEnd(), b.getEnd());
+        return new SimpleInterval(a.getContig(), start, end);
+    }
+
+    protected final SimpleInterval getClusteringInterval(final Collection<Integer> itemIds) {
         Utils.nonNull(itemIds);
         Utils.nonEmpty(itemIds);
         final List<T> items = itemIds.stream().map(this::getItem).collect(Collectors.toList());
@@ -78,30 +74,24 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return new SimpleInterval(contigA.get(0), minStart, maxEnd);
     }
 
-    public List<T> getOutput() {
+    public final List<T> getOutput() {
         flushClusters();
-        final List<T> output;
-        if (clusteringType == CLUSTERING_TYPE.MAX_CLIQUE) {
-            output = getDeduplicator().deduplicateItems(outputBuffer);
-        } else {
-            output = new ArrayList<>(outputBuffer);
-        }
+        final List<T> output = new ArrayList<>(outputBuffer);
         outputBuffer.clear();
         return output;
     }
 
-    public boolean isEmpty() {
-        return currentContig == null;
+    public final boolean isEmpty() {
+        return outputBuffer.isEmpty();
     }
 
-    private int registerItem(final T item) {
+    private final int registerItem(final T item) {
         final int itemId = nextItemId++;
         idToItemMap.put(itemId, item);
         return itemId;
     }
 
-    public void add(final T item) {
-
+    public final void add(final T item) {
         // Start a new cluster if on a new contig
         if (!item.getContigA().equals(currentContig)) {
             flushClusters();
@@ -109,13 +99,12 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
             seedCluster(registerItem(item));
             return;
         }
-
         final int itemId = registerItem(item);
         final List<Integer> clusterIdsToProcess = cluster(itemId);
         processFinalizedClusters(clusterIdsToProcess);
     }
 
-    public String getCurrentContig() {
+    public final String getCurrentContig() {
         return currentContig;
     }
 
@@ -124,7 +113,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
      * @param itemId
      * @return the IDs for clusters that are complete and ready for processing
      */
-    private List<Integer> cluster(final Integer itemId) {
+    private final List<Integer> cluster(final Integer itemId) {
         final T item = getItem(itemId);
         // Get list of item IDs from active clusters that cluster with this item
         final Set<Integer> linkedItems = idToClusterMap.values().stream().map(Cluster::getItemIds)
@@ -193,7 +182,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return clusterIdsToProcess;
     }
 
-    private void combineClusters(final Collection<Integer> clusterIds, final Integer itemId) {
+    private final void combineClusters(final Collection<Integer> clusterIds, final Integer itemId) {
         final List<Cluster> clusters = clusterIds.stream().map(this::getCluster).collect(Collectors.toList());
         clusterIds.stream().forEach(idToClusterMap::remove);
         final List<Integer> clusterItems = clusters.stream()
@@ -207,22 +196,19 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         idToClusterMap.put(nextClusterId++, new Cluster(getClusteringInterval(newClusterItems), newClusterItems));
     }
 
-    private void processCluster(final int clusterIndex) {
+    private final void processCluster(final int clusterIndex) {
         final Cluster cluster = getCluster(clusterIndex);
         idToClusterMap.remove(clusterIndex);
-        if (clusteringType == CLUSTERING_TYPE.SINGLE_LINKAGE || !isSubclusterOf(cluster, processedClusters)) {
-            outputBuffer.add(flattenCluster(cluster.getItemIds().stream().map(idToItemMap::get).collect(Collectors.toList())));
-            processedClusters.add(cluster);
-        }
+        outputBuffer.add(collapser.apply(cluster.getItemIds().stream().map(idToItemMap::get).collect(Collectors.toList())));
     }
 
-    private void processFinalizedClusters(final List<Integer> clusterIdsToProcess) {
+    private final void processFinalizedClusters(final List<Integer> clusterIdsToProcess) {
         for (int i = clusterIdsToProcess.size() - 1; i >= 0; i--) {
             processCluster(clusterIdsToProcess.get(i));
         }
     }
 
-    private boolean isSubsetOf(final Set<Integer> items, final List<Integer> superSet) {
+    private final boolean isSubsetOf(final Set<Integer> items, final List<Integer> superSet) {
         int numContains = 0;
         for (final Integer item : superSet) {
             if (items.contains(item)) {
@@ -232,18 +218,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return numContains == items.size();
     }
 
-    private boolean isSubclusterOf(final Cluster cluster, final Collection<Cluster> clusterList) {
-        final Set<Integer> clusterItems = new HashSet<>(cluster.getItemIds());
-        for (final Cluster testCluster : clusterList) {
-            final List<Integer> testItems = testCluster.getItemIds();
-            if (isSubsetOf(clusterItems, testItems)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void flushClusters() {
+    private final void flushClusters() {
         final List<Integer> clustersToFlush = new ArrayList<>(idToClusterMap.keySet());
         for (final Integer clusterId : clustersToFlush) {
             processCluster(clusterId);
@@ -253,7 +228,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         nextClusterId = 0;
     }
 
-    private void seedCluster(final Integer item) {
+    private final void seedCluster(final Integer item) {
         final List<Integer> newClusters = new ArrayList<>(1);
         newClusters.add(item);
         idToClusterMap.put(nextClusterId++, new Cluster(getClusteringInterval(getItem(item), null), newClusters));
@@ -264,7 +239,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
      * @param item
      * @param seedItems
      */
-    private void seedWithExistingCluster(final Integer item, final List<Integer> seedItems) {
+    private final void seedWithExistingCluster(final Integer item, final List<Integer> seedItems) {
         final List<Integer> newClusterItems = new ArrayList<>(1 + seedItems.size());
         newClusterItems.addAll(seedItems);
         newClusterItems.add(item);
@@ -276,14 +251,14 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         }
     }
 
-    protected Cluster getCluster(final int id) {
+    protected final Cluster getCluster(final int id) {
         if (!idToClusterMap.containsKey(id)) {
             throw new IllegalArgumentException("Specified cluster ID " + id + " does not exist.");
         }
         return idToClusterMap.get(id);
     }
 
-    protected T getItem(final int id) {
+    protected final T getItem(final int id) {
         if (!idToItemMap.containsKey(id)) {
             throw new IllegalArgumentException("Specified item ID " + id + " does not exist.");
         }
@@ -296,7 +271,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
      * @param clusterId
      * @param itemId
      */
-    private void addToCluster(final int clusterId, final Integer itemId) {
+    private final void addToCluster(final int clusterId, final Integer itemId) {
         final Cluster cluster = getCluster(clusterId);
         final T item = getItem(itemId);
         final SimpleInterval clusterInterval = cluster.getInterval();
@@ -308,25 +283,15 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         }
     }
 
-    protected final class Cluster {
+    private static final class Cluster {
         private final SimpleInterval interval;
         private final List<Integer> itemIds;
-        private boolean collapsed;
 
         public Cluster(final SimpleInterval interval, final List<Integer> itemIds) {
             Utils.nonNull(interval);
             Utils.nonNull(itemIds);
             this.interval = interval;
             this.itemIds = itemIds;
-            this.collapsed = false;
-        }
-
-        public boolean wasCollapsed() {
-            return collapsed;
-        }
-
-        public void setCollapsed(final boolean collapsed) {
-            this.collapsed = collapsed;
         }
 
         public SimpleInterval getInterval() {
