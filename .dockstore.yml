@@ -57,7 +57,7 @@ workflows:
        branches:
          - master
          - ah_var_store
-         - mmt_reduce_mem
+         - mmt_nocalls
    - name: funcotator
      subclass: WDL
      primaryDescriptorPath: /scripts/funcotator_wdl/funcotator.wdl
