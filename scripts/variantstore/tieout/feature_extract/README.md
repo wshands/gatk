@@ -99,6 +99,7 @@ gatk --java-options "-Xms8g -Xdebug -Xrunjdwp:transport=dt_socket,address=5005,s
   -L chr1:602222
 ```
 
+If you're not kcibul, you can also pass in the reference like so (amending your path to gatk if needed): `reference="~/gatk/src/test/resources/large/Homo_sapiens_assembly38.fasta.gz"`
 
 
 
