@@ -9,9 +9,9 @@ The 35 sample gVCF used for this analysis are listed in `warp_samples.tsv`
 Get a shard of pre-hard filtered extracted data from the WARP run:
 
 ```bash
-WORFLOW_ID=68026724-7fdc-4a0e-bcfa-6a5e4a86cc0a
-gsutil cp gs://broad-dsp-spec-ops-cromwell-execution/JointGenotyping/${WORKFLOW_ID}/call-TotallyRadicalGatherVcfs/shard-0/*.gnarly.vcf.gz bq_validation_35.0.gnarly.vcf.gz
-gunzip bq_validation_35.0.gnarly.vcf.gz
+WORKFLOW_ID=68026724-7fdc-4a0e-bcfa-6a5e4a86cc0a
+gsutil cp gs://broad-dsp-spec-ops-cromwell-execution/JointGenotyping/${WORKFLOW_ID}/call-TotallyRadicalGatherVcfs/shard-0/*.gnarly.vcf.gz bq_validation_v5_35.0.gnarly.vcf.gz
+# gunzip bq_validation_v5_35.0.gnarly.vcf.gz
 ```
 
 Extract the same region from BQ (using the `spec-ops-aou.kc_acmg_tieout_v6` which was loaded with spanning deletions in the VET for tieout purposes).  The interval below is the same interval as shard-0 from gnarly.
@@ -29,14 +29,17 @@ gatk --java-options "-Xmx4g" \
         --project-id spec-ops-aou
 ```
 
-From there WARP pipeline, there are two places we could get our source files from with different caveats:
+If you're not kcibul, you can also pass in the reference like so (amending your path to gatk if needed): `-R ~/gatk/src/test/resources/large/Homo_sapiens_assembly38.fasta.gz`
+
+
+Note: From the WARP pipeline, there are two places we could get our source files from with different caveats:
 
 
 1. The input to VQSR -- this is sites-only and the final input, so it would be perfect EXCEPT that it has had hard-filtering applied also which includes ExcessHet which is not currently part of the BQ process
 
 2. The inputs to the scatered HardFilterAndMakeSitesOnlyVcf, which is not sites-only (which just makes it bigger) and is scattered... but has not been hard filtered yet.  Interestingly enough... this is turns out to be the same file that we used to compare the cohort extract.
 
-We are starting with option (2) which can be found at the following path:
+We are starting with option (2) which can be found at the following path (instructions above):
 
 gs://broad-dsp-spec-ops-cromwell-execution/JointGenotyping/${WORKFLOW_ID}/call-TotallyRadicalGatherVcfs/shard-0/bq_validation_v5_35.0.gnarly.vcf.gz
 
