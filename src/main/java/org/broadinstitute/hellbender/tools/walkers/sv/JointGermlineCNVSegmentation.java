@@ -26,7 +26,6 @@ import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFHeaderLines;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVUtils;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
-import org.broadinstitute.hellbender.tools.sv.SVCallRecordWithEvidence;
 import org.broadinstitute.hellbender.tools.sv.cluster.*;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedSampleList;
@@ -97,7 +96,7 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
     private VariantContextWriter vcfWriter;
     private SAMSequenceDictionary dictionary;
     private CNVDefragmenter defragmenter;
-    private SVClusterEngine clusterEngine;
+    private SVClusterEngine<SVCallRecord> clusterEngine;
     private List<GenomeLoc> callIntervals;
     private String currentContig;
     private SampleDB sampleDB;
@@ -258,9 +257,9 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
             final SVCallRecord record = SVCallRecordUtils.createDepthOnlyFromGCNVWithOriginalGenotypes(vc, minQS);
             if (record != null) {
                 if (!isMultiSampleInput) {
-                    defragmenter.add(new SVCallRecordWithEvidence(record));
+                    defragmenter.add(record);
                 } else {
-                    clusterEngine.add(new SVCallRecordWithEvidence(record));
+                    clusterEngine.add(record);
                 }
             }
         }

@@ -139,9 +139,9 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
     private FeatureDataSource<SplitReadEvidence> splitReadSource;
     private FeatureDataSource<DiscordantPairEvidence> discordantPairSource;
     private BreakpointRefiner breakpointRefiner;
-    private CachingSVEvidenceAggregator discordantPairCollector;
-    private CachingSVEvidenceAggregator startSplitCollector;
-    private CachingSVEvidenceAggregator endSplitCollector;
+    private CachingSVEvidenceAggregator<DiscordantPairEvidence> discordantPairCollector;
+    private CachingSVEvidenceAggregator<SplitReadEvidence> startSplitCollector;
+    private CachingSVEvidenceAggregator<SplitReadEvidence> endSplitCollector;
     private SVDeduplicator<SVCallRecordWithEvidence> deduplicator;
     private Map<String,Double> sampleCoverageMap;
     private Set<String> samples;
