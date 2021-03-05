@@ -159,52 +159,36 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
         }
         samples = new LinkedHashSet<>(getHeaderForVariants().getSampleNamesInOrder());
 
-        if (discordantPairsFile == null && splitReadsFile == null) {
+        if (!splitReadCollectionEnabled() && !discordantPairCollectionEnabled()) {
             throw new UserException.BadInput("At least one evidence file must be provided");
         }
-        if (discordantPairsFile != null) {
-            initializeDiscordantPairDataSource();
-            discordantPairCollector = new DiscordantPairEvidenceAggregator(discordantPairSource, dictionary, progressMeter, innerWindow, outerWindow);
+        if (discordantPairCollectionEnabled()) {
+            initializeDiscordantPairCollection();
         }
-        if (splitReadsFile != null) {
-            if (sampleCoverageFile == null) {
-                throw new UserException.BadInput("Sample coverage table is required when a split read evidence file is present");
-            }
-            initializeSplitReadEvidenceDataSource();
-            loadSampleCoverage();
-            startSplitCollector = new SplitReadEvidenceAggregator(splitReadSource, dictionary, progressMeter, splitReadWindow, true);
-            endSplitCollector = new SplitReadEvidenceAggregator(splitReadSource, dictionary, progressMeter, splitReadWindow, false);
-            breakpointRefiner = new BreakpointRefiner(sampleCoverageMap, dictionary);
-            final SVCollapser<SVCallRecordWithEvidence> collapser = new SVPreprocessingRecordWithEvidenceCollapser(null);
-            deduplicator = new SVDeduplicator<>(collapser::collapse, dictionary);
+        if (splitReadCollectionEnabled()) {
+            initializeSplitReadCollection();
         }
         records = new ArrayList<>();
         writer = createVCFWriter(Paths.get(outputFile));
         writeVCFHeader();
     }
 
-    @Override
-    public void closeTool() {
-        super.closeTool();
-        if (splitReadSource != null) {
-            splitReadSource.close();
-        }
-        if (discordantPairSource != null) {
-            discordantPairSource.close();
-        }
-        if (writer != null) {
-            writer.close();
-        }
+    private void initializeDiscordantPairCollection() {
+        initializeDiscordantPairDataSource();
+        discordantPairCollector = new DiscordantPairEvidenceAggregator(discordantPairSource, dictionary, progressMeter, innerWindow, outerWindow);
     }
 
-    private void initializeSplitReadEvidenceDataSource() {
-        splitReadSource = new FeatureDataSource<>(
-                splitReadsFile.toString(),
-                "splitReadsFile",
-                SPLIT_READ_QUERY_LOOKAHEAD,
-                SplitReadEvidence.class,
-                cloudPrefetchBuffer,
-                cloudIndexPrefetchBuffer);
+    private void initializeSplitReadCollection() {
+        if (sampleCoverageFile == null) {
+            throw new UserException.BadInput("Sample coverage table is required when a split read evidence file is present");
+        }
+        initializeSplitReadEvidenceDataSource();
+        loadSampleCoverage();
+        startSplitCollector = new SplitReadEvidenceAggregator(splitReadSource, dictionary, progressMeter, splitReadWindow, true);
+        endSplitCollector = new SplitReadEvidenceAggregator(splitReadSource, dictionary, progressMeter, splitReadWindow, false);
+        breakpointRefiner = new BreakpointRefiner(sampleCoverageMap, dictionary);
+        final SVCollapser<SVCallRecordWithEvidence> collapser = new SVPreprocessingRecordWithEvidenceCollapser(null);
+        deduplicator = new SVDeduplicator<>(collapser::collapse, dictionary);
     }
 
     private void initializeDiscordantPairDataSource() {
@@ -213,6 +197,16 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
                 "discordantPairsFile",
                 DISCORDANT_PAIR_QUERY_LOOKAHEAD,
                 DiscordantPairEvidence.class,
+                cloudPrefetchBuffer,
+                cloudIndexPrefetchBuffer);
+    }
+
+    private void initializeSplitReadEvidenceDataSource() {
+        splitReadSource = new FeatureDataSource<>(
+                splitReadsFile.toString(),
+                "splitReadsFile",
+                SPLIT_READ_QUERY_LOOKAHEAD,
+                SplitReadEvidence.class,
                 cloudPrefetchBuffer,
                 cloudIndexPrefetchBuffer);
     }
@@ -229,6 +223,20 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
     }
 
     @Override
+    public void closeTool() {
+        super.closeTool();
+        if (splitReadSource != null) {
+            splitReadSource.close();
+        }
+        if (discordantPairSource != null) {
+            discordantPairSource.close();
+        }
+        if (writer != null) {
+            writer.close();
+        }
+    }
+
+    @Override
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
         records.add(new SVCallRecordWithEvidence(SVCallRecordUtils.create(variant)));
@@ -239,31 +247,23 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
         Stream<SVCallRecordWithEvidence> recordStream = records.stream();
 
         // Get PE evidence
-        if (discordantPairCollector != null) {
+        if (discordantPairCollectionEnabled()) {
             logger.info("Aggregating discordant pair evidence...");
             recordStream = discordantPairCollector.collectEvidence(recordStream.collect(Collectors.toList()));
         }
 
         // Get SR evidence
-        if (startSplitCollector != null && endSplitCollector != null) {
+        if (splitReadCollectionEnabled()) {
             logger.info("Aggregating start position split-read evidence...");
             recordStream = startSplitCollector.collectEvidence(recordStream.collect(Collectors.toList()));
             logger.info("Aggregating end position split-read evidence...");
-            final List<SVCallRecordWithEvidence> endSortedRecords = recordStream
-                    .sorted(SVCallRecordUtils.getSVLocatableComparatorByEnds(dictionary))
-                    .collect(Collectors.toList());
+            // Sort by end position to minimize cache misses
+            recordStream = recordStream.sorted(SVCallRecordUtils.getSVLocatableComparatorByEnds(dictionary));
             recordStream = endSplitCollector.collectEvidence(recordStream.collect(Collectors.toList()));
-        }
-
-        // Refine breakpoints
-        if (breakpointRefiner != null) {
-            recordStream = recordStream.map(r -> breakpointRefiner.refineCall(r));
-        }
-
-        // Sort and deduplicate
-        recordStream = recordStream.sorted(SVCallRecordUtils.getCallComparator(dictionary));
-        if (deduplicator != null) {
-            logger.info("Sorting and deduplicating records...");
+            // Refine breakpoints and clean up
+            recordStream = recordStream.map(r -> breakpointRefiner.refineCall(r))
+                    .sorted(SVCallRecordUtils.getCallComparator(dictionary));
+            logger.info("Refining breakpoints, sorting, and eduplicating records...");
             recordStream = deduplicator.deduplicateSortedItems(recordStream.collect(Collectors.toList())).stream();
         }
 
@@ -283,10 +283,22 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
         for (final VCFHeaderLine line : getHeaderForVariants().getMetaDataInInputOrder()) {
             header.addMetaDataLine(line);
         }
-        header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.START_SPLIT_READ_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Split read count at start of variant"));
-        header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.END_SPLIT_READ_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Split read count at end of variant"));
-        header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.DISCORDANT_PAIR_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Discordant pair count"));
+        if (splitReadCollectionEnabled()) {
+            header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.START_SPLIT_READ_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Split read count at start of variant"));
+            header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.END_SPLIT_READ_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Split read count at end of variant"));
+        }
+        if (discordantPairCollectionEnabled()) {
+            header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.DISCORDANT_PAIR_COUNT_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Discordant pair count"));
+        }
         writer.writeHeader(header);
+    }
+
+    private boolean splitReadCollectionEnabled() {
+        return splitReadsFile != null;
+    }
+
+    private boolean discordantPairCollectionEnabled() {
+        return splitReadsFile != null;
     }
 
     public VariantContext buildVariantContext(final SVCallRecordWithEvidence call) {
