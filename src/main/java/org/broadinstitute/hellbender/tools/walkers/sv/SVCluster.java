@@ -9,6 +9,7 @@ import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
 import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.argparser.ExperimentalFeature;
 import org.broadinstitute.barclay.help.DocumentedFeature;
@@ -141,6 +142,7 @@ public final class SVCluster extends VariantWalker {
     )
     private double defragmentationPadding = CNVDefragmenter.getDefaultPaddingFraction();
 
+    @ArgumentCollection
     private final SVClusterEngineArgumentsCollection clusterParameters = new SVClusterEngineArgumentsCollection();
 
     private SAMSequenceDictionary dictionary;
