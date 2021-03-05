@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.broadinstitute.hellbender.tools.sv.SVLocatable;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -115,6 +116,9 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
      */
     private final List<Integer> cluster(final Integer itemId) {
         final T item = getItem(itemId);
+        if (item.getType().equals(StructuralVariantType.DEL) && item.getPositionA() == 11212835) {
+            int x = 0;
+        }
         // Get list of item IDs from active clusters that cluster with this item
         final Set<Integer> linkedItems = idToClusterMap.values().stream().map(Cluster::getItemIds)
                 .flatMap(List::stream)
@@ -153,6 +157,33 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
             }
         }
 
+        // Create new clusters from subsets (max-clique only)
+        if (!clustersToSeedWith.isEmpty()) {
+            final List<Set<Integer>> augmentedClusterItemLists = clustersToAugment.stream()
+                    .map(idToClusterMap::get)
+                    .map(Cluster::getItemIds)
+                    .map(HashSet::new)
+                    .collect(Collectors.toList());
+            final List<Set<Integer>> triggeredClusterItemSets = new ArrayList<>(clustersToSeedWith.size() + augmentedClusterItemLists.size());
+            triggeredClusterItemSets.addAll(clustersToSeedWith.stream().map(HashSet::new).collect(Collectors.toList()));
+            triggeredClusterItemSets.addAll(augmentedClusterItemLists);
+            triggeredClusterItemSets.sort(Comparator.comparingInt(Set::size));
+            for (int i = 0; i < clustersToSeedWith.size(); i++) {
+                final Set<Integer> seedItems = triggeredClusterItemSets.get(i);
+                // Check that this cluster is not a sub-cluster of any of the others being created
+                boolean isSubset = false;
+                for (int j = i + 1; j < triggeredClusterItemSets.size(); j++) {
+                    if (isSubsetOf(seedItems, triggeredClusterItemSets.get(j))) {
+                        isSubset = true;
+                        break;
+                    }
+                }
+                if (!isSubset) {
+                    seedWithExistingCluster(itemId, seedItems);
+                }
+            }
+        }
+
         // Add to or merge existing clusters
         if (clusteringType.equals(CLUSTERING_TYPE.SINGLE_LINKAGE)) {
             if (!clustersToAugment.isEmpty()) {
@@ -161,31 +192,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         } else {
             for (final Integer clusterId : clustersToAugment) {
                 addToCluster(clusterId, itemId);
-            }
-        }
-
-        // Create new clusters from subsets (max-clique only)
-        final List<Set<Integer>> augmentedClusterItemLists = clustersToAugment.stream()
-                .map(idToClusterMap::get)
-                .map(Cluster::getItemIds)
-                .map(HashSet::new)
-                .collect(Collectors.toList());
-        final List<Set<Integer>> triggeredClusterItemSets = new ArrayList<>(clustersToSeedWith.size() + augmentedClusterItemLists.size());
-        triggeredClusterItemSets.addAll(clustersToSeedWith.stream().map(HashSet::new).collect(Collectors.toList()));
-        triggeredClusterItemSets.addAll(augmentedClusterItemLists);
-        triggeredClusterItemSets.sort(Comparator.comparingInt(Set::size));
-        for (int i = 0; i < clustersToSeedWith.size(); i++) {
-            final Set<Integer> seedItems = triggeredClusterItemSets.get(i);
-            // Check that this cluster is not a sub-cluster of any of the others being created
-            boolean isSubset = false;
-            for (int j = i + 1; j < triggeredClusterItemSets.size(); j++) {
-                if (isSubsetOf(seedItems, triggeredClusterItemSets.get(j))) {
-                    isSubset = true;
-                    break;
-                }
-            }
-            if (!isSubset) {
-                seedWithExistingCluster(itemId, seedItems);
             }
         }
 
