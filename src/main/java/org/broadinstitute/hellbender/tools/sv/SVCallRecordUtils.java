@@ -92,11 +92,11 @@ public final class SVCallRecordUtils {
     public static SVCallRecordWithEvidence copyCallWithNewGenotypes(final SVCallRecordWithEvidence record, final GenotypesContext genotypes) {
         return new SVCallRecordWithEvidence(record.getId(), record.getContigA(), record.getPositionA(), record.getStrandA(), record.getContigB(),
                 record.getPositionB(), record.getStrandB(), record.getType(), record.getLength(), record.getAlgorithms(),
-                genotypes, record.getStartSplitReadSites(), record.getEndSplitReadSites(), record.getDiscordantPairs(),
+                genotypes, record.getAttributes(), record.getStartSplitReadSites(), record.getEndSplitReadSites(), record.getDiscordantPairs(),
                 record.getCopyNumberDistribution());
     }
 
-    public static VariantContextBuilder createBuilderWithEvidence(final SVCallRecordWithEvidence call) {
+    public static VariantContextBuilder createBuilderWithEvidence(final SVCallRecordWithEvidence call, boolean updateSplitRead, boolean updateDiscordantPair) {
         final VariantContextBuilder builder = getVariantBuilder(call);
         final boolean includeEvidence = !SVClusterEngine.isDepthOnlyCall(call);
         final SplitReadSite startSplitReadCounts = includeEvidence ? getSplitReadCountsAtPosition(call.getStartSplitReadSites(), call.getPositionA()) : null;
@@ -108,12 +108,13 @@ public final class SVCallRecordUtils {
             final String sample = genotype.getSampleName();
             final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(genotype);
             if (includeEvidence) {
-                final Integer startCount = startSplitReadCounts.getCount(sample);
-                final Integer endCount = endSplitReadCounts.getCount(sample);
-                final Integer pairedEndCount = discordantPairCounts.getOrDefault(sample, 0);
-                genotypeBuilder.attribute(GATKSVVCFConstants.START_SPLIT_READ_COUNT_ATTRIBUTE, startCount);
-                genotypeBuilder.attribute(GATKSVVCFConstants.END_SPLIT_READ_COUNT_ATTRIBUTE, endCount);
-                genotypeBuilder.attribute(GATKSVVCFConstants.DISCORDANT_PAIR_COUNT_ATTRIBUTE, pairedEndCount);
+                if (updateSplitRead) {
+                    genotypeBuilder.attribute(GATKSVVCFConstants.START_SPLIT_READ_COUNT_ATTRIBUTE, startSplitReadCounts.getCount(sample));
+                    genotypeBuilder.attribute(GATKSVVCFConstants.END_SPLIT_READ_COUNT_ATTRIBUTE, endSplitReadCounts.getCount(sample));
+                }
+                if (updateDiscordantPair) {
+                    genotypeBuilder.attribute(GATKSVVCFConstants.DISCORDANT_PAIR_COUNT_ATTRIBUTE, discordantPairCounts.getOrDefault(sample, 0));
+                }
             }
             newGenotypes.add(genotypeBuilder.make());
         }
@@ -297,7 +298,17 @@ public final class SVCallRecordUtils {
         return call.getContigA().equals(call.getContigB());
     }
 
+    private static SplitReadSite createSplitReadSite(final VariantContext variant, final int position, final String splitReadCountKey) {
+        final Map<String,Integer> counts = variant.getGenotypes().stream()
+                .collect(Collectors.toMap(g -> g.getSampleName(), g -> (Integer) g.getExtendedAttribute(splitReadCountKey)));
+        return new SplitReadSite(position, counts);
+    }
+
     public static SVCallRecord create(final VariantContext variant) {
+        return create(variant, false);
+    }
+
+    public static SVCallRecord create(final VariantContext variant, boolean keepAttributes) {
         Utils.nonNull(variant);
         //Utils.validate(variant.getAttributes().keySet().containsAll(nonDepthCallerAttributes), "Call is missing attributes");
         final String id = variant.getID();
@@ -330,7 +341,7 @@ public final class SVCallRecordUtils {
             contigB = contigA;
             positionB = variant.getEnd();
         }
-        return new SVCallRecord(id, contigA, positionA, strand1, contigB, positionB, strand2, type, length, algorithms, variant.getGenotypes());
+        return new SVCallRecord(id, contigA, positionA, strand1, contigB, positionB, strand2, type, length, algorithms, variant.getGenotypes(), variant.getAttributes());
     }
 
     public static int getLength(final VariantContext variant) {
@@ -526,6 +537,7 @@ public final class SVCallRecordUtils {
                 example.getLength(),
                 algorithms,
                 genotypes,
+                Collections.emptyMap(),
                 example.getStartSplitReadSites(),
                 example.getEndSplitReadSites(),
                 example.getDiscordantPairs(),

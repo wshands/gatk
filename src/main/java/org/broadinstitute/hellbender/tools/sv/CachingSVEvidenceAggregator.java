@@ -21,11 +21,12 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
 
     public CachingSVEvidenceAggregator(final FeatureDataSource<T> source,
                                        final SAMSequenceDictionary dictionary,
-                                       final ProgressMeter progressMeter) {
+                                       final String progressLabel) {
         this.source = source;
         this.dictionary = dictionary;
         this.cacheInterval = null;
-        this.progressMeter = progressMeter;
+        this.progressMeter = new ProgressMeter();
+        progressMeter.setRecordLabel(progressLabel);
     }
 
     abstract protected SimpleInterval getEvidenceQueryInterval(final SVCallRecordWithEvidence record);
@@ -42,11 +43,23 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
                 .map(r -> collectRecordEvidence(r, overlapDetector));
     }
 
+    public void startProgressMeter() {
+        progressMeter.start();
+    }
+
+    public void stopProgressMeter() {
+        progressMeter.stop();
+    }
+
     private final SVCallRecordWithEvidence collectRecordEvidence(final SVCallRecordWithEvidence record,
                                                                  final OverlapDetector<SimpleInterval> overlapDetector) {
-        final List<T> evidence = getEvidenceOnInterval(getEvidenceQueryInterval(record), overlapDetector).stream()
+        final SimpleInterval evidenceInterval = getEvidenceQueryInterval(record);
+        final List<T> evidence = getEvidenceOnInterval(evidenceInterval, overlapDetector).stream()
                 .filter(e -> evidenceForCallFilter(record, e))
                 .collect(Collectors.toList());
+        if (progressMeter.started()) {
+            progressMeter.update(evidenceInterval);
+        }
         return assignEvidence(record, evidence);
     }
 

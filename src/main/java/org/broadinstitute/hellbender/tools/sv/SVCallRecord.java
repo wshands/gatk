@@ -28,6 +28,7 @@ public class SVCallRecord implements SVLocatable {
     private int length;
     private final List<String> algorithms;
     private final GenotypesContext genotypes;
+    private final Map<String,Object> attributes;    // TODO: utilize this to pass through variant attributes
 
     public SVCallRecord(final String id,
                         final String contigA,
@@ -39,13 +40,15 @@ public class SVCallRecord implements SVLocatable {
                         final StructuralVariantType type,
                         final int length,
                         final List<String> algorithms,
-                        final List<Genotype> genotypes) {
+                        final List<Genotype> genotypes,
+                        final Map<String,Object> attributes) {
         Utils.nonNull(id);
         Utils.nonNull(contigA);
         Utils.nonNull(contigB);
         Utils.nonNull(type);
         Utils.nonNull(algorithms);
         Utils.nonNull(genotypes);
+        Utils.nonNull(attributes);
         Utils.containsNoNull(algorithms, "Encountered null algorithm");
         Utils.containsNoNull(genotypes, "Encountered null genotype");
         this.id = id;
@@ -59,6 +62,25 @@ public class SVCallRecord implements SVLocatable {
         this.length = length;
         this.algorithms = Collections.unmodifiableList(algorithms);
         this.genotypes = GenotypesContext.copy(genotypes).immutable();
+        this.attributes = Collections.unmodifiableMap(attributes);
+    }
+
+    public SVCallRecord(final String id,
+                        final String contigA,
+                        final int positionA,
+                        final boolean strandA,
+                        final String contigB,
+                        final int positionB,
+                        final boolean strandB,
+                        final StructuralVariantType type,
+                        final int length,
+                        final List<String> algorithms,
+                        final List<Genotype> genotypes) {
+        this(id, contigA, positionA, strandA, contigB, positionB, strandB, type, length, algorithms, genotypes, Collections.emptyMap());
+    }
+
+    public Map<String, Object> getAttributes() {
+        return attributes;
     }
 
     public String getId() {
@@ -153,22 +175,16 @@ public class SVCallRecord implements SVLocatable {
         if (this == o) return true;
         if (!(o instanceof SVCallRecord)) return false;
         SVCallRecord that = (SVCallRecord) o;
-        return positionA == that.positionA &&
-                strandA == that.strandA &&
-                positionB == that.positionB &&
-                strandB == that.strandB &&
-                length == that.length &&
-                id.equals(that.id) &&
-                contigA.equals(that.contigA) &&
-                contigB.equals(that.contigB) &&
-                type == that.type &&
-                algorithms.equals(that.algorithms) &&
-                genotypes.size() == that.genotypes.size() &&
-                genotypes.containsAll(that.genotypes);  // TODO : List comparison expensive like this
+        return positionA == that.positionA && strandA == that.strandA && positionB == that.positionB
+                && strandB == that.strandB && length == that.length && id.equals(that.id)
+                && contigA.equals(that.contigA) && contigB.equals(that.contigB) && type == that.type
+                && algorithms.equals(that.algorithms) && genotypes.equals(that.genotypes)
+                && attributes.equals(that.attributes);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, contigA, positionA, strandA, contigB, positionB, strandB, type, length, algorithms, genotypes);
+        return Objects.hash(id, contigA, positionA, strandA, contigB, positionB, strandB, type, length, algorithms,
+                genotypes, attributes);
     }
 }

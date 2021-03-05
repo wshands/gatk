@@ -105,12 +105,12 @@ public final class GATKSVVCFConstants {
     public static final String DEPTH_P_HARDY_WEINBERG_GAIN_FIELD = "PHW_G";
     public static final String DEPTH_BACKGROUND_FIELD = "ERD";
     public static final String DEPTH_MEAN_BIAS_FIELD = "PHI_RD";
-    public static String START_SPLIT_READ_COUNT_ATTRIBUTE = "SR1";
-    public static String END_SPLIT_READ_COUNT_ATTRIBUTE = "SR2";
-    public static String DISCORDANT_PAIR_COUNT_ATTRIBUTE = "PE";
-    public static String RAW_CALL_ATTRIBUTE = "RC";
-    public static int RAW_CALL_ATTRIBUTE_TRUE = 1;
-    public static int RAW_CALL_ATTRIBUTE_FALSE = 0;
+    public static final String START_SPLIT_READ_COUNT_ATTRIBUTE = "SR1";
+    public static final String END_SPLIT_READ_COUNT_ATTRIBUTE = "SR2";
+    public static final String DISCORDANT_PAIR_COUNT_ATTRIBUTE = "PE";
+    public static final String RAW_CALL_ATTRIBUTE = "RC";
+    public static final int RAW_CALL_ATTRIBUTE_TRUE = 1;
+    public static final int RAW_CALL_ATTRIBUTE_FALSE = 0;
 
     // genotyping
     public static final String COPY_NUMBER_FIELD = "CN";

@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
-import org.broadinstitute.hellbender.engine.ProgressMeter;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -18,10 +17,9 @@ public class DiscordantPairEvidenceAggregator extends CachingSVEvidenceAggregato
 
     public DiscordantPairEvidenceAggregator(final FeatureDataSource<DiscordantPairEvidence> source,
                                             final SAMSequenceDictionary dictionary,
-                                            final ProgressMeter progressMeter,
                                             final int innerWindow,
                                             final int outerWindow) {
-        super(source, dictionary, progressMeter);
+        super(source, dictionary, "DiscordantPairSites");
         this.innerWindow = innerWindow;
         this.outerWindow = outerWindow;
     }

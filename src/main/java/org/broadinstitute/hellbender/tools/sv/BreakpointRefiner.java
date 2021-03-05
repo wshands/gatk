@@ -102,8 +102,8 @@ public class BreakpointRefiner {
         return new SVCallRecordWithEvidence(
                 call.getId(), call.getContigA(), refinedStartSite.getPosition(), call.getStrandA(), call.getContigB(),
                 refinedEndSite.getPosition(), call.getStrandB(), call.getType(), length, call.getAlgorithms(),
-                call.getGenotypes(), call.getStartSplitReadSites(), call.getEndSplitReadSites(), call.getDiscordantPairs(),
-                call.getCopyNumberDistribution());
+                call.getGenotypes(), call.getAttributes(), call.getStartSplitReadSites(), call.getEndSplitReadSites(),
+                call.getDiscordantPairs(), call.getCopyNumberDistribution());
     }
 
     /**

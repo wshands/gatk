@@ -7,6 +7,7 @@ import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 public class SVCallRecordWithEvidence extends SVCallRecord {
@@ -27,7 +28,8 @@ public class SVCallRecordWithEvidence extends SVCallRecord {
                                     final CopyNumberPosteriorDistribution copyNumberDistribution) {
         this(record.getId(), record.getContigA(), record.getPositionA(), record.getStrandA(), record.getContigB(),
                 record.getPositionB(), record.getStrandB(), record.getType(), record.getLength(), record.getAlgorithms(),
-                record.getGenotypes(), startSplitReadSites, endSplitReadSites, discordantPairs, copyNumberDistribution);
+                record.getGenotypes(), record.getAttributes(), startSplitReadSites, endSplitReadSites, discordantPairs,
+                copyNumberDistribution);
     }
 
     public SVCallRecordWithEvidence(final String id,
@@ -41,11 +43,12 @@ public class SVCallRecordWithEvidence extends SVCallRecord {
                                     final int length,
                                     final List<String> algorithms,
                                     final List<Genotype> genotypes,
+                                    final Map<String,Object> attributes,
                                     final List<SplitReadSite> startSplitReadSites,
                                     final List<SplitReadSite> endSplitReadSites,
                                     final List<DiscordantPairEvidence> discordantPairs,
                                     final CopyNumberPosteriorDistribution copyNumberDistribution) {
-        super(id, startContig, position1, strand1, contig2, position2, strand2, type, length, algorithms, genotypes);
+        super(id, startContig, position1, strand1, contig2, position2, strand2, type, length, algorithms, genotypes, attributes);
         Utils.nonNull(startSplitReadSites);
         Utils.nonNull(endSplitReadSites);
         Utils.nonNull(discordantPairs);

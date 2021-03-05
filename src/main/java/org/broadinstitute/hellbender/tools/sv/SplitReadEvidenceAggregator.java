@@ -3,7 +3,6 @@ package org.broadinstitute.hellbender.tools.sv;
 import com.google.common.collect.Ordering;
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
-import org.broadinstitute.hellbender.engine.ProgressMeter;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -21,10 +20,9 @@ public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<Spl
 
     public SplitReadEvidenceAggregator(final FeatureDataSource<SplitReadEvidence> source,
                                        final SAMSequenceDictionary dictionary,
-                                       final ProgressMeter progressMeter,
                                        final int window,
                                        final boolean getStart) {
-        super(source, dictionary, progressMeter);
+        super(source, dictionary, getStart ? "StartSplitReadSites" : "EndSplitReadSites");
         this.window = window;
         this.getStart = getStart;
     }
