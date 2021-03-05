@@ -27,7 +27,6 @@ import org.broadinstitute.hellbender.tools.sv.cluster.*;
 
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.stream.Stream;
 
 import static org.broadinstitute.hellbender.tools.walkers.sv.JointGermlineCNVSegmentation.BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME;
 
@@ -214,22 +213,23 @@ public final class SVCluster extends VariantWalker {
         }
 
         // Add to clustering buffer
-        clusterEngine.add(call);
+        if (convertInversions) {
+            SVCallRecordUtils.convertInversionsToBreakends(call).forEachOrdered(clusterEngine::add);
+        } else {
+            clusterEngine.add(call);
+        }
     }
 
     private void processClusters() {
         logger.info("Processing contig " + currentContig + "...");
-        Stream<SVCallRecord> outputStream = clusterEngine.getOutput().stream();
-        if (convertInversions) {
-            outputStream = outputStream.flatMap(SVCallRecordUtils::convertInversionsToBreakends);
-        }
+        List<SVCallRecord> output = clusterEngine.getOutput();
         logger.info("Writing to file...");
-        write(outputStream);
-        logger.info("Contig " + currentContig + " completed");
+        write(output);
+        logger.info("Contig " + currentContig + " completed.");
     }
 
-    private void write(final Stream<SVCallRecord> calls) {
-        calls.sorted(SVCallRecordUtils.getCallComparator(dictionary))
+    private void write(final List<SVCallRecord> calls) {
+        calls.stream().sorted(SVCallRecordUtils.getCallComparator(dictionary))
                 .map(this::buildVariantContext)
                 .forEachOrdered(writer::add);
     }

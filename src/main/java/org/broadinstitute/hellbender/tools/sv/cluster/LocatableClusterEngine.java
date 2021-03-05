@@ -163,18 +163,32 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
                 addToCluster(clusterId, itemId);
             }
         }
+
         // Create new clusters from subsets (max-clique only)
-        for (final List<Integer> seedItems : clustersToSeedWith) {
-            final Set<Integer> seedItemSet = new HashSet<>(seedItems);
+        final List<Set<Integer>> augmentedClusterItemLists = clustersToAugment.stream()
+                .map(idToClusterMap::get)
+                .map(Cluster::getItemIds)
+                .map(HashSet::new)
+                .collect(Collectors.toList());
+        final List<Set<Integer>> triggeredClusterItemSets = new ArrayList<>(clustersToSeedWith.size() + augmentedClusterItemLists.size());
+        triggeredClusterItemSets.addAll(clustersToSeedWith.stream().map(HashSet::new).collect(Collectors.toList()));
+        triggeredClusterItemSets.addAll(augmentedClusterItemLists);
+        triggeredClusterItemSets.sort(Comparator.comparingInt(Set::size));
+        for (int i = 0; i < clustersToSeedWith.size(); i++) {
+            final Set<Integer> seedItems = triggeredClusterItemSets.get(i);
             // Check that this cluster is not a sub-cluster of any of the others being created
-            if (clustersToSeedWith.stream().anyMatch(c -> c != seedItems && isSubsetOf(seedItemSet, c))
-                    || clustersToAugment.stream()
-                        .map(idToClusterMap::get)
-                        .map(Cluster::getItemIds)
-                        .anyMatch(c -> c != seedItems && isSubsetOf(seedItemSet, c))) {
+            boolean isSubset = false;
+            for (int j = i + 1; j < triggeredClusterItemSets.size(); j++) {
+                if (isSubsetOf(seedItems, triggeredClusterItemSets.get(j))) {
+                    isSubset = true;
+                    break;
+                }
+            }
+            if (!isSubset) {
                 seedWithExistingCluster(itemId, seedItems);
             }
         }
+
         // If there weren't any matches, create a new singleton cluster
         if (clustersToAugment.isEmpty() && clustersToSeedWith.isEmpty()) {
             seedCluster(itemId);
@@ -203,19 +217,24 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     }
 
     private final void processFinalizedClusters(final List<Integer> clusterIdsToProcess) {
-        for (int i = clusterIdsToProcess.size() - 1; i >= 0; i--) {
-            processCluster(clusterIdsToProcess.get(i));
+        for (final Integer clusterId : clusterIdsToProcess) {
+            processCluster(clusterId);
         }
     }
 
-    private final boolean isSubsetOf(final Set<Integer> items, final List<Integer> superSet) {
-        int numContains = 0;
-        for (final Integer item : superSet) {
-            if (items.contains(item)) {
-                numContains++;
+    private final boolean isSubsetOf(final Set<Integer> smallerSet, final Set<Integer> largerSet) {
+        if (largerSet.size() < smallerSet.size()) {
+            return false;
+        }
+        int n = 0;
+        for (final Integer item : smallerSet) {
+            if (largerSet.contains(item)) {
+                if (++n == smallerSet.size()) {
+                    return true;
+                }
             }
         }
-        return numContains == items.size();
+        return false;
     }
 
     private final void flushClusters() {
@@ -239,7 +258,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
      * @param item
      * @param seedItems
      */
-    private final void seedWithExistingCluster(final Integer item, final List<Integer> seedItems) {
+    private final void seedWithExistingCluster(final Integer item, final Collection<Integer> seedItems) {
         final List<Integer> newClusterItems = new ArrayList<>(1 + seedItems.size());
         newClusterItems.addAll(seedItems);
         newClusterItems.add(item);
