@@ -1,7 +1,6 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.broadinstitute.hellbender.tools.sv.SVLocatable;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -116,9 +115,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
      */
     private final List<Integer> cluster(final Integer itemId) {
         final T item = getItem(itemId);
-        if (item.getType().equals(StructuralVariantType.DEL) && item.getPositionA() == 11212835) {
-            int x = 0;
-        }
         // Get list of item IDs from active clusters that cluster with this item
         final Set<Integer> linkedItems = idToClusterMap.values().stream().map(Cluster::getItemIds)
                 .flatMap(List::stream)
