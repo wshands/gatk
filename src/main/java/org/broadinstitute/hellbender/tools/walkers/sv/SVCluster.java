@@ -28,6 +28,8 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Stream;
 
+import static org.broadinstitute.hellbender.tools.walkers.sv.JointGermlineCNVSegmentation.BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME;
+
 /**
  * Clusters SVs with similar breakpoints based on coordinates and supporting evidence.
  *
@@ -71,6 +73,16 @@ import java.util.stream.Stream;
 @DocumentedFeature
 public final class SVCluster extends VariantWalker {
     public static final String VARIANT_PREFIX_LONG_NAME = "variant-prefix";
+    public static final String ENABLE_CNV_LONG_NAME = "enable-cnv";
+    public static final String DEFRAG_PADDING_FRACTION_LONG_NAME = "defrag-padding-fraction";
+    public static final String CONVERT_INV_LONG_NAME = "convert-inv-to-bnd";
+    public static final String ALGORITHM_LONG_NAME = "algorithm";
+
+    enum CLUSTER_ALGORITHM {
+        DEFRAGMENT_CNV,
+        SINGLE_LINKAGE,
+        MAX_CLIQUE
+    }
 
     @Argument(
             doc = "Output VCF",
@@ -86,11 +98,42 @@ public final class SVCluster extends VariantWalker {
     )
     private String variantPrefix = "SV_x";
 
+    @Argument(
+            doc = "Enable clustering DEL/DUP variants together as CNVs (does not apply to CNV defragmentation)",
+            fullName = ENABLE_CNV_LONG_NAME,
+            optional = true
+    )
+    private boolean enableCnv = false;
+
+    @Argument(
+            doc = "Convert inversions to pairs of BNDs",
+            fullName = CONVERT_INV_LONG_NAME,
+            optional = true
+    )
+    private boolean convertInversions = false;
+
+    @Argument(fullName = BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME,
+            doc = "Strategy to use for choosing a representative value for a breakpoint cluster.",
+            optional = true)
+    private SVCollapser.BreakpointSummaryStrategy breakpointSummaryStrategy = SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END;
+
     @Argument(fullName = JointGermlineCNVSegmentation.MIN_SAMPLE_NUM_OVERLAP_LONG_NAME,
-            doc = "Minimum fraction of common samples for two variants to cluster together",
+            doc = "Minimum fraction of common samples for two variants to cluster together (CNV defragmentation only)",
             optional = true
     )
     private double minSampleSetOverlap = CNVDefragmenter.getDefaultSampleOverlap();
+
+    @Argument(fullName = DEFRAG_PADDING_FRACTION_LONG_NAME,
+            doc = "Padding as a fraction of variant length (CNV defragmentation only)",
+            optional = true
+    )
+    private double defragPaddingFraction = CNVDefragmenter.getDefaultPaddingFraction();
+
+    @Argument(fullName = ALGORITHM_LONG_NAME,
+            doc = "Clustering algorithm",
+            optional = true
+    )
+    private CLUSTER_ALGORITHM algorithm = CLUSTER_ALGORITHM.SINGLE_LINKAGE;
 
     @Argument(fullName = JointGermlineCNVSegmentation.DEFRAGMENTATION_PADDING_LONG_NAME,
             doc = "Extend events by this fraction on each side when determining overlap to merge",
@@ -98,12 +141,11 @@ public final class SVCluster extends VariantWalker {
     )
     private double defragmentationPadding = CNVDefragmenter.getDefaultPaddingFraction();
 
+    private final SVClusterEngineArgumentsCollection clusterParameters = new SVClusterEngineArgumentsCollection();
+
     private SAMSequenceDictionary dictionary;
     private VariantContextWriter writer;
-    private CNVDefragmenter defragmenter;
-    private List<SVCallRecord> nonDepthRawCallsBuffer;
-    private SVClusterEngine<SVCallRecord> singleLinkageEngine;
-    private SVClusterEngine<SVCallRecord> maxCliqueEngine;
+    private SVClusterEngine<SVCallRecord> clusterEngine;
     private Set<String> samples;
     private String currentContig;
     private int numVariantsWritten = 0;
@@ -116,16 +158,18 @@ public final class SVCluster extends VariantWalker {
         }
         samples = new LinkedHashSet<>(getHeaderForVariants().getSampleNamesInOrder());
 
-        defragmenter = new CNVDefragmenter(dictionary, 0.5, 0.9);
-        nonDepthRawCallsBuffer = new ArrayList<>();
-
-        final SVCollapser<SVCallRecord> collapser = new SVPreprocessingRecordCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
-        singleLinkageEngine = new SVClusterEngine<>(dictionary, LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE, false, collapser::collapse);
-        singleLinkageEngine.setDepthOnlyParams(new SVClusterEngine.DepthClusteringParameters(0.9, 0, 0));
-        singleLinkageEngine.setMixedParams(new SVClusterEngine.MixedClusteringParameters(0.9, 50, 50));
-        singleLinkageEngine.setEvidenceParams(new SVClusterEngine.EvidenceClusteringParameters(0.9, 50, 50));
-
-        maxCliqueEngine = new SVClusterEngine<>(dictionary, LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE, false, collapser::collapse);
+        if (algorithm == CLUSTER_ALGORITHM.DEFRAGMENT_CNV) {
+            clusterEngine =  new CNVDefragmenter(dictionary, defragPaddingFraction, minSampleSetOverlap);
+        } else if (algorithm == CLUSTER_ALGORITHM.SINGLE_LINKAGE || algorithm == CLUSTER_ALGORITHM.MAX_CLIQUE) {
+            final SVCollapser<SVCallRecord> collapser = new SVPreprocessingRecordCollapser(breakpointSummaryStrategy);
+            final LocatableClusterEngine.CLUSTERING_TYPE type = algorithm == CLUSTER_ALGORITHM.SINGLE_LINKAGE ? LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE : LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE;
+            clusterEngine = new SVClusterEngine<>(dictionary, type, enableCnv, collapser::collapse);
+            clusterEngine.setDepthOnlyParams(clusterParameters.getDepthParameters());
+            clusterEngine.setMixedParams(clusterParameters.getMixedParameters());
+            clusterEngine.setEvidenceParams(clusterParameters.getPESRParameters());
+        } else {
+            throw new UnsupportedOperationException("Unsupported algorithm: " + algorithm.name());
+        }
 
         writer = createVCFWriter(Paths.get(outputFile));
         writeVCFHeader();
@@ -134,7 +178,7 @@ public final class SVCluster extends VariantWalker {
 
     @Override
     public Object onTraversalSuccess() {
-        if (!defragmenter.isEmpty() || !nonDepthRawCallsBuffer.isEmpty()) {
+        if (!clusterEngine.isEmpty()) {
             processClusters();
         }
         return super.onTraversalSuccess();
@@ -167,39 +211,23 @@ public final class SVCluster extends VariantWalker {
             currentContig = call.getContigA();
         }
 
-        // Add to clustering buffers
-        if (CNVDefragmenter.isDepthOnlyCall(call)) {
-            defragmenter.add(call);
-        } else {
-            nonDepthRawCallsBuffer.add(call);
-        }
+        // Add to clustering buffer
+        clusterEngine.add(call);
     }
 
     private void processClusters() {
         logger.info("Processing contig " + currentContig + "...");
-        final Stream<SVCallRecord> defragmentedStream = defragmenter.getOutput().stream();
-        final Stream<SVCallRecord> nonDepthStream = nonDepthRawCallsBuffer.stream()
-                .flatMap(SVCallRecordUtils::convertInversionsToBreakends);
-        //Combine and sort depth and non-depth calls because they must be added in dictionary order
-        Stream.concat(defragmentedStream, nonDepthStream)
-                .sorted(SVCallRecordUtils.getCallComparator(dictionary))
-                .forEachOrdered(singleLinkageEngine::add);
-        nonDepthRawCallsBuffer.clear();
-        logger.info("Clustering with single-linkage...");
-        final List<SVCallRecord> singleLinkageCalls = singleLinkageEngine.getOutput();
-
-        logger.info("Clustering with maximal clique...");
-        //singleLinkageCalls.stream().forEachOrdered(maxCliqueEngine::add); TODO
-        //final List<SVCallRecord> clusteredCalls = maxCliqueEngine.getOutput();
-
+        Stream<SVCallRecord> outputStream = clusterEngine.getOutput().stream();
+        if (convertInversions) {
+            outputStream = outputStream.flatMap(SVCallRecordUtils::convertInversionsToBreakends);
+        }
         logger.info("Writing to file...");
-        write(singleLinkageCalls);
+        write(outputStream);
         logger.info("Contig " + currentContig + " completed");
     }
 
-    private void write(final List<SVCallRecord> calls) {
-        calls.stream()
-                .sorted(SVCallRecordUtils.getCallComparator(dictionary))
+    private void write(final Stream<SVCallRecord> calls) {
+        calls.sorted(SVCallRecordUtils.getCallComparator(dictionary))
                 .map(this::buildVariantContext)
                 .forEachOrdered(writer::add);
     }

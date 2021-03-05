@@ -23,8 +23,6 @@ import java.util.stream.Stream;
 
 public final class SVCallRecordUtils {
 
-    public static final Function<Collection<Genotype>, List<Allele>> ALLELE_COLLAPSER_DIPLOID_NO_CALL = genotypes -> Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
-
     /**
      * Create a variant from a call for VCF interoperability
      *
@@ -154,8 +152,23 @@ public final class SVCallRecordUtils {
         return (o1, o2) -> compareSVLocatables(o1, o2, dictionary);
     }
 
+    public static <T extends SVLocatable> Comparator<T> getSVLocatableComparatorByEnds(final SAMSequenceDictionary dictionary) {
+        return (o1, o2) -> compareSVLocatablesByEnds(o1, o2, dictionary);
+    }
+
     public static <T extends SVCallRecord> Comparator<T> getCallComparator(final SAMSequenceDictionary dictionary) {
         return (o1, o2) -> compareCalls(o1, o2, dictionary);
+    }
+
+    public static int compareSVLocatablesByEnds(final SVLocatable first, final SVLocatable second, final SAMSequenceDictionary dictionary) {
+        Utils.nonNull(first);
+        Utils.nonNull(second);
+        // First locus
+        final Comparator<Locatable> locatableComparator = IntervalUtils.getDictionaryOrderComparator(dictionary);
+        // Second locus
+        final int compareB = locatableComparator.compare(new SimpleInterval(first.getContigB(), first.getPositionB(), first.getPositionB()),
+                new SimpleInterval(second.getContigB(), second.getPositionB(), second.getPositionB()));
+        return compareB;
     }
 
     public static int compareSVLocatables(final SVLocatable first, final SVLocatable second, final SAMSequenceDictionary dictionary) {

@@ -30,6 +30,7 @@ import java.nio.charset.Charset;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Retrieves PE/SR evidence and performs breakpoint refinement
@@ -79,22 +80,29 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
     public static final String SPLIT_READ_LONG_NAME = "split-reads-file";
     public static final String DISCORDANT_PAIRS_LONG_NAME = "discordant-pairs-file";
     public static final String SAMPLE_COVERAGE_LONG_NAME = "sample-coverage";
+    public static final String PE_INNER_WINDOW_LONG_NAME = "pe-inner-window";
+    public static final String PE_OUTER_WINDOW_LONG_NAME = "pe-outer-window";
+    public static final String SR_WINDOW_LONG_NAME = "sr-window";
 
     @Argument(
             doc = "Split reads evidence file",
-            fullName = SPLIT_READ_LONG_NAME
+            fullName = SPLIT_READ_LONG_NAME,
+            optional = true
     )
     private GATKPath splitReadsFile;
 
     @Argument(
             doc = "Discordant pairs evidence file",
-            fullName = DISCORDANT_PAIRS_LONG_NAME
+            fullName = DISCORDANT_PAIRS_LONG_NAME,
+            optional = true
     )
     private GATKPath discordantPairsFile;
 
     @Argument(
-            doc = "Tab-delimited table with sample IDs in the first column and expected per-base coverage per sample in the second column",
-            fullName = SAMPLE_COVERAGE_LONG_NAME
+            doc = "Tab-delimited table with sample IDs in the first column and expected per-base coverage per sample " +
+                    "in the second column. Required if a split read evidence file is provided.",
+            fullName = SAMPLE_COVERAGE_LONG_NAME,
+            optional = true
     )
     private GATKPath sampleCoverageFile;
 
@@ -105,18 +113,40 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
     )
     private String outputFile;
 
+    @Argument(
+            doc = "Inner discordant pair window size (bp)",
+            fullName = PE_INNER_WINDOW_LONG_NAME,
+            optional = true
+    )
+    private int innerWindow = 50;
+
+    @Argument(
+            doc = "Outer discordant pair window size (bp)",
+            fullName = PE_OUTER_WINDOW_LONG_NAME,
+            optional = true
+    )
+    private int outerWindow = 500;
+
+    @Argument(
+            doc = "Split read window size (bp)",
+            fullName = SR_WINDOW_LONG_NAME,
+            optional = true
+    )
+    private int splitReadWindow = 200;
+
     private SAMSequenceDictionary dictionary;
     private VariantContextWriter writer;
     private FeatureDataSource<SplitReadEvidence> splitReadSource;
     private FeatureDataSource<DiscordantPairEvidence> discordantPairSource;
     private BreakpointRefiner breakpointRefiner;
-    private PairedEndAndSplitReadEvidenceAggregator evidenceCollector;
+    private CachingSVEvidenceAggregator discordantPairCollector;
+    private CachingSVEvidenceAggregator startSplitCollector;
+    private CachingSVEvidenceAggregator endSplitCollector;
     private SVDeduplicator<SVCallRecordWithEvidence> deduplicator;
     private Map<String,Double> sampleCoverageMap;
     private Set<String> samples;
-    private int numVariantsWritten = 0;
 
-    private List<SVCallRecord> records;
+    private List<SVCallRecordWithEvidence> records;
 
     private final int SPLIT_READ_QUERY_LOOKAHEAD = 0;
     private final int DISCORDANT_PAIR_QUERY_LOOKAHEAD = 0;
@@ -128,16 +158,27 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
             throw new UserException("Reference sequence dictionary required");
         }
         samples = new LinkedHashSet<>(getHeaderForVariants().getSampleNamesInOrder());
-        loadSampleCoverage();
-        initializeSplitReadEvidenceDataSource();
-        initializeDiscordantPairDataSource();
 
-        breakpointRefiner = new BreakpointRefiner(sampleCoverageMap, dictionary);
-        evidenceCollector = new PairedEndAndSplitReadEvidenceAggregator(splitReadSource, discordantPairSource, dictionary, null);
-        final SVCollapser<SVCallRecordWithEvidence> collapser = new SVPreprocessingRecordWithEvidenceCollapser(null);
-        deduplicator = new SVDeduplicator<>(collapser::collapse, dictionary);
+        if (discordantPairsFile == null && splitReadsFile == null) {
+            throw new UserException.BadInput("At least one evidence file must be provided");
+        }
+        if (discordantPairsFile != null) {
+            initializeDiscordantPairDataSource();
+            discordantPairCollector = new DiscordantPairEvidenceAggregator(discordantPairSource, dictionary, progressMeter, innerWindow, outerWindow);
+        }
+        if (splitReadsFile != null) {
+            if (sampleCoverageFile == null) {
+                throw new UserException.BadInput("Sample coverage table is required when a split read evidence file is present");
+            }
+            initializeSplitReadEvidenceDataSource();
+            loadSampleCoverage();
+            startSplitCollector = new SplitReadEvidenceAggregator(splitReadSource, dictionary, progressMeter, splitReadWindow, true);
+            endSplitCollector = new SplitReadEvidenceAggregator(splitReadSource, dictionary, progressMeter, splitReadWindow, false);
+            breakpointRefiner = new BreakpointRefiner(sampleCoverageMap, dictionary);
+            final SVCollapser<SVCallRecordWithEvidence> collapser = new SVPreprocessingRecordWithEvidenceCollapser(null);
+            deduplicator = new SVDeduplicator<>(collapser::collapse, dictionary);
+        }
         records = new ArrayList<>();
-
         writer = createVCFWriter(Paths.get(outputFile));
         writeVCFHeader();
     }
@@ -145,6 +186,12 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
     @Override
     public void closeTool() {
         super.closeTool();
+        if (splitReadSource != null) {
+            splitReadSource.close();
+        }
+        if (discordantPairSource != null) {
+            discordantPairSource.close();
+        }
         if (writer != null) {
             writer.close();
         }
@@ -184,31 +231,50 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
     @Override
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
-        records.add(SVCallRecordUtils.create(variant));
+        records.add(new SVCallRecordWithEvidence(SVCallRecordUtils.create(variant)));
     }
 
     @Override
     public Object onTraversalSuccess() {
-        logger.info("Aggregating evidence...");
-        final List<SVCallRecordWithEvidence> callsWithEvidence = evidenceCollector.collectEvidence(records);
-        logger.info("Filtering and refining breakpoints...");
-        final List<SVCallRecordWithEvidence> refinedCalls = callsWithEvidence.stream()
-                .map(breakpointRefiner::refineCall)
-                .sorted(SVCallRecordUtils.getCallComparator(dictionary))
-                .collect(Collectors.toList());
-        logger.info("Deduplicating variants...");
-        final List<SVCallRecordWithEvidence> finalCalls = deduplicator.deduplicateSortedItems(refinedCalls);
-        logger.info("Writing to file...");
-        write(finalCalls);
+        Stream<SVCallRecordWithEvidence> recordStream = records.stream();
 
+        // Get PE evidence
+        if (discordantPairCollector != null) {
+            logger.info("Aggregating discordant pair evidence...");
+            recordStream = discordantPairCollector.collectEvidence(recordStream.collect(Collectors.toList()));
+        }
+
+        // Get SR evidence
+        if (startSplitCollector != null && endSplitCollector != null) {
+            logger.info("Aggregating start position split-read evidence...");
+            recordStream = startSplitCollector.collectEvidence(recordStream.collect(Collectors.toList()));
+            logger.info("Aggregating end position split-read evidence...");
+            final List<SVCallRecordWithEvidence> endSortedRecords = recordStream
+                    .sorted(SVCallRecordUtils.getSVLocatableComparatorByEnds(dictionary))
+                    .collect(Collectors.toList());
+            recordStream = endSplitCollector.collectEvidence(recordStream.collect(Collectors.toList()));
+        }
+
+        // Refine breakpoints
+        if (breakpointRefiner != null) {
+            recordStream = recordStream.map(r -> breakpointRefiner.refineCall(r));
+        }
+
+        // Sort and deduplicate
+        recordStream = recordStream.sorted(SVCallRecordUtils.getCallComparator(dictionary));
+        if (deduplicator != null) {
+            logger.info("Sorting and deduplicating records...");
+            recordStream = deduplicator.deduplicateSortedItems(recordStream.collect(Collectors.toList())).stream();
+        }
+
+        // Write
+        logger.info("Writing to file...");
+        write(recordStream);
         return super.onTraversalSuccess();
     }
 
-    private void write(final List<SVCallRecordWithEvidence> calls) {
-        calls.stream()
-                .sorted(SVCallRecordUtils.getCallComparator(dictionary))
-                .map(this::buildVariantContext)
-                .forEachOrdered(writer::add);
+    private void write(final Stream<SVCallRecordWithEvidence> recordStream) {
+        recordStream.map(this::buildVariantContext).forEachOrdered(writer::add);
     }
 
     private void writeVCFHeader() {

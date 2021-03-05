@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.sv.cluster;
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.LinkedHashSet;
@@ -41,6 +42,11 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
         Utils.validate(a.getContigA().equals(a.getContigB()), "Call A is depth-only but interchromosomal");
         Utils.validate(b.getContigA().equals(b.getContigB()), "Call B is depth-only but interchromosomal");
         if (!a.getType().equals(b.getType())) return false;
+
+        final SimpleInterval intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionB()).expandWithinContig((int) (paddingFraction * a.getLength()), dictionary);
+        final SimpleInterval intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionB()).expandWithinContig((int) (paddingFraction * b.getLength()), dictionary);
+        if (!intervalA.overlaps(intervalB)) return false;
+
         final Set<String> sharedSamples = new LinkedHashSet<>(a.getCalledSamples());
         sharedSamples.retainAll(b.getCalledSamples());
         final double sampleOverlap = Math.min(sharedSamples.size() / (double) a.getCalledSamples().size(), sharedSamples.size() / (double) b.getCalledSamples().size());
