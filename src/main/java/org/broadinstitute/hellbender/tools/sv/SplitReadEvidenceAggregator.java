@@ -16,15 +16,15 @@ import java.util.Map;
 public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<SplitReadEvidence> {
 
     private final int window;
-    private final boolean getStart; // Retrieve start position split reads, else end position
+    private final boolean isStart; // Retrieve start position split reads, else end position
 
     public SplitReadEvidenceAggregator(final FeatureDataSource<SplitReadEvidence> source,
                                        final SAMSequenceDictionary dictionary,
                                        final int window,
-                                       final boolean getStart) {
-        super(source, dictionary, getStart ? "StartSplitReadSites" : "EndSplitReadSites");
+                                       final boolean isStart) {
+        super(source, dictionary, isStart ? "StartSplitReadSites" : "EndSplitReadSites");
         this.window = window;
-        this.getStart = getStart;
+        this.isStart = isStart;
     }
 
     public int getWindow() {
@@ -33,12 +33,16 @@ public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<Spl
 
     @Override
     protected SimpleInterval getEvidenceQueryInterval(final SVCallRecordWithEvidence record) {
-        return (getStart ? record.getPositionAInterval() : record.getPositionBInterval()).expandWithinContig(window, dictionary);
+        return (isStart ? record.getPositionAInterval() : record.getPositionBInterval()).expandWithinContig(window, dictionary);
     }
 
     @Override
-    protected boolean evidenceFilter(final SplitReadEvidence evidence) {
-        return evidence.getStrand() != getStart;
+    protected boolean evidenceFilter(final SVCallRecord record, final SplitReadEvidence evidence) {
+        if (isStart) {
+            return evidence.getStrand() == record.getStrandA();
+        } else {
+            return evidence.getStrand() == record.getStrandB();
+        }
     }
 
     @Override
@@ -47,15 +51,12 @@ public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<Spl
         final SVCallRecordWithEvidence refinedCall;
         if (SVClusterEngine.isDepthOnlyCall(call)) {
             refinedCall = call;
-        } else if (getStart) {
+        } else if (isStart) {
             final List<SplitReadSite> startSitesList = computeSites(evidence, call.getStrandA());
             refinedCall = new SVCallRecordWithEvidence(call, startSitesList, call.getEndSplitReadSites(), call.getDiscordantPairs(), call.getCopyNumberDistribution());
         } else {
             final List<SplitReadSite> endSitesList = computeSites(evidence, call.getStrandB());
             refinedCall = new SVCallRecordWithEvidence(call, call.getStartSplitReadSites(), endSitesList, call.getDiscordantPairs(), call.getCopyNumberDistribution());
-        }
-        if (progressMeter != null) {
-            progressMeter.update(call.getPositionBInterval());
         }
         return refinedCall;
     }

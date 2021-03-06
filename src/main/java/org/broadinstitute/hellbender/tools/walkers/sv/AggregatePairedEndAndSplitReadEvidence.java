@@ -25,7 +25,6 @@ import java.nio.charset.Charset;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Retrieves PE/SR evidence and performs breakpoint refinement
@@ -221,12 +220,9 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
         super.closeTool();
         if (discordantPairCollectionEnabled()) {
             discordantPairSource.close();
-            discordantPairCollector.stopProgressMeter();
         }
         if (splitReadCollectionEnabled()) {
             splitReadSource.close();
-            endSplitCollector.stopProgressMeter();
-            startSplitCollector.stopProgressMeter();
         }
         if (writer != null) {
             writer.close();
@@ -241,34 +237,40 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
 
     @Override
     public Object onTraversalSuccess() {
-        Stream<SVCallRecordWithEvidence> recordStream = records.stream();
+        List<SVCallRecordWithEvidence> currentRecords = records;
 
         // Get PE evidence
         if (discordantPairCollectionEnabled()) {
             discordantPairCollector.startProgressMeter();
-            recordStream = discordantPairCollector.collectEvidence(recordStream.collect(Collectors.toList()));
+            currentRecords = discordantPairCollector
+                    .collectEvidence(currentRecords)
+                    .collect(Collectors.toList());
+            discordantPairCollector.stopProgressMeter();
         }
 
         // Get SR evidence
         if (splitReadCollectionEnabled()) {
             startSplitCollector.startProgressMeter();
-            recordStream = startSplitCollector.collectEvidence(recordStream.collect(Collectors.toList()));
-            // Sort by end position to minimize cache misses
-            recordStream = recordStream.sorted(SVCallRecordUtils.getSVLocatableComparatorByEnds(dictionary));
+            // Sort by end position to minimize cache misses for end site queries
+            currentRecords = startSplitCollector.collectEvidence(currentRecords)
+                    .sorted(SVCallRecordUtils.getSVLocatableComparatorByEnds(dictionary))
+                    .collect(Collectors.toList());
+            startSplitCollector.stopProgressMeter();
             endSplitCollector.startProgressMeter();
-            recordStream = endSplitCollector.collectEvidence(recordStream.collect(Collectors.toList()));
             // Refine breakpoints and clean up
-            recordStream = recordStream.map(r -> breakpointRefiner.refineCall(r))
-                    .sorted(SVCallRecordUtils.getCallComparator(dictionary));
+            currentRecords = endSplitCollector.collectEvidence(currentRecords).map(r -> breakpointRefiner.refineCall(r))
+                    .sorted(SVCallRecordUtils.getCallComparator(dictionary))
+                    .collect(Collectors.toList());
+            endSplitCollector.stopProgressMeter();
         }
 
         // Write
-        write(recordStream);
+        write(currentRecords);
         return super.onTraversalSuccess();
     }
 
-    private void write(final Stream<SVCallRecordWithEvidence> recordStream) {
-        recordStream.map(this::buildVariantContext).forEachOrdered(writer::add);
+    private void write(final List<SVCallRecordWithEvidence> records) {
+        records.stream().map(this::buildVariantContext).forEachOrdered(writer::add);
     }
 
     private VCFHeader getVCFHeader() {

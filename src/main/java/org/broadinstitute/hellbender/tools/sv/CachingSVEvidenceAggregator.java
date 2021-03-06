@@ -16,8 +16,8 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
 
     private final FeatureDataSource<T> source;
     private SimpleInterval cacheInterval;
+    private final ProgressMeter progressMeter;
     protected final SAMSequenceDictionary dictionary;
-    protected final ProgressMeter progressMeter;
 
     public CachingSVEvidenceAggregator(final FeatureDataSource<T> source,
                                        final SAMSequenceDictionary dictionary,
@@ -31,8 +31,7 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
 
     abstract protected SimpleInterval getEvidenceQueryInterval(final SVCallRecordWithEvidence record);
     abstract protected SVCallRecordWithEvidence assignEvidence(final SVCallRecordWithEvidence call, final List<T> evidence);
-    protected boolean evidenceForCallFilter(final SVCallRecord record, final T evidence) { return true; }
-    protected boolean evidenceFilter(final T evidence) { return true; }
+    protected boolean evidenceFilter(final SVCallRecord record, final T evidence) { return true; }
 
     public Stream<SVCallRecordWithEvidence> collectEvidence(final List<SVCallRecordWithEvidence> calls) {
         Utils.nonNull(calls);
@@ -55,7 +54,7 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
                                                                  final OverlapDetector<SimpleInterval> overlapDetector) {
         final SimpleInterval evidenceInterval = getEvidenceQueryInterval(record);
         final List<T> evidence = getEvidenceOnInterval(evidenceInterval, overlapDetector).stream()
-                .filter(e -> evidenceForCallFilter(record, e))
+                .filter(e -> evidenceFilter(record, e))
                 .collect(Collectors.toList());
         if (progressMeter.started()) {
             progressMeter.update(evidenceInterval);
@@ -64,7 +63,7 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
     }
 
     private final List<T> getEvidenceOnInterval(final SimpleInterval interval,
-                                          final OverlapDetector<SimpleInterval> overlapDetector) {
+                                                final OverlapDetector<SimpleInterval> overlapDetector) {
         if (invalidCacheInterval(cacheInterval, interval)) {
             Utils.nonNull(overlapDetector, "Evidence cache missed but overlap detector is null");
             final Set<SimpleInterval> queryIntervalSet = overlapDetector.getOverlaps(interval);
@@ -74,9 +73,7 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
             cacheInterval = queryIntervalSet.iterator().next();
             source.queryAndPrefetch(cacheInterval);
         }
-        return source.queryAndPrefetch(interval).stream()
-                .filter(this::evidenceFilter)
-                .collect(Collectors.toList());
+        return source.queryAndPrefetch(interval);
     }
 
     private final OverlapDetector<SimpleInterval> getEvidenceOverlapDetector(final List<SVCallRecordWithEvidence> calls) {

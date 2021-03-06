@@ -38,9 +38,6 @@ public class DiscordantPairEvidenceAggregator extends CachingSVEvidenceAggregato
         } else {
             callWithEvidence = new SVCallRecordWithEvidence(call, call.getStartSplitReadSites(), call.getEndSplitReadSites(), evidence, call.getCopyNumberDistribution());
         }
-        if (progressMeter != null) {
-            progressMeter.update(call.getPositionAInterval());
-        }
         return callWithEvidence;
     }
 
@@ -53,7 +50,7 @@ public class DiscordantPairEvidenceAggregator extends CachingSVEvidenceAggregato
     }
 
     @Override
-    protected boolean evidenceForCallFilter(SVCallRecord record, DiscordantPairEvidence evidence) {
+    protected boolean evidenceFilter(final SVCallRecord record, final DiscordantPairEvidence evidence) {
         final SimpleInterval startInterval = getDiscordantPairStartInterval(record);
         final SimpleInterval endInterval = getDiscordantPairEndInterval(record);
         return discordantPairOverlapsInterval(evidence, startInterval, endInterval)
