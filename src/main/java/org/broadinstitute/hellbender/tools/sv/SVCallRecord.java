@@ -148,6 +148,13 @@ public class SVCallRecord implements SVLocatable {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
+    public Set<String> getRawCallSamples() {
+        return genotypes.stream()
+                .filter(SVCallRecord::isRawCall)
+                .map(Genotype::getSampleName)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
     public static boolean isCarrier(final Genotype g) {
         Utils.nonNull(g);
         return g.getType().equals(GenotypeType.HET) || g.getType().equals(GenotypeType.HOM_VAR);

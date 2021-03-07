@@ -52,16 +52,16 @@ public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<Spl
         if (SVClusterEngine.isDepthOnlyCall(call)) {
             refinedCall = call;
         } else if (isStart) {
-            final List<SplitReadSite> startSitesList = computeSites(evidence, call.getStrandA());
+            final List<SplitReadSite> startSitesList = computeSites(evidence);
             refinedCall = new SVCallRecordWithEvidence(call, startSitesList, call.getEndSplitReadSites(), call.getDiscordantPairs(), call.getCopyNumberDistribution());
         } else {
-            final List<SplitReadSite> endSitesList = computeSites(evidence, call.getStrandB());
+            final List<SplitReadSite> endSitesList = computeSites(evidence);
             refinedCall = new SVCallRecordWithEvidence(call, call.getStartSplitReadSites(), endSitesList, call.getDiscordantPairs(), call.getCopyNumberDistribution());
         }
         return refinedCall;
     }
 
-    private List<SplitReadSite> computeSites(final List<SplitReadEvidence> evidenceList, final boolean strand) {
+    private List<SplitReadSite> computeSites(final List<SplitReadEvidence> evidenceList) {
         if (!Ordering.from(IntervalUtils.getDictionaryOrderComparator(dictionary)).isOrdered(evidenceList)) {
             throw new IllegalArgumentException("Evidence list is not dictionary sorted");
         }
@@ -76,7 +76,7 @@ public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<Spl
                 }
                 position = e.getStart();
             }
-            if (e.getStrand() == strand && e.getCount() > 0) {
+            if (e.getCount() > 0) {
                 final String sample = e.getSample();
                 sampleCounts.put(sample, e.getCount());
             }

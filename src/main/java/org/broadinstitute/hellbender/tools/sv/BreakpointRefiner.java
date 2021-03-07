@@ -79,7 +79,8 @@ public class BreakpointRefiner {
 
         // Sample sets
         final Set<String> backgroundSamples = getBackgroundSamples(call);
-        final Set<String> calledSamples = call.getCalledSamples();
+        final Set<String> calledSamples = sampleCoverageMap.keySet().stream()
+                .filter(s -> !backgroundSamples.contains(s)).collect(Collectors.toSet());
 
         // Refine start
         final SplitReadSite refinedStartSite = getRefinedSite(call.getStartSplitReadSites(), calledSamples, backgroundSamples, call.getPositionA());
@@ -124,7 +125,8 @@ public class BreakpointRefiner {
      * @return sample ids
      */
     private Set<String> getBackgroundSamples(final SVCallRecord call) {
-        return sampleCoverageMap.keySet().stream().filter(s -> !call.getCarrierSamples().contains(s)).collect(Collectors.toSet());
+        final Set<String> rawCallSamples = call.getRawCallSamples();
+        return sampleCoverageMap.keySet().stream().filter(s -> !rawCallSamples.contains(s)).collect(Collectors.toSet());
     }
 
     /**
