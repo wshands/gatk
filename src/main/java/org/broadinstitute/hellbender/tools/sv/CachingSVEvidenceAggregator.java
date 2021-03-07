@@ -1,6 +1,8 @@
 package org.broadinstitute.hellbender.tools.sv;
 
+import com.google.common.collect.Streams;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.util.IntervalTree;
 import htsjdk.samtools.util.OverlapDetector;
 import htsjdk.tribble.Feature;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
@@ -16,8 +18,11 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
 
     private final FeatureDataSource<T> source;
     private SimpleInterval cacheInterval;
+    private IntervalTree<T> cacheEvidence;
     private final ProgressMeter progressMeter;
     protected final SAMSequenceDictionary dictionary;
+
+    private static final long RECORDS_BETWEEN_TIME_CHECKS = 100L;
 
     public CachingSVEvidenceAggregator(final FeatureDataSource<T> source,
                                        final SAMSequenceDictionary dictionary,
@@ -25,8 +30,10 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
         this.source = source;
         this.dictionary = dictionary;
         this.cacheInterval = null;
+        this.cacheEvidence = null;
         this.progressMeter = new ProgressMeter();
         progressMeter.setRecordLabel(progressLabel);
+        progressMeter.setRecordsBetweenTimeChecks(RECORDS_BETWEEN_TIME_CHECKS);
     }
 
     abstract protected SimpleInterval getEvidenceQueryInterval(final SVCallRecordWithEvidence record);
@@ -71,9 +78,13 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
                 throw new IllegalArgumentException("Dvidence interval " + interval + " overlapped " + queryIntervalSet.size() + " query intervals");
             }
             cacheInterval = queryIntervalSet.iterator().next();
-            source.queryAndPrefetch(cacheInterval);
+            cacheEvidence = new IntervalTree<>();
+            source.queryAndPrefetch(cacheInterval).stream().forEachOrdered(t -> cacheEvidence.put(t.getStart(), t.getEnd(), t));
+        } else {
+            cacheEvidence.remove(0, interval.getStart() - 1);
         }
-        return source.queryAndPrefetch(interval);
+        return Streams.stream(cacheEvidence.overlappers(interval.getStart(), interval.getEnd()))
+                .map(IntervalTree.Node::getValue).collect(Collectors.toList()); //source.queryAndPrefetch(interval);
     }
 
     private final OverlapDetector<SimpleInterval> getEvidenceOverlapDetector(final List<SVCallRecordWithEvidence> calls) {
@@ -89,8 +100,6 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
     }
 
     private final boolean invalidCacheInterval(final SimpleInterval cacheInterval, final SimpleInterval queryInterval) {
-        return cacheInterval == null
-                || !queryInterval.getContig().equals(cacheInterval.getContig())
-                || !queryInterval.spanWith(cacheInterval).equals(cacheInterval);
+        return cacheInterval == null || !cacheInterval.contains(queryInterval);
     }
 }
