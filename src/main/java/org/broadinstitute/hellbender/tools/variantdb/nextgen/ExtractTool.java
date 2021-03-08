@@ -53,7 +53,7 @@ public abstract class ExtractTool extends GATKTool {
     @Argument(
             fullName = "sample-table",
             doc = "Fully qualified name of a bigquery table containing a single column `sample` that describes the full list of samples to extract",
-            optional = false
+            optional = true
     )
     protected String sampleTableName = null;
 
