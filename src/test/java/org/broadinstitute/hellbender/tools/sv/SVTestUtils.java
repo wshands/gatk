@@ -2,16 +2,19 @@ package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypeBuilder;
-import htsjdk.variant.variantcontext.StructuralVariantType;
+import htsjdk.variant.variantcontext.*;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
+import org.broadinstitute.hellbender.tools.sv.cluster.CNVCollapser;
+import org.broadinstitute.hellbender.tools.sv.cluster.LocatableClusterEngine;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
+import org.broadinstitute.hellbender.tools.sv.cluster.SVCollapser;
 import org.broadinstitute.hellbender.utils.GenomeLoc;
 import org.broadinstitute.hellbender.utils.GenomeLocParser;
+import org.testng.Assert;
 
 import java.util.*;
+import java.util.function.Function;
 
 public class SVTestUtils {
     public final static int chr1Length = 249250621;
@@ -23,7 +26,15 @@ public class SVTestUtils {
 
     private final static GenomeLocParser glParser = new GenomeLocParser(SVTestUtils.dict);
 
-    private final static SVClusterEngine defaultEngine = new SVClusterEngine(SVTestUtils.dict);
+    public static final LocatableClusterEngine.CLUSTERING_TYPE defaultClusteringType = LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE;
+    public static final Function<Collection<SVCallRecord>, SVCallRecord> defaultCollapser =
+            new CNVCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END)::collapse;
+
+    public static SVClusterEngine<SVCallRecord> getNewDefaultEngine() {
+        return new SVClusterEngine<>(SVTestUtils.dict, defaultClusteringType, false, defaultCollapser);
+    }
+
+    public static final SVClusterEngine<SVCallRecord> defaultEngine = getNewDefaultEngine();
 
     public final static int start = 10001;
 
@@ -169,4 +180,33 @@ public class SVTestUtils {
             StructuralVariantType.CNV, length,
             Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
             Arrays.asList(sample1, sample2));
+
+
+    public static void assertEquals(final SVCallRecord one, final SVCallRecord two) {
+        if (one == two) return;
+        Assert.assertEquals(one.getAlgorithms(), two.getAlgorithms());
+        Assert.assertEquals(one.getAttributes(), two.getAttributes());
+        Assert.assertEquals(one.getPositionAInterval(), two.getPositionAInterval());
+        Assert.assertEquals(one.getPositionBInterval(), two.getPositionBInterval());
+        Assert.assertEquals(one.getStrandA(), two.getStrandA());
+        Assert.assertEquals(one.getStrandB(), two.getStrandB());
+        Assert.assertEquals(one.getId(), two.getId());
+        Assert.assertEquals(one.getLength(), two.getLength());
+        Assert.assertEquals(one.getType(), two.getType());
+        Assert.assertEquals(one.getGenotypes().size(), two.getGenotypes().size());
+        for (int i = 0; i < one.getGenotypes().size(); i++) {
+            VariantContextTestUtils.assertGenotypesAreEqual(one.getGenotypes().get(i), two.getGenotypes().get(i));
+        }
+    }
+
+    public static void assertContainsAll(final GenotypesContext one, final GenotypesContext two) {
+        Assert.assertTrue(one.size() >= two.size());
+        if ( !one.isEmpty()) {
+            Assert.assertTrue(one.getSampleNames().containsAll(two.getSampleNames()), "sample names set");
+            final Set<String> samples = two.getSampleNames();
+            for ( final String sample : samples ) {
+                VariantContextTestUtils.assertGenotypesAreEqual(one.get(sample), two.get(sample));
+            }
+        }
+    }
 }

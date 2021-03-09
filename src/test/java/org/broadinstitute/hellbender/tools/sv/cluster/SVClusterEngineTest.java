@@ -12,7 +12,7 @@ import java.util.List;
 
 public class SVClusterEngineTest {
 
-    private final SVClusterEngine engine = new SVClusterEngine(SVTestUtils.dict);
+    private final SVClusterEngine<SVCallRecord> engine = SVTestUtils.defaultEngine;
 
     @BeforeTest
     public void initializeClusterEngine() {
@@ -23,7 +23,7 @@ public class SVClusterEngineTest {
     public void testFlattenCluster() {
         //depth only and depthAndStuff have same bounds, less than call2
         final List<SVCallRecord> testCluster = Arrays.asList(SVTestUtils.depthOnly, SVTestUtils.depthAndStuff, SVTestUtils.call2);
-        final SVCallRecord flattened = engine.flattenCluster(testCluster);
+        final SVCallRecord flattened = engine.getCollapser().apply(testCluster);
         Assert.assertEquals(flattened.getPositionA(), SVTestUtils.depthAndStuff.getPositionA());
         Assert.assertEquals(flattened.getPositionB(), SVTestUtils.depthAndStuff.getPositionB());
         //should have all the algs
@@ -31,9 +31,9 @@ public class SVClusterEngineTest {
         Assert.assertTrue(flattened.getAlgorithms().containsAll(SVTestUtils.depthOnly.getAlgorithms()));
         Assert.assertTrue(flattened.getAlgorithms().containsAll(SVTestUtils.call2.getAlgorithms()));
         //should have all the genotypes
-        Assert.assertTrue(flattened.getGenotypes().containsAll(SVTestUtils.depthAndStuff.getGenotypes()));
-        Assert.assertTrue(flattened.getGenotypes().containsAll(SVTestUtils.depthOnly.getGenotypes()));
-        Assert.assertTrue(flattened.getGenotypes().containsAll(SVTestUtils.call2.getGenotypes()));
+        SVTestUtils.assertContainsAll(flattened.getGenotypes(), SVTestUtils.depthAndStuff.getGenotypes());
+        SVTestUtils.assertContainsAll(flattened.getGenotypes(), SVTestUtils.depthOnly.getGenotypes());
+        SVTestUtils.assertContainsAll(flattened.getGenotypes(), SVTestUtils.call2.getGenotypes());
         //TODO: add test for insertion cluster
     }
 
@@ -47,55 +47,34 @@ public class SVClusterEngineTest {
 
     @Test
     public void testGetClusteringInterval() {
-        Assert.assertTrue(engine.getFeasibleStartPositionRange(SVTestUtils.leftEdgeCall, null).getStart() > 0);
-        Assert.assertTrue(engine.getFeasibleStartPositionRange(SVTestUtils.rightEdgeCall, null).getEnd() < SVTestUtils.chr1Length);
+        Assert.assertTrue(engine.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall) <= SVTestUtils.chr1Length);
 
-        final SimpleInterval littleCluster = engine.getFeasibleStartPositionRange(SVTestUtils.call1, null);
+        final int littleClusterPosition = engine.getMaxClusterableStartingPosition(SVTestUtils.call1);
         //before we check calculations, make sure these actually cluster
         Assert.assertTrue(engine.clusterTogether(SVTestUtils.call1, SVTestUtils.call1b));
-        final SimpleInterval totalInterval = engine.getFeasibleStartPositionRange(SVTestUtils.call1b, littleCluster);
-        //min start for combined interval should be less than the leftmost bound, which is the start of call1
-        Assert.assertTrue(totalInterval.getStart() < SVTestUtils.call1.getPositionA());
-        Assert.assertEquals(totalInterval.getStart(), littleCluster.getStart());
+        final int callPosition = engine.getMaxClusterableStartingPosition(SVTestUtils.call1b);
+        final int totalPosition = Math.max(callPosition, littleClusterPosition);
         //max start for combined interval should be greater than the leftmost bound, and less than the nearest event end
-        Assert.assertTrue(totalInterval.getEnd() > SVTestUtils.call1.getPositionA());
-        Assert.assertTrue(totalInterval.getEnd() < SVTestUtils.call1.getPositionB());
-        //quanitative checks
-        Assert.assertEquals(totalInterval.getStart(), SVTestUtils.call1.getPositionB() - (SVTestUtils.call1.getLength() / engine.getDepthOnlyParams().getReciprocalOverlap()));
-        Assert.assertEquals(totalInterval.getEnd(), SVTestUtils.call1b.getPositionA() + (1.0 - engine.getDepthOnlyParams().getReciprocalOverlap()) * SVTestUtils.call1b.getLength());
+        Assert.assertTrue(totalPosition > SVTestUtils.call1.getPositionA());
+        Assert.assertTrue(totalPosition < SVTestUtils.call1.getPositionB());
+        //quantitative checks
+        final double depthReciprocalOverlap = Math.max(engine.getDepthOnlyParams().getReciprocalOverlap(), engine.getMixedParams().getReciprocalOverlap());
+        final int depthPadding = Math.max(engine.getDepthOnlyParams().getPadding(), engine.getMixedParams().getPadding());
+        final int depthWindow = Math.max(engine.getDepthOnlyParams().getWindow(), engine.getMixedParams().getWindow());
+        final SimpleInterval paddedInterval = new SimpleInterval(SVTestUtils.call1b.getContigA(), SVTestUtils.call1b.getPositionA(), SVTestUtils.call1b.getPositionB()).expandWithinContig(depthPadding, SVTestUtils.dict);
+        Assert.assertTrue(totalPosition >= paddedInterval.getStart() + (1.0 - depthReciprocalOverlap) * paddedInterval.getLengthOnReference());
+        Assert.assertTrue(totalPosition >= SVTestUtils.call1b.getPositionA() + depthWindow);
 
         //checks for breakend calls, which have different bounds
-        final SimpleInterval pesrCluster1 = engine.getFeasibleStartPositionRange(SVTestUtils.depthAndStuff, null);
-        Assert.assertEquals(pesrCluster1.getStart(), SVTestUtils.depthAndStuff.getPositionA() - engine.getEvidenceParams().getWindow());
-        Assert.assertEquals(pesrCluster1.getEnd(), SVTestUtils.depthAndStuff.getPositionA() + engine.getEvidenceParams().getWindow());
+        final int pesrWindow = Math.max(engine.getEvidenceParams().getWindow(), engine.getMixedParams().getWindow());
+        final int pesrCluster1 = engine.getMaxClusterableStartingPosition(SVTestUtils.depthAndStuff);
+        Assert.assertTrue(pesrCluster1 >= SVTestUtils.depthAndStuff.getPositionA() + pesrWindow);
         //add an upstream variant
-        final SimpleInterval pesrCluster2 = engine.getFeasibleStartPositionRange(SVTestUtils.depthAndStuff2, pesrCluster1);
-        Assert.assertEquals(pesrCluster2.getStart(), pesrCluster1.getStart() - engine.getEvidenceParams().getWindow());
-        Assert.assertEquals(pesrCluster2.getEnd(), pesrCluster1.getEnd());
+        final int pesrCluster2 = Math.max(engine.getMaxClusterableStartingPosition(SVTestUtils.depthAndStuff2), pesrCluster1);
+        Assert.assertTrue(pesrCluster2 >= pesrCluster1);
         //add a downstream variant
-        final SimpleInterval pesrCluster3 = engine.getFeasibleStartPositionRange(SVTestUtils.depthAndStuff3, pesrCluster1);
-        Assert.assertEquals(pesrCluster3.getStart(), pesrCluster1.getStart());
-        Assert.assertEquals(pesrCluster3.getEnd(), SVTestUtils.depthAndStuff3.getPositionA() + engine.getEvidenceParams().getWindow());
-    }
-
-    @Test
-    public void testItemsAreIdentical() {
-        //same bounds, different algs
-        Assert.assertTrue(engine.getDeduplicator().itemsAreIdentical(SVTestUtils.depthOnly, SVTestUtils.depthAndStuff));
-
-        //different bounds
-        Assert.assertFalse(engine.getDeduplicator().itemsAreIdentical(SVTestUtils.call1, SVTestUtils.call2));
-
-        Assert.assertTrue(engine.getDeduplicator().itemsAreIdentical(SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch));
-    }
-
-    @Test
-    public void testDeduplicateItems() {
-        final SVCallRecord merged1 = engine.getDeduplicator().deduplicateItems(Arrays.asList(SVTestUtils.depthOnly, SVTestUtils.depthAndStuff)).get(0);
-        Assert.assertEquals(merged1.getGenotypes().size(), 2);
-        Assert.assertTrue(merged1.getGenotypes().containsAll(Arrays.asList(SVTestUtils.sample1, SVTestUtils.sample2)));
-        Assert.assertEquals(merged1.getAlgorithms().size(), 2);
-        Assert.assertTrue(merged1.getAlgorithms().containsAll(SVTestUtils.depthAndStuff.getAlgorithms()));
+        final int pesrCluster3 = Math.max(engine.getMaxClusterableStartingPosition(SVTestUtils.depthAndStuff3), pesrCluster1);
+        Assert.assertTrue(pesrCluster3 >= SVTestUtils.depthAndStuff3.getPositionA() + pesrWindow);
     }
 
     @Test
@@ -107,16 +86,16 @@ public class SVClusterEngineTest {
     @Test
     public void testAdd() {
         //single-sample merge case, ignoring sample sets
-        final SVClusterEngine temp1 = new SVClusterEngine(SVTestUtils.dict);
+        final SVClusterEngine temp1 = SVTestUtils.getNewDefaultEngine();
         temp1.add(SVTestUtils.call1);
         //force new cluster by adding a non-overlapping event
         temp1.add(SVTestUtils.call3);
         final List<SVCallRecord> output1 = temp1.getOutput(); //flushes all clusters
         Assert.assertEquals(output1.size(), 2);
-        Assert.assertEquals(SVTestUtils.call1, output1.get(0));
-        Assert.assertEquals(SVTestUtils.call3, output1.get(1));
+        SVTestUtils.assertEquals(SVTestUtils.call1, output1.get(0));
+        SVTestUtils.assertEquals(SVTestUtils.call3, output1.get(1));
 
-        final SVClusterEngine temp2 = new SVClusterEngine(SVTestUtils.dict);
+        final SVClusterEngine temp2 = SVTestUtils.getNewDefaultEngine();
         temp2.add(SVTestUtils.call1);
         temp2.add(SVTestUtils.overlapsCall1);
         //force new cluster by adding a call on another contig
@@ -126,10 +105,10 @@ public class SVClusterEngineTest {
         //median of two items ends up being the second item here
         Assert.assertEquals(output2.get(0).getPositionA(), SVTestUtils.overlapsCall1.getPositionA());
         Assert.assertEquals(output2.get(0).getPositionB(), SVTestUtils.overlapsCall1.getPositionB());
-        Assert.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
+        SVTestUtils.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
 
         //checking insensitivity to sample set overlap
-        final SVClusterEngine temp3 = new SVClusterEngine(SVTestUtils.dict);
+        final SVClusterEngine temp3 = SVTestUtils.getNewDefaultEngine();
         temp3.add(SVTestUtils.call1);
         temp3.add(SVTestUtils.sameBoundsSampleMismatch);
         final List<SVCallRecord> output3 = temp3.getOutput();

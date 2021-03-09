@@ -176,22 +176,4 @@ public class SVCallRecord implements SVLocatable {
     public SimpleInterval getPositionBInterval() {
         return new SimpleInterval(contigB, positionB, positionB);
     }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof SVCallRecord)) return false;
-        SVCallRecord that = (SVCallRecord) o;
-        return positionA == that.positionA && strandA == that.strandA && positionB == that.positionB
-                && strandB == that.strandB && length == that.length && id.equals(that.id)
-                && contigA.equals(that.contigA) && contigB.equals(that.contigB) && type == that.type
-                && algorithms.equals(that.algorithms) && genotypes.equals(that.genotypes)
-                && attributes.equals(that.attributes);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(id, contigA, positionA, strandA, contigB, positionB, strandB, type, length, algorithms,
-                genotypes, attributes);
-    }
 }

@@ -83,27 +83,27 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     @Override
-    protected SimpleInterval getFeasibleStartPositionRange(final SVCallRecord call) {
+    protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
         final String contig = call.getContigA();
         final boolean isDepthOnly = isDepthOnlyCall(call);
+        final int contigLength = dictionary.getSequence(contig).getSequenceLength();
         // Reciprocal overlap window
-        final SimpleInterval overlapInterval;
+        final int maxPositionByOverlap;
         if (call.isIntrachromosomal()) {
             final int padding = Math.max(isDepthOnly ? depthOnlyParams.getPadding() : evidenceParams.getPadding(), mixedParams.getPadding());
             final double overlap = Math.min(isDepthOnly ? depthOnlyParams.getReciprocalOverlap() : evidenceParams.getReciprocalOverlap(), mixedParams.getReciprocalOverlap());
-            final SimpleInterval spanningInterval = new SimpleInterval(contig, call.getPositionA(), call.getPositionB()).expandWithinContig(padding, dictionary);
-            final int start = (int) (spanningInterval.getEnd() - (spanningInterval.getLengthOnReference() / overlap));
-            final int end = (int) (spanningInterval.getStart() + (1.0 - overlap) * spanningInterval.getLengthOnReference());
-            overlapInterval = IntervalUtils.trimIntervalToContig(contig, start, end, dictionary.getSequence(contig).getSequenceLength());
+            final SimpleInterval paddedInterval = new SimpleInterval(contig, call.getPositionA(), call.getPositionB()).expandWithinContig(padding, dictionary);
+            final int maxPosition = (int) (paddedInterval.getStart() + (1.0 - overlap) * paddedInterval.getLengthOnReference());
+            maxPositionByOverlap = Math.min(maxPosition, contigLength);
         } else {
-            overlapInterval = call.getPositionAInterval();
+            maxPositionByOverlap = call.getPositionA();
         }
 
         // Breakend proximity window
         final int window = Math.max(isDepthOnly ? depthOnlyParams.getWindow() : evidenceParams.getWindow(), mixedParams.getWindow());
-        final SimpleInterval breakendInterval = call.getPositionAInterval().expandWithinContig(window, dictionary);
+        final int maxPositionByWindow = Math.min(call.getPositionA() + window, contigLength);
 
-        return restrictIntervalsForClustering(overlapInterval, breakendInterval);
+        return Math.max(maxPositionByOverlap, maxPositionByWindow);
     }
 
 
