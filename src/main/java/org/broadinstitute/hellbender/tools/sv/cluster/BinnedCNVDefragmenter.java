@@ -31,36 +31,29 @@ public class BinnedCNVDefragmenter extends CNVDefragmenter {
         this(dictionary, DEFAULT_PADDING_FRACTION, DEFAULT_SAMPLE_OVERLAP, coverageIntervals);
     }
 
-    /**
-     * Determine an overlap interval for clustering using padding specified at object construction
-     * Returned interval represents the interval in which the start position of a new event must fall in order to be
-     * added to the cluster (including the new event)
-     * @param call  new event to be clustered
-     * @return  an interval describing a cluster containing only this call
-     */
     @Override
-    protected SimpleInterval getClusteringInterval(final SVCallRecord call) {
-        Utils.nonNull(call);
-        final GenomeLoc callStart = parser.createGenomeLoc(call.getContigA(), call.getPositionA(), call.getPositionA());
-        final GenomeLoc callEnd = parser.createGenomeLoc(call.getContigA(), call.getPositionB(), call.getPositionB());
+    protected SimpleInterval getPaddedRecordInterval(final SVCallRecord record) {
+        Utils.nonNull(record);
+        final GenomeLoc callStart = parser.createGenomeLoc(record.getContigA(), record.getPositionA(), record.getPositionA());
+        final GenomeLoc callEnd = parser.createGenomeLoc(record.getContigA(), record.getPositionB(), record.getPositionB());
 
         //first interval that is equal to or "greater than" the call start, such that the start of the bin should match the call start, with a little wiggle room
         final Map.Entry<GenomeLoc, Integer> startBin = genomicToBinMap.ceilingEntry(callStart);
         if (startBin == null) {
-            throw new UserException.BadInput("Call start " + callStart + " for  call " + call.getId() + " not found in model call intervals.");
+            throw new UserException.BadInput("Call start " + callStart + " for  call " + record.getId() + " not found in model call intervals.");
         }
         final int callStartIndex = startBin.getValue();
 
         //last interval that is equal to or "less than" the call start, such that the end of the bin should match the call end
         final Map.Entry<GenomeLoc, Integer> endBin = genomicToBinMap.floorEntry(callEnd);
         if (endBin == null) {
-            throw new UserException.BadInput("Call end " + callEnd + " for call " + call.getId() + " not found in model call intervals.");
+            throw new UserException.BadInput("Call end " + callEnd + " for call " + record.getId() + " not found in model call intervals.");
         }
         final int callEndIndex = endBin.getValue();
         final int callBinLength = callEndIndex - callStartIndex + 1;
         if (callBinLength <= 0) {
-            throw new UserException.BadInput("Copy number call at " + call.getContigA() + ":" + call.getPositionA() + "-"
-                    + call.getPositionB() + " does not align with supplied model calling intervals. Use the filtered intervals input from GermlineCNVCaller for this cohort/model.");
+            throw new UserException.BadInput("Copy number call at " + record.getContigA() + ":" + record.getPositionA() + "-"
+                    + record.getPositionB() + " does not align with supplied model calling intervals. Use the filtered intervals input from GermlineCNVCaller for this cohort/model.");
         }
 
         final int paddedStartIndex = Math.max(callStartIndex - (int)Math.round(callBinLength * paddingFraction), 0);
@@ -79,8 +72,8 @@ public class BinnedCNVDefragmenter extends CNVDefragmenter {
             paddedCallEnd = callEnd.getEnd();
         }
 
-        final int contigLength = dictionary.getSequence(call.getContigA()).getSequenceLength();
-        return IntervalUtils.trimIntervalToContig(call.getContigA(), paddedCallStart, paddedCallEnd, contigLength);
+        final int contigLength = dictionary.getSequence(record.getContigA()).getSequenceLength();
+        return IntervalUtils.trimIntervalToContig(record.getContigA(), paddedCallStart, paddedCallEnd, contigLength);
     }
 
 }

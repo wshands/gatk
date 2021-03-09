@@ -1,10 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.GenotypesContext;
-import htsjdk.variant.variantcontext.VariantContext;
-import htsjdk.variant.variantcontext.VariantContextBuilder;
+import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.*;
 import org.broadinstitute.barclay.argparser.Argument;
@@ -88,6 +85,8 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
     )
     private GATKPath outputFile;
 
+    final static List<Allele> DEFAULT_ALLELES = Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
+
     private VariantContextWriter writer;
     private List<SVCallRecord> records;
     private Set<String> samples;
@@ -149,21 +148,31 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
     }
 
     private SVCallRecord sanitizeInputGenotypes(final SVCallRecord record) {
-        // Saves memory
-        final GenotypesContext nonRefGenotypes = GenotypesContext.copy(record.getGenotypes().stream().filter(g -> SVCallRecord.isRawCall(g) || SVCallRecord.isCarrier(g)).collect(Collectors.toList()));
+        // Saves memory to only retain non-ref genotypes
+        final GenotypesContext nonRefGenotypes = GenotypesContext.copy(record.getGenotypes().stream()
+                .filter(g -> SVCallRecord.isRawCall(g) || SVCallRecord.isCarrier(g))
+                .map(this::sanitizeGenotype)
+                .collect(Collectors.toList()));
         return SVCallRecordUtils.copyCallWithNewGenotypes(record, nonRefGenotypes);
+    }
+
+    private Genotype sanitizeGenotype(final Genotype genotype) {
+        return new GenotypeBuilder(genotype.getSampleName())
+                .alleles(DEFAULT_ALLELES)
+                .attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE)
+                .make();
     }
 
     private VariantContext createVariant(final SVCallRecord call) {
         final VariantContextBuilder builder = SVCallRecordUtils.getVariantBuilder(call);
         final Map<String, Object> nonCallAttributes = Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
-        final List<Allele> missingAlleles = Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
-        builder.genotypes(SVCallRecordUtils.fillMissingSamplesWithGenotypes(builder.getGenotypes(), missingAlleles, samples, nonCallAttributes));
+        builder.genotypes(SVCallRecordUtils.fillMissingSamplesWithGenotypes(builder.getGenotypes(), DEFAULT_ALLELES, samples, nonCallAttributes));
         return builder.make();
     }
 
     private VCFHeader createVcfHeader() {
         final VCFHeader header = new VCFHeader(getDefaultToolVCFHeaderLines(), samples);
+        header.setVCFHeaderVersion(VCFHeaderVersion.VCF4_2);
         header.setSequenceDictionary(dictionary);
 
         // Info lines
@@ -173,7 +182,7 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
         header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.END2_ATTRIBUTE, 1, VCFHeaderLineType.String, "Second position"));
         header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.CONTIG2_ATTRIBUTE, 1, VCFHeaderLineType.String, "Second contig"));
         header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.STRANDS_ATTRIBUTE, 1, VCFHeaderLineType.String, "First and second strands"));
-        header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE, 1, VCFHeaderLineType.String, "List of calling algorithms"));
+        header.addMetaDataLine(new VCFInfoHeaderLine("##INFO=<ID=ALGORITHMS,Number=.,Type=String,Description=\"Source algorithms\">", header.getVCFHeaderVersion()));
 
         // Format lines
         header.addMetaDataLine(VCFStandardHeaderLines.getFormatLine(VCFConstants.GENOTYPE_KEY));

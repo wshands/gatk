@@ -321,6 +321,7 @@ public final class SVCallRecordUtils {
         final boolean strand1 = strands.startsWith(SVCallRecord.STRAND_PLUS);
         final boolean strand2 = strands.endsWith(SVCallRecord.STRAND_PLUS);
         final int length = getLength(variant);
+        final Map<String, Object> attributes = keepAttributes ? variant.getAttributes() : Collections.emptyMap();
 
         final String contigB;
         final int positionB;
@@ -341,7 +342,7 @@ public final class SVCallRecordUtils {
             contigB = contigA;
             positionB = variant.getEnd();
         }
-        return new SVCallRecord(id, contigA, positionA, strand1, contigB, positionB, strand2, type, length, algorithms, variant.getGenotypes(), variant.getAttributes());
+        return new SVCallRecord(id, contigA, positionA, strand1, contigB, positionB, strand2, type, length, algorithms, variant.getGenotypes(), attributes);
     }
 
     public static int getLength(final VariantContext variant) {

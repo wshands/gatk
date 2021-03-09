@@ -83,7 +83,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     @Override
-    protected SimpleInterval getClusteringInterval(final SVCallRecord call) {
+    protected SimpleInterval getFeasibleStartPositionRange(final SVCallRecord call) {
         final String contig = call.getContigA();
         final boolean isDepthOnly = isDepthOnlyCall(call);
         // Reciprocal overlap window

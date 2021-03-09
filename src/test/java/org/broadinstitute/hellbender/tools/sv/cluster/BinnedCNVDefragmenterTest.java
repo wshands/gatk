@@ -72,14 +72,14 @@ public class BinnedCNVDefragmenterTest {
 
     @Test
     public void testGetClusteringInterval() {
-        Assert.assertTrue(defaultDefragmenter.getClusteringInterval(SVTestUtils.leftEdgeCall, null).getStart() > 0);
-        Assert.assertTrue(singleSampleDefragmenter.getClusteringInterval(SVTestUtils.leftEdgeCall, null).getStart() > 0);
-        Assert.assertEquals(defaultDefragmenter.getClusteringInterval(SVTestUtils.rightEdgeCall, null).getEnd(), SVTestUtils.chr1Length);
-        Assert.assertTrue(singleSampleDefragmenter.getClusteringInterval(SVTestUtils.rightEdgeCall, null).getEnd() <= SVTestUtils.chr1Length);  //will be less than chr1length if target intervals are smaller than chr1
+        Assert.assertTrue(defaultDefragmenter.getFeasibleStartPositionRange(SVTestUtils.leftEdgeCall, null).getStart() > 0);
+        Assert.assertTrue(singleSampleDefragmenter.getFeasibleStartPositionRange(SVTestUtils.leftEdgeCall, null).getStart() > 0);
+        Assert.assertEquals(defaultDefragmenter.getFeasibleStartPositionRange(SVTestUtils.rightEdgeCall, null).getEnd(), SVTestUtils.chr1Length);
+        Assert.assertTrue(singleSampleDefragmenter.getFeasibleStartPositionRange(SVTestUtils.rightEdgeCall, null).getEnd() <= SVTestUtils.chr1Length);  //will be less than chr1length if target intervals are smaller than chr1
 
 
         final SimpleInterval littleCluster = new SimpleInterval("chr1", SVTestUtils.start, SVTestUtils.start + SVTestUtils.length -1);
-        final SimpleInterval totalInterval = defaultDefragmenter.getClusteringInterval(SVTestUtils.call2, littleCluster);
+        final SimpleInterval totalInterval = defaultDefragmenter.getFeasibleStartPositionRange(SVTestUtils.call2, littleCluster);
         //interval describing cluster should already be padded
         Assert.assertEquals(totalInterval.getStart(), SVTestUtils.start);
         //padding is added to the input call

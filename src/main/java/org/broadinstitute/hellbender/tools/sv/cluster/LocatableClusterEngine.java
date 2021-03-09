@@ -42,10 +42,10 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     }
 
     abstract protected boolean clusterTogether(final T a, final T b);
-    abstract protected SimpleInterval getClusteringInterval(final T item);
+    abstract protected SimpleInterval getFeasibleStartPositionRange(final T item);
 
-    protected SimpleInterval getClusteringInterval(final T item, final SimpleInterval clusterMinStartInterval) {
-        final SimpleInterval itemInterval = getClusteringInterval(item);
+    protected SimpleInterval getFeasibleStartPositionRange(final T item, final SimpleInterval clusterMinStartInterval) {
+        final SimpleInterval itemInterval = getFeasibleStartPositionRange(item);
         if (clusterMinStartInterval == null) {
             return itemInterval;
         } else {
@@ -60,7 +60,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return new SimpleInterval(a.getContig(), start, end);
     }
 
-    protected final SimpleInterval getClusteringInterval(final Collection<Integer> itemIds) {
+    protected final SimpleInterval getFeasibleStartPositionRange(final Collection<Integer> itemIds) {
         Utils.nonNull(itemIds);
         Utils.nonEmpty(itemIds);
         final List<T> items = itemIds.stream().map(this::getItem).collect(Collectors.toList());
@@ -68,7 +68,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         if (contigA.size() > 1) {
             throw new IllegalArgumentException("Items start on multiple contigs");
         }
-        final List<SimpleInterval> clusteringIntervals = items.stream().map(item -> getClusteringInterval(item, null)).collect(Collectors.toList());
+        final List<SimpleInterval> clusteringIntervals = items.stream().map(item -> getFeasibleStartPositionRange(item, null)).collect(Collectors.toList());
         final int minStart = clusteringIntervals.stream().mapToInt(SimpleInterval::getStart).min().getAsInt();
         final int maxEnd = clusteringIntervals.stream().mapToInt(SimpleInterval::getEnd).max().getAsInt();
         return new SimpleInterval(contigA.get(0), minStart, maxEnd);
@@ -131,7 +131,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
             final Cluster cluster = entry.getValue();
             final SimpleInterval clusterInterval = cluster.getInterval();
             final List<Integer> clusterItems = cluster.getItemIds();
-            if (getClusteringInterval(item, null).getStart() > clusterInterval.getEnd()) {
+            if (getFeasibleStartPositionRange(item, null).getStart() > clusterInterval.getEnd()) {
                 clusterIdsToProcess.add(clusterIndex);  //this cluster is complete -- process it when we're done
             } else {
                 if (clusteringType.equals(CLUSTERING_TYPE.MAX_CLIQUE)) {
@@ -209,7 +209,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         final List<Integer> newClusterItems = new ArrayList<>(clusterItems.size() + 1);
         newClusterItems.addAll(clusterItems);
         newClusterItems.add(itemId);
-        idToClusterMap.put(nextClusterId++, new Cluster(getClusteringInterval(newClusterItems), newClusterItems));
+        idToClusterMap.put(nextClusterId++, new Cluster(getFeasibleStartPositionRange(newClusterItems), newClusterItems));
     }
 
     private final void processCluster(final int clusterIndex) {
@@ -252,7 +252,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     private final void seedCluster(final Integer item) {
         final List<Integer> newClusters = new ArrayList<>(1);
         newClusters.add(item);
-        idToClusterMap.put(nextClusterId++, new Cluster(getClusteringInterval(getItem(item), null), newClusters));
+        idToClusterMap.put(nextClusterId++, new Cluster(getFeasibleStartPositionRange(getItem(item), null), newClusters));
     }
 
     /**
@@ -264,7 +264,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         final List<Integer> newClusterItems = new ArrayList<>(1 + seedItems.size());
         newClusterItems.addAll(seedItems);
         newClusterItems.add(item);
-        final Cluster newCluster = new Cluster(getClusteringInterval(getItem(item), null), newClusterItems);
+        final Cluster newCluster = new Cluster(getFeasibleStartPositionRange(getItem(item), null), newClusterItems);
 
         //Do not add duplicates
         if (!idToClusterMap.entrySet().contains(newCluster)) {
@@ -298,7 +298,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         final SimpleInterval clusterInterval = cluster.getInterval();
         final List<Integer> clusterItems = cluster.getItemIds();
         clusterItems.add(itemId);
-        final SimpleInterval clusteringStartInterval = getClusteringInterval(item, clusterInterval);
+        final SimpleInterval clusteringStartInterval = getFeasibleStartPositionRange(item, clusterInterval);
         if (clusteringStartInterval.getStart() != clusterInterval.getStart() || clusteringStartInterval.getEnd() != clusterInterval.getEnd()) {
             idToClusterMap.put(clusterId, new Cluster(clusteringStartInterval, clusterItems));
         }
