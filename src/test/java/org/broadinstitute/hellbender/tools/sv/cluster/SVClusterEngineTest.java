@@ -86,7 +86,7 @@ public class SVClusterEngineTest {
     @Test
     public void testAdd() {
         //single-sample merge case, ignoring sample sets
-        final SVClusterEngine temp1 = SVTestUtils.getNewDefaultEngine();
+        final SVClusterEngine<SVCallRecord> temp1 = SVTestUtils.getNewDefaultEngine();
         temp1.add(SVTestUtils.call1);
         //force new cluster by adding a non-overlapping event
         temp1.add(SVTestUtils.call3);
@@ -95,7 +95,7 @@ public class SVClusterEngineTest {
         SVTestUtils.assertEquals(SVTestUtils.call1, output1.get(0));
         SVTestUtils.assertEquals(SVTestUtils.call3, output1.get(1));
 
-        final SVClusterEngine temp2 = SVTestUtils.getNewDefaultEngine();
+        final SVClusterEngine<SVCallRecord> temp2 = SVTestUtils.getNewDefaultEngine();
         temp2.add(SVTestUtils.call1);
         temp2.add(SVTestUtils.overlapsCall1);
         //force new cluster by adding a call on another contig
@@ -108,7 +108,7 @@ public class SVClusterEngineTest {
         SVTestUtils.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
 
         //checking insensitivity to sample set overlap
-        final SVClusterEngine temp3 = SVTestUtils.getNewDefaultEngine();
+        final SVClusterEngine<SVCallRecord> temp3 = SVTestUtils.getNewDefaultEngine();
         temp3.add(SVTestUtils.call1);
         temp3.add(SVTestUtils.sameBoundsSampleMismatch);
         final List<SVCallRecord> output3 = temp3.getOutput();
