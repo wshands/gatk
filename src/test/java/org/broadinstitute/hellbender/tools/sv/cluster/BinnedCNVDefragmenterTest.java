@@ -20,10 +20,10 @@ public class BinnedCNVDefragmenterTest {
     @Test
     public void testFlattenCluster() {
         final SVCallRecord call1FlattenedDefault = defaultDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
-        Assert.assertEquals(SVTestUtils.call1, call1FlattenedDefault);
+        SVTestUtils.assertEquals(SVTestUtils.call1, call1FlattenedDefault);
 
         final SVCallRecord call1FlattenedSingleSample = singleSampleDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
-        Assert.assertEquals(call1FlattenedSingleSample, call1FlattenedDefault);
+        SVTestUtils.assertEquals(call1FlattenedSingleSample, call1FlattenedDefault);
 
         final SVCallRecord sameBoundsThreeSamples = singleSampleDefragmenter.getCollapser().apply(Arrays.asList(SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch));
         Assert.assertEquals(sameBoundsThreeSamples.getPositionA(), SVTestUtils.call1.getPositionA());
@@ -40,34 +40,34 @@ public class BinnedCNVDefragmenterTest {
     @DataProvider
     public Object[][] clusterTogetherInputsDefault() {
         return new Object[][] {
-                {SVTestUtils.call1, SVTestUtils.call1, true},
-                {SVTestUtils.call1, SVTestUtils.call2, true},
-                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false},
-                {SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch, false},
-                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false}
+                {SVTestUtils.call1, SVTestUtils.call1, true, "call1 call1"},
+                {SVTestUtils.call1, SVTestUtils.call2, true, "call1 call2"},
+                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false, "call1 nonDepthOnly"},
+                {SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch, false, "call1 sameBoundsSampleMismatch"}
         };
     }
 
     @DataProvider
     public Object[][] clusterTogetherInputsSingleSample() {
         return new Object[][] {
-                {SVTestUtils.call1, SVTestUtils.call1, true},
-                {SVTestUtils.call1, SVTestUtils.call2, true},  //overlapping, same samples
-                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false},
-                {SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch, true},
-                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false},
-                {SVTestUtils.call1_CN1, SVTestUtils.call2_CN0, false}  //overlapping, but different copy number
+                {SVTestUtils.call1, SVTestUtils.call1, true, "call1 call1"},
+                {SVTestUtils.call1, SVTestUtils.call2, true, "call1 call2"},  //overlapping, same samples
+                {SVTestUtils.call1, SVTestUtils.nonDepthOnly, false, "call1 nonDepthOnly"},
+                {SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch, true, "call1 sameBoundsSampleMismatch"},
+                {SVTestUtils.call1_CN1, SVTestUtils.call2_CN0, false, "call1_CN1 call2_CN0"}  //overlapping, but different copy number
         };
     }
 
     @Test(dataProvider = "clusterTogetherInputsDefault")
-    public void testClusterTogetherDefault(final SVCallRecord call1, final SVCallRecord call2, final boolean expectedResult) {
-        Assert.assertEquals(defaultDefragmenter.clusterTogether(call1, call2), expectedResult);
+    public void testClusterTogetherDefault(final SVCallRecord call1, final SVCallRecord call2,
+                                           final boolean expectedResult, final String name) {
+        Assert.assertEquals(defaultDefragmenter.clusterTogether(call1, call2), expectedResult, name);
     }
 
     @Test(dataProvider = "clusterTogetherInputsSingleSample")
-    public void testClusterTogetherSingleSample(final SVCallRecord call1, final SVCallRecord call2, final boolean expectedResult) {
-        Assert.assertEquals(singleSampleDefragmenter.clusterTogether(call1, call2), expectedResult);
+    public void testClusterTogetherSingleSample(final SVCallRecord call1, final SVCallRecord call2,
+                                                final boolean expectedResult, final String name) {
+        Assert.assertEquals(singleSampleDefragmenter.clusterTogether(call1, call2), expectedResult, name);
     }
 
     @Test
@@ -75,7 +75,7 @@ public class BinnedCNVDefragmenterTest {
         Assert.assertEquals(defaultDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall), SVTestUtils.chr1Length);
         Assert.assertTrue(singleSampleDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall) == SVTestUtils.chr1Length);  //will be less than chr1length if target intervals are smaller than chr1
 
-        final int totalPosition = defaultDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.call2);
+        //final int totalPosition = defaultDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.call2);
         //padding is added to the input call
         //Assert.assertEquals(totalPosition, SVTestUtils.call2.getPositionA()+(int)Math.round(SVTestUtils.length*defaultDefragmenter.getPaddingFraction()));
         // TODO this needs to be reworked
@@ -90,8 +90,8 @@ public class BinnedCNVDefragmenterTest {
         temp1.add(SVTestUtils.call3);
         final List<SVCallRecord> output1 = temp1.getOutput(); //flushes all clusters
         Assert.assertEquals(output1.size(), 2);
-        Assert.assertEquals(SVTestUtils.call1, output1.get(0));
-        Assert.assertEquals(SVTestUtils.call3, output1.get(1));
+        SVTestUtils.assertEquals(SVTestUtils.call1, output1.get(0));
+        SVTestUtils.assertEquals(SVTestUtils.call3, output1.get(1));
 
         final CNVDefragmenter temp2 = new BinnedCNVDefragmenter(SVTestUtils.dict, paddingFraction, 0.8, SVTestUtils.targetIntervals);
         temp2.add(SVTestUtils.call1);
@@ -102,7 +102,7 @@ public class BinnedCNVDefragmenterTest {
         Assert.assertEquals(output2.size(), 2);
         Assert.assertEquals(output2.get(0).getPositionA(), SVTestUtils.call1.getPositionA());
         Assert.assertEquals(output2.get(0).getPositionB(), SVTestUtils.call2.getPositionB());
-        Assert.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
+        SVTestUtils.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
 
         //cohort case, checking sample set overlap
         final CNVDefragmenter temp3 = new CNVDefragmenter(SVTestUtils.dict);

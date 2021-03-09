@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
+import com.google.common.collect.Sets;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVTestUtils;
 import org.testng.Assert;
@@ -26,8 +27,7 @@ public class SVDeduplicatorUnitTest {
     @Test
     public void testDeduplicateItems() {
         final SVCallRecord merged1 = deduplicator.deduplicateSortedItems(Arrays.asList(SVTestUtils.depthOnly, SVTestUtils.depthAndStuff)).get(0);
-        Assert.assertEquals(merged1.getGenotypes().size(), 2);
-        Assert.assertTrue(merged1.getGenotypes().containsAll(Arrays.asList(SVTestUtils.sample1, SVTestUtils.sample2)));
+        Assert.assertEquals(merged1.getGenotypes().getSampleNames(), Sets.newHashSet(SVTestUtils.sample1.getSampleName(), SVTestUtils.sample2.getSampleName()));
         Assert.assertEquals(merged1.getAlgorithms().size(), 2);
         Assert.assertTrue(merged1.getAlgorithms().containsAll(SVTestUtils.depthAndStuff.getAlgorithms()));
     }
