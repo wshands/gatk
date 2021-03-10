@@ -3,7 +3,6 @@ package org.broadinstitute.hellbender.tools.sv.cluster;
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.tools.sv.SVLocatable;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
@@ -44,13 +43,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
     abstract protected boolean clusterTogether(final T a, final T b);
     abstract protected int getMaxClusterableStartingPosition(final T item);
-
-    protected final SimpleInterval restrictIntervalsForClustering(final SimpleInterval a, final SimpleInterval b) {
-        Utils.validateArg(a.getContig().equals(b.getContig()), "Intervals are on different contigs");
-        final int start = Math.min(a.getStart(), b.getStart());
-        final int end = Math.max(a.getEnd(), b.getEnd());
-        return new SimpleInterval(a.getContig(), start, end);
-    }
 
     protected final int getMaxClusterableStartingPosition(final Collection<Integer> itemIds) {
         Utils.nonNull(itemIds);
@@ -178,7 +170,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
                 addToCluster(clusterId, itemId);
             }
         }
-
+        
         // If there weren't any matches, create a new singleton cluster
         if (clustersToAugment.isEmpty() && clustersToSeedWith.isEmpty()) {
             seedCluster(itemId);
@@ -252,7 +244,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         final List<Integer> newClusterItems = new ArrayList<>(1 + seedItems.size());
         newClusterItems.addAll(seedItems);
         newClusterItems.add(item);
-        final Cluster newCluster = new Cluster(getMaxClusterableStartingPosition(getItem(item)), newClusterItems);
+        final Cluster newCluster = new Cluster(getMaxClusterableStartingPosition(newClusterItems), newClusterItems);
 
         //Do not add duplicates
         if (!idToClusterMap.entrySet().contains(newCluster)) {
@@ -282,13 +274,11 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
      */
     private final void addToCluster(final int clusterId, final Integer itemId) {
         final Cluster cluster = getCluster(clusterId);
-        final T item = getItem(itemId);
         final List<Integer> clusterItems = cluster.getItemIds();
         clusterItems.add(itemId);
-        final int maxClusterableStart = getMaxClusterableStartingPosition(item);
-        if (maxClusterableStart > cluster.getMaxClusterableStart()) {
-            cluster.setMaxClusterableStart(maxClusterableStart);
-        }
+        final T item = getItem(itemId);
+        final int itemClusterableStartPosition = getMaxClusterableStartingPosition(item);
+        cluster.setMaxClusterableStart(Math.max(cluster.getMaxClusterableStart(), itemClusterableStartPosition));
     }
 
     @VisibleForTesting
@@ -311,10 +301,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         }
 
         public void setMaxClusterableStart(final int position) {
-            if (position < maxClusterableStart) {
-                throw new IllegalArgumentException("Attempted to set clusterable start position " + position
-                        + ", which is below the current value " + maxClusterableStart);
-            }
             maxClusterableStart = position;
         }
 

@@ -179,6 +179,7 @@ public final class SVCluster extends VariantWalker {
 
     @Override
     public Object onTraversalSuccess() {
+        processClusters();
         if (!clusterEngine.isEmpty()) {
             processClusters();
         }

@@ -19,11 +19,11 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     protected ClusteringParameters evidenceParams;
 
     protected static final ClusteringParameters DEFAULT_DEPTH_ONLY_PARAMS =
-            new DepthClusteringParameters(0.8, 1000, 0);
+            new DepthClusteringParameters(0.8, 0);
     protected static final ClusteringParameters DEFAULT_MIXED_PARAMS =
-            new MixedClusteringParameters(0.5, 1000, 1000);
+            new MixedClusteringParameters(0.8, 1000);
     protected static final ClusteringParameters DEFAULT_EVIDENCE_PARAMS =
-            new EvidenceClusteringParameters(0.5, 500, 500);
+            new EvidenceClusteringParameters(0.5, 500);
 
     public SVClusterEngine(final SAMSequenceDictionary dictionary,
                            final CLUSTERING_TYPE clusteringType,
@@ -62,8 +62,8 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         // Reciprocal overlap
         final boolean isOverlap;
         if (a.isIntrachromosomal()) {
-            final SimpleInterval intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionB()).expandWithinContig(params.getPadding(), dictionary);
-            final SimpleInterval intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionB()).expandWithinContig(params.getPadding(), dictionary);
+            final SimpleInterval intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionB());
+            final SimpleInterval intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionB());
             isOverlap = IntervalUtils.isReciprocalOverlap(intervalA, intervalB, params.getReciprocalOverlap());
         } else {
             isOverlap = true;
@@ -90,10 +90,8 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         // Reciprocal overlap window
         final int maxPositionByOverlap;
         if (call.isIntrachromosomal()) {
-            final int padding = Math.max(isDepthOnly ? depthOnlyParams.getPadding() : evidenceParams.getPadding(), mixedParams.getPadding());
             final double overlap = Math.min(isDepthOnly ? depthOnlyParams.getReciprocalOverlap() : evidenceParams.getReciprocalOverlap(), mixedParams.getReciprocalOverlap());
-            final SimpleInterval paddedInterval = new SimpleInterval(contig, call.getPositionA(), call.getPositionB()).expandWithinContig(padding, dictionary);
-            final int maxPosition = (int) (paddedInterval.getStart() + (1.0 - overlap) * paddedInterval.getLengthOnReference());
+            final int maxPosition = (int) (call.getPositionA() + (1.0 - overlap) * (call.getPositionB() - call.getPositionA()));
             maxPositionByOverlap = Math.min(maxPosition, contigLength);
         } else {
             maxPositionByOverlap = call.getPositionA();
@@ -103,9 +101,20 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         final int window = Math.max(isDepthOnly ? depthOnlyParams.getWindow() : evidenceParams.getWindow(), mixedParams.getWindow());
         final int maxPositionByWindow = Math.min(call.getPositionA() + window, contigLength);
 
-        return Math.max(maxPositionByOverlap, maxPositionByWindow);
+        // TODO for debugging
+        /*
+        if (isDepthOnly) {
+            return contigLength;
+        } else {
+            return contigLength;
+        }
+*/
+        if (isDepthOnly) {
+            return Math.max(maxPositionByOverlap, maxPositionByWindow);
+        } else {
+            return Math.max(maxPositionByOverlap, maxPositionByWindow);
+        }
     }
-
 
     public final ClusteringParameters getDepthOnlyParams() {
         return depthOnlyParams;
@@ -144,16 +153,13 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
         private final double reciprocalOverlap;
         private final int window;
-        private final int padding;
         private final boolean overlapAndProximity;
         private final BiPredicate<SVCallRecord, SVCallRecord> validRecordsPredicate;
 
-        public ClusteringParameters(final double reciprocalOverlap, final int window, final int padding,
-                                    final boolean overlapAndProximity,
+        public ClusteringParameters(final double reciprocalOverlap, final int window, final boolean overlapAndProximity,
                                     final BiPredicate<SVCallRecord, SVCallRecord> validRecordsPredicate) {
             this.reciprocalOverlap = reciprocalOverlap;
             this.window = window;
-            this.padding = padding;
             this.overlapAndProximity = overlapAndProximity;
             this.validRecordsPredicate = validRecordsPredicate;
         }
@@ -166,10 +172,6 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
             return window;
         }
 
-        public int getPadding() {
-            return padding;
-        }
-
         public boolean isOverlapAndProximity() {
             return overlapAndProximity;
         }
@@ -180,20 +182,20 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     public static final class DepthClusteringParameters extends ClusteringParameters {
-        public DepthClusteringParameters(final double reciprocalOverlap, final int window, final int padding) {
-            super(reciprocalOverlap, window, padding, false, (a,b) -> isDepthOnlyCall(a) && isDepthOnlyCall(b));
+        public DepthClusteringParameters(final double reciprocalOverlap, final int window) {
+            super(reciprocalOverlap, window, false, (a,b) -> isDepthOnlyCall(a) && isDepthOnlyCall(b));
         }
     }
 
     public static final class EvidenceClusteringParameters extends ClusteringParameters {
-        public EvidenceClusteringParameters(final double reciprocalOverlap, final int window, final int padding) {
-            super(reciprocalOverlap, window, padding, true, (a,b) -> !isDepthOnlyCall(a) && !isDepthOnlyCall(b));
+        public EvidenceClusteringParameters(final double reciprocalOverlap, final int window) {
+            super(reciprocalOverlap, window, true, (a,b) -> !isDepthOnlyCall(a) && !isDepthOnlyCall(b));
         }
     }
 
     public static final class MixedClusteringParameters extends ClusteringParameters {
-        public MixedClusteringParameters(final double reciprocalOverlap, final int window, final int padding) {
-            super(reciprocalOverlap, window, padding, true, (a,b) -> isDepthOnlyCall(a) != isDepthOnlyCall(b));
+        public MixedClusteringParameters(final double reciprocalOverlap, final int window) {
+            super(reciprocalOverlap, window, true, (a,b) -> isDepthOnlyCall(a) != isDepthOnlyCall(b));
         }
     }
 

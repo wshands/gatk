@@ -217,16 +217,16 @@ public final class AggregatePairedEndAndSplitReadEvidence extends VariantWalker 
 
     @Override
     public void closeTool() {
-        super.closeTool();
-        if (discordantPairCollectionEnabled()) {
+        if (discordantPairSource != null) {
             discordantPairSource.close();
         }
-        if (splitReadCollectionEnabled()) {
+        if (splitReadSource != null) {
             splitReadSource.close();
         }
         if (writer != null) {
             writer.close();
         }
+        super.closeTool();
     }
 
     @Override
