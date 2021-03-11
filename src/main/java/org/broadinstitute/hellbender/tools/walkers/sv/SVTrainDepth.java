@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
+import avro.shaded.com.google.common.collect.Sets;
 import htsjdk.tribble.Feature;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
@@ -8,6 +9,7 @@ import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.copynumber.formats.collections.CalledContigPloidyCollection;
 import org.broadinstitute.hellbender.tools.sv.*;
 import org.broadinstitute.hellbender.utils.codecs.DepthEvidenceCodec;
@@ -147,35 +149,25 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     @Override
     public void onTraversalStart() {
         super.onTraversalStart();
-        try {
-            samplesList = new BufferedReader(new FileReader(sampleDepthFilePath.toPath().toFile())).lines()
-                    .map(s -> s.split("\t")[0])
-                    .collect(Collectors.toList());
-        } catch (final IOException e) {
-            throw new GATKException("Error reading sample depth file", e);
-        }
-        samplesFile = createSampleList();
-        final List<String> headerSamples = getSamplesFromHeader();
-        final Map<String, Integer> headerSampleIndexes = IntStream.range(0, headerSamples.size())
-                .mapToObj(i -> new AbstractMap.SimpleImmutableEntry<>(headerSamples.get(i), i))
-                .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue()));
-        sampleIndexes = samplesList.stream().map(headerSampleIndexes::get).collect(Collectors.toList());
 
-        modelDataFile = IOUtils.createTempFile(outputName + ".model_data", ".tsv");
-        try {
-            modelDataFileStream = new PrintStream(modelDataFile);
-        } catch (final IOException e) {
-            throw new GATKException("Could not create temporary file: " + modelDataFile.getAbsolutePath());
-        }
-        PythonScriptExecutor.checkPythonEnvironmentForPackage("svgenotyper");
+        // Check for required Python package
+        // TODO PythonScriptExecutor.checkPythonEnvironmentForPackage("svgenotyper");
 
-        final Collection<CalledContigPloidyCollection> contigPloidyCollections = contigPloidyCallFilePaths.stream()
-                .map(p -> new CalledContigPloidyCollection(p.toPath().toFile()))
-                .collect(Collectors.toList());
-        sampleContigPloidyMap = DepthEvidenceAggregator.getSampleContigPloidyMap(contigPloidyCollections);
+        // Process inputs
+        sampleContigPloidyMap = readContigPloidyMaps();
+        final List<String> depthTableSampleList = readSampleDepthTable();
+        final List<String> evidenceFileSampleList = getSamplesFromEvidenceFileHeader();
+        sampleContigPloidyMap = readContigPloidyMaps();
+        samplesList = negoatiateSampleList(depthTableSampleList, evidenceFileSampleList, sampleContigPloidyMap.keySet());
+        final Map<String, Integer> sampleToEvidenceFileIndexMap = getSampleToEvidenceRecordIndexMap(evidenceFileSampleList);
+        sampleIndexes = samplesList.stream().map(sampleToEvidenceFileIndexMap::get).collect(Collectors.toList());
+
+        // Create files consumed by Python tool
+        createSampleFile();
+        createModelDataFile();
     }
 
-    private List<String> getSamplesFromHeader() {
+    private List<String> getSamplesFromEvidenceFileHeader() {
         final Object header = getDrivingFeaturesHeader();
         if (!(header instanceof DepthEvidenceCodec.DepthEvidenceMetadata)) {
             throw new GATKException("Unexpected header type");
@@ -211,9 +203,6 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
 
     @Override
     public Object onTraversalSuccess() {
-        super.onTraversalSuccess();
-        modelDataFileStream.close();
-
         logger.info("Executing training script...");
         final boolean result = pythonExecutor.executeScript(
                 new Resource(CNV_TRAIN_GENOTYPING_PYTHON_SCRIPT, getClass()),
@@ -223,12 +212,76 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
             throw new GATKException("Python process returned non-zero exit code");
         }
         logger.info("Script completed with normal exit code.");
-
+        super.onTraversalSuccess();
         return null;
     }
 
-    private File createSampleList() {
-        return IOUtils.writeTempFile(samplesList, outputName + ".samples", ".tmp");
+    @Override
+    public void closeTool() {
+        if (modelDataFileStream != null) {
+            modelDataFileStream.close();
+        }
+        super.closeTool();
+    }
+
+    private List<String> readSampleDepthTable() {
+        try {
+            final List<String> samples = new BufferedReader(new FileReader(sampleDepthFilePath.toPath().toFile())).lines()
+                    .map(s -> s.split("\t")[0])
+                    .sorted()
+                    .collect(Collectors.toList());
+            if (new HashSet<>(samples).size() != samples.size()) {
+                throw new UserException.BadInput("Sample depth table contained duplicate sample ids");
+            }
+            return samples;
+        } catch (final IOException e) {
+            throw new GATKException("Error reading sample depth file", e);
+        }
+    }
+
+    private void createModelDataFile() {
+        modelDataFile = IOUtils.createTempFile(outputName + ".model_data", ".tsv");
+        try {
+            modelDataFileStream = new PrintStream(modelDataFile);
+        } catch (final IOException e) {
+            throw new GATKException("Could not create temporary file: " + modelDataFile.getAbsolutePath());
+        }
+    }
+
+    private Map<String,Map<String,Integer>> readContigPloidyMaps() {
+        final Collection<CalledContigPloidyCollection> contigPloidyCollections = contigPloidyCallFilePaths.stream()
+                .map(p -> new CalledContigPloidyCollection(p.toPath().toFile()))
+                .collect(Collectors.toList());
+        return DepthEvidenceAggregator.getSampleContigPloidyMap(contigPloidyCollections);
+    }
+
+    private static Map<String, Integer> getSampleToEvidenceRecordIndexMap(final List<String> headerSampleList) {
+        return IntStream.range(0, headerSampleList.size())
+                .mapToObj(i -> new AbstractMap.SimpleImmutableEntry<>(headerSampleList.get(i), i))
+                .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue()));
+    }
+
+    private List<String> negoatiateSampleList(final Collection<String> collectionA,
+                                              final Collection<String> collectionB,
+                                              final Collection<String> collectionC) {
+        final Set<String> setA = new HashSet<>(collectionA);
+        final Set<String> setB = new HashSet<>(collectionB);
+        final Set<String> setC = new HashSet<>(collectionC);
+        if (!setA.equals(setB) || !setB.equals(setC)) {
+            // If sample lists differ, use intersection
+            final List<String> result = Sets.intersection(Sets.intersection(setA, setB), setC).stream().sorted().collect(Collectors.toList());
+            if (result.isEmpty()) {
+                throw new UserException.BadInput("Evidence file, coverage table, and contig ploidy inputs had no samples in common");
+            }
+            logger.warn("Sample sets from evidence file, coverage table, and contig ploidy calls are not equal " +
+                    "- using intersection with " + result.size() + " samples");
+            return result;
+        }
+        return collectionA.stream().sorted().collect(Collectors.toList());
+    }
+
+    private void createSampleFile() {
+        samplesFile = IOUtils.writeTempFile(samplesList, outputName + ".samples", ".tmp");
     }
 
     private List<String> generatePythonArguments() {
