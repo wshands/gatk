@@ -59,9 +59,8 @@ public class SVClusterEngineTest {
         Assert.assertTrue(totalPosition < SVTestUtils.call1.getPositionB());
         //quantitative checks
         final double depthReciprocalOverlap = Math.max(engine.getDepthOnlyParams().getReciprocalOverlap(), engine.getMixedParams().getReciprocalOverlap());
-        final int depthPadding = Math.max(engine.getDepthOnlyParams().getPadding(), engine.getMixedParams().getPadding());
         final int depthWindow = Math.max(engine.getDepthOnlyParams().getWindow(), engine.getMixedParams().getWindow());
-        final SimpleInterval paddedInterval = new SimpleInterval(SVTestUtils.call1b.getContigA(), SVTestUtils.call1b.getPositionA(), SVTestUtils.call1b.getPositionB()).expandWithinContig(depthPadding, SVTestUtils.dict);
+        final SimpleInterval paddedInterval = new SimpleInterval(SVTestUtils.call1b.getContigA(), SVTestUtils.call1b.getPositionA(), SVTestUtils.call1b.getPositionB());
         Assert.assertTrue(totalPosition >= paddedInterval.getStart() + (1.0 - depthReciprocalOverlap) * paddedInterval.getLengthOnReference());
         Assert.assertTrue(totalPosition >= SVTestUtils.call1b.getPositionA() + depthWindow);
 
