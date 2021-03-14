@@ -64,6 +64,7 @@ public class VcfUtilsUnitTest extends GATKBaseTest {
         }
     }
 
+    @SuppressWarnings("deprecation")
     private Set<VCFHeaderLine> createHeaderLines() {
         Set<VCFHeaderLine> headerLines = new HashSet<>(2);
         headerLines.add(new VCFContigHeaderLine(

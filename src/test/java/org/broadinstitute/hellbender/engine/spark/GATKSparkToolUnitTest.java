@@ -42,7 +42,7 @@ public class GATKSparkToolUnitTest extends GATKBaseTest {
 
         // TODO: this is bogus:
         //  1) this isn't the name of the key anymore...
-        //  2) there can be more than one GATKCommandLine header lines (or at least it should
+        //  2) there can be more than one GATKCommandLine header line (or at least it should
         //     be possible to have more than one)
         //  3) this header line is not really guaranteed to be a VCFIDHeaderLine, although it is
         VCFIDHeaderLine commandLine = (VCFIDHeaderLine) hdr.getOtherHeaderLine("GATKCommandLine");
