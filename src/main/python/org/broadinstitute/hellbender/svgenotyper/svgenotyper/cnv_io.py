@@ -47,19 +47,24 @@ def load_data(variants_file_path: str,
 
 def write_variant_output(output_path: str, output_data: dict):
     param_keys = ["eps", "phi_bin", "p_hw_loss", "p_hw_gain"]
-    header = ["contig", "start", "bin_size", "freq_z"] + param_keys
+    header = ["contig", "start", "bin_size", "freq_z", "ploidy"] + param_keys
     with open(output_path, 'w') as f, open("temp", 'w') as fd:
         line = "#" + "\t".join(header)
         f.write(line + "\n")
         for d in output_data:
-            z_freq = pretty_print_2d_array(d['freq_z'])
-            line = "\t".join([d['contig'], str(d['start']), str(d['bin_size']), z_freq] + [str(d[x]) for x in param_keys])
+            z_freq = print_2d_array(d['freq_z'])
+            ploidy = print_array(d['ploidy'])
+            line = "\t".join([d['contig'], str(d['start']), str(d['bin_size']), ploidy, z_freq] + [str(d[x]) for x in param_keys])
             f.write(line + "\n")
             fd.write(line + "\n")
 
 
-def pretty_print_2d_array(arr):
+def print_2d_array(arr):
     return ";".join(",".join(str(y) for y in x) for x in arr.tolist())
+
+
+def print_array(arr):
+    return ";".join(str(y) for y in arr)
 
 
 def save_tensors(data: SVDepthData, base_path: str):

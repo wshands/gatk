@@ -41,9 +41,6 @@ public class SVCallRecordDepthPosterior {
                                                     final Collection<String> samples,
                                                     final SVCallRecord record,
                                                     final List<IntervalTree<Map<String,double[]>>> currentPosteriorsTreeList) {
-        if (record.getId().equals("SV_x000000e5")) {
-            int x = 0;
-        }
         final SimpleInterval interval = new SimpleInterval(record.getContigA(), record.getPositionA(), record.getPositionB());
         final List<IntervalTree.Node<Map<String,double[]>>> posteriorsList = getBestPosteriors(interval, currentPosteriorsTreeList);
         final int overlap = getOverlap(interval, posteriorsList);

@@ -7,6 +7,7 @@ import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -51,7 +52,8 @@ public class SVGenotypeEngine {
                                                          final double[] genotypeLikelihoods) {
 
         // Resize array to be consistent with neutral copy number, if necessary
-        final int neutralCopyState = SVGenotypeEngineFromModel.getNeutralCopyNumber(genotype);
+        final int neutralCopyState = getNeutralCopyNumber(genotype);
+
         final int maxGenotypeStates = getMaxPossibleGenotypeStates(neutralCopyState, svType);
         final double[] resizedLikelihoods;
         if (genotypeLikelihoods.length > maxGenotypeStates) {
@@ -174,5 +176,10 @@ public class SVGenotypeEngine {
             }
         }
         return log10ProbNoVariant;
+    }
+
+    public static int getNeutralCopyNumber(final Genotype genotype) {
+        Utils.validateArg(genotype.hasExtendedAttribute(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY), "Missing required genotype field " + GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY);
+        return VariantContextGetters.getAttributeAsInt(genotype, GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, 0);
     }
 }

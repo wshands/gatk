@@ -46,7 +46,11 @@ public class SVGenotypeEngineDepthOnly extends SVGenotypeEngine {
 
     private Genotype buildGenotype(final Genotype genotype, final StructuralVariantType svType) {
         final CopyNumberPosteriorDistribution dist = getCopyNumberStatePosterior(genotype);
-        final int neutralCopyState = SVGenotypeEngineFromModel.getNeutralCopyNumber(genotype);
+        final int neutralCopyState = SVGenotypeEngine.getNeutralCopyNumber(genotype);
+        // Return original genotype if information is missing
+        if (dist == null) {
+            return genotype;
+        }
 
         final List<IntegerCopyNumberState> states = dist.getIntegerCopyNumberStateList();
         final double[] copyStatePosterior = IntStream.range(0, states.size())
@@ -57,8 +61,9 @@ public class SVGenotypeEngineDepthOnly extends SVGenotypeEngine {
     }
 
     public static CopyNumberPosteriorDistribution getCopyNumberStatePosterior(final Genotype genotype) {
-        Utils.validateArg(genotype.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY),
-                "Variant does not have attribute " + GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY);
+        if (!genotype.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY)) {
+            return null;
+        }
         final int[] copyStateQualsRaw = VariantContextGetters.getAttributeAsIntArray(genotype, GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, null, 0);
         final double[] copyStateQuals = IntStream.of(copyStateQualsRaw).mapToDouble(x -> NaturalLogUtils.qualToLogErrorProb(x)).toArray();
         NaturalLogUtils.normalizeLog(copyStateQuals);

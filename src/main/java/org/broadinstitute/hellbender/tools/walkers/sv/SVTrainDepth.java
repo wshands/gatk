@@ -50,6 +50,8 @@ import java.util.stream.IntStream;
 
 public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
 
+    public static final String CONTIG_PLOIDY_CALLS_LONG_NAME = "ploidy-calls-file";
+
     private static final String DATA_VALUE_SEPARATOR = ";";
     private static final String DATA_TYPE_SEPARATOR = "\t";
 
@@ -64,7 +66,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     @Argument(fullName = "depth-file", doc = "Read depth evidence file")
     private GATKPath depthEvidenceFilePath;
 
-    @Argument(fullName = SVAggregateDepth.CONTIG_PLOIDY_CALLS_LONG_NAME, doc = "Contig ploidy calls file. Can be specified for multiple samples.")
+    @Argument(fullName = CONTIG_PLOIDY_CALLS_LONG_NAME, doc = "Contig ploidy calls file. Can be specified for multiple samples.")
     private List<GATKPath> contigPloidyCallFilePaths;
 
     @Argument(fullName = "output-name", doc = "Output name")
@@ -130,9 +132,11 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
 
     private File samplesFile;
     private File modelDataFile;
+    private File modelSampleDepthFile;
     private PrintStream modelDataFileStream;
     private List<Integer> sampleIndexes;
     private List<String> samplesList;
+    private Map<String, Double> sampleDepthMap;
     private Map<String, Map<String,Integer>> sampleContigPloidyMap;
 
     @Override
@@ -157,13 +161,13 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         sampleContigPloidyMap = readContigPloidyMaps();
         final List<String> depthTableSampleList = readSampleDepthTable();
         final List<String> evidenceFileSampleList = getSamplesFromEvidenceFileHeader();
-        sampleContigPloidyMap = readContigPloidyMaps();
         samplesList = negoatiateSampleList(depthTableSampleList, evidenceFileSampleList, sampleContigPloidyMap.keySet());
         final Map<String, Integer> sampleToEvidenceFileIndexMap = getSampleToEvidenceRecordIndexMap(evidenceFileSampleList);
         sampleIndexes = samplesList.stream().map(sampleToEvidenceFileIndexMap::get).collect(Collectors.toList());
 
         // Create files consumed by Python tool
         createSampleFile();
+        createSampleDepthTable();
         createModelDataFile();
     }
 
@@ -212,24 +216,23 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
             throw new GATKException("Python process returned non-zero exit code");
         }
         logger.info("Script completed with normal exit code.");
-        super.onTraversalSuccess();
-        return null;
+        return super.onTraversalSuccess();
     }
 
     @Override
     public void closeTool() {
+        super.closeTool();
         if (modelDataFileStream != null) {
             modelDataFileStream.close();
         }
-        super.closeTool();
     }
 
     private List<String> readSampleDepthTable() {
         try {
-            final List<String> samples = new BufferedReader(new FileReader(sampleDepthFilePath.toPath().toFile())).lines()
-                    .map(s -> s.split("\t")[0])
-                    .sorted()
-                    .collect(Collectors.toList());
+            sampleDepthMap = new BufferedReader(new FileReader(sampleDepthFilePath.toPath().toFile())).lines()
+                    .map(s -> s.split("\t"))
+                    .collect(Collectors.toMap(arr -> arr[0], arr -> Double.valueOf(arr[1])));
+            final List<String> samples = sampleDepthMap.keySet().stream().sorted().collect(Collectors.toList());
             if (new HashSet<>(samples).size() != samples.size()) {
                 throw new UserException.BadInput("Sample depth table contained duplicate sample ids");
             }
@@ -252,7 +255,15 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         final Collection<CalledContigPloidyCollection> contigPloidyCollections = contigPloidyCallFilePaths.stream()
                 .map(p -> new CalledContigPloidyCollection(p.toPath().toFile()))
                 .collect(Collectors.toList());
-        return DepthEvidenceAggregator.getSampleContigPloidyMap(contigPloidyCollections);
+        return getSampleContigPloidyMap(contigPloidyCollections);
+    }
+
+    private static Map<String,Integer> getContigToPloidyCallMap(final CalledContigPloidyCollection contigPloidyCollection) {
+        return contigPloidyCollection.getRecords().stream().collect(Collectors.toMap(p -> p.getContig(), p -> p.getPloidy()));
+    }
+
+    public static Map<String,Map<String,Integer>> getSampleContigPloidyMap(final Collection<CalledContigPloidyCollection> contigPloidyCollections) {
+        return contigPloidyCollections.stream().collect(Collectors.toMap(p -> p.getMetadata().getSampleName(), p -> getContigToPloidyCallMap(p)));
     }
 
     private static Map<String, Integer> getSampleToEvidenceRecordIndexMap(final List<String> headerSampleList) {
@@ -280,6 +291,11 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         return collectionA.stream().sorted().collect(Collectors.toList());
     }
 
+    private void createSampleDepthTable() {
+        final List<String> depthTableFileLines = samplesList.stream().map(s -> s + "\t" + sampleDepthMap.get(s)).collect(Collectors.toList());
+        modelSampleDepthFile = IOUtils.writeTempFile(depthTableFileLines, outputName + ".sample_depth_table", ".tmp");
+    }
+
     private void createSampleFile() {
         samplesFile = IOUtils.writeTempFile(samplesList, outputName + ".samples", ".tmp");
     }
@@ -287,7 +303,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     private List<String> generatePythonArguments() {
         final List<String> arguments = new ArrayList<>();
         arguments.add("--data_file=" + modelDataFile.getAbsolutePath());
-        arguments.add("--sample_depth_file=" + sampleDepthFilePath.toString());
+        arguments.add("--sample_depth_file=" + modelSampleDepthFile.getAbsolutePath());
         arguments.add("--samples_file=" + samplesFile.getAbsolutePath());
         arguments.add("--output_name=" + outputName);
         arguments.add("--output_dir=" + outputPath);

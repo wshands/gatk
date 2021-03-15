@@ -162,17 +162,19 @@ public class SVInferDepth extends GATKTool {
 
         /* header lines related to genotype formatting */
         result.addMetaDataLine(VCFStandardHeaderLines.getFormatLine(VCFConstants.GENOTYPE_KEY));
-        result.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.COPY_NUMBER_FIELD, VCFHeaderLineCount.UNBOUNDED,
+        result.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, 1,
+                VCFHeaderLineType.Integer, "Neutral copy number"));
+        result.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.COPY_NUMBER_FIELD, 1,
                 VCFHeaderLineType.Integer, "Max likelihood copy number"));
         result.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, VCFHeaderLineCount.UNBOUNDED,
                 VCFHeaderLineType.Integer, "Copy number log posterior (in Phred-scale) rounded down"));
-        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_P_HARDY_WEINBERG_LOSS_FIELD, VCFHeaderLineCount.UNBOUNDED,
+        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_P_HARDY_WEINBERG_LOSS_FIELD, 1,
                 VCFHeaderLineType.Float, "Hardy-Weinberg probability for CNV loss"));
-        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_P_HARDY_WEINBERG_GAIN_FIELD, VCFHeaderLineCount.UNBOUNDED,
+        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_P_HARDY_WEINBERG_GAIN_FIELD, 1,
                 VCFHeaderLineType.Float, "Hardy-Weinberg probability for CNV gain"));
-        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_BACKGROUND_FIELD, VCFHeaderLineCount.UNBOUNDED,
+        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_BACKGROUND_FIELD, 1,
                 VCFHeaderLineType.Float, "Depth background signal fraction"));
-        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_MEAN_BIAS_FIELD, VCFHeaderLineCount.UNBOUNDED,
+        result.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_MEAN_BIAS_FIELD, 1,
                 VCFHeaderLineType.Float, "Depth mean bias"));
 
         /* INFO header lines */
@@ -183,15 +185,16 @@ public class SVInferDepth extends GATKTool {
 
     private VariantContext createVariantContextFromOutputLine(final String line) {
         final String[] tokens = line.trim().split(COLUMN_SEPARATOR);
-        Utils.validate(tokens.length == 8, "Expected 8 columns but found " + tokens.length + " in line: " + line);
+        Utils.validate(tokens.length == 9, "Expected 9 columns but found " + tokens.length + " in line: " + line);
         final String contig = tokens[0];
         final int start = Integer.parseInt(tokens[1]);
         final int end = start + Integer.parseInt(tokens[2]);
-        final String[] stateProbStringArray = tokens[3].split(FIRST_DIM_SEPARATOR);
-        final double eps = Double.parseDouble(tokens[4]);
-        final double phiBin = Double.parseDouble(tokens[5]);
-        final double pHWLoss = Double.parseDouble(tokens[6]);
-        final double pHWGain = Double.parseDouble(tokens[7]);
+        final String[] ploidyStringArray = tokens[3].split(FIRST_DIM_SEPARATOR);
+        final String[] stateProbStringArray = tokens[4].split(FIRST_DIM_SEPARATOR);
+        final double eps = Double.parseDouble(tokens[5]);
+        final double phiBin = Double.parseDouble(tokens[6]);
+        final double pHWLoss = Double.parseDouble(tokens[7]);
+        final double pHWGain = Double.parseDouble(tokens[8]);
         final String id = String.join("_", Arrays.asList(contig, String.valueOf(start), String.valueOf(end)));
 
         final VariantContextBuilder builder = new VariantContextBuilder("", contig, start, end, Arrays.asList(Allele.REF_N, Allele.SV_SIMPLE_CNV));
@@ -202,11 +205,14 @@ public class SVInferDepth extends GATKTool {
         builder.attribute(GATKSVVCFConstants.DEPTH_BACKGROUND_FIELD, eps);
         builder.attribute(GATKSVVCFConstants.DEPTH_MEAN_BIAS_FIELD, phiBin);
 
+        if (ploidyStringArray.length != sampleList.size()) {
+            throw new UserException.BadInput("Encountered line with " + ploidyStringArray.length + " sample ploidy values but the sample list is of length " + sampleList.size());
+        }
         if (stateProbStringArray.length != sampleList.size()) {
             throw new UserException.BadInput("Encountered line with " + stateProbStringArray.length + " sample state posteriors but the sample list is of length " + sampleList.size());
         }
         final List<Genotype> genotypes = new ArrayList<>(stateProbStringArray.length);
-        for (int i = 0; i < stateProbStringArray.length; i++) {
+        for (int i = 0; i < sampleList.size(); i++) {
             final double[] copyStateProbs = Arrays.stream(stateProbStringArray[i].split(SECOND_DIM_SEPARATOR)).mapToDouble(Double::valueOf).map(p -> Math.max(p, minStateProbability)).toArray();
             final int copyState = MathUtils.maxElementIndex(copyStateProbs);
             final int[] copyStatePhred = IntStream.range(0, copyStateProbs.length)
@@ -215,10 +221,12 @@ public class SVInferDepth extends GATKTool {
             final int[] copyStatePL = IntStream.range(0, copyStatePhred.length)
                     .map(j -> copyStatePhred[j] - copyStatePhred[copyState])
                     .toArray();
+            final int ploidy = Integer.valueOf(ploidyStringArray[i]);
 
             final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(sampleList.get(i));
             genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, copyStatePL);
             genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_FIELD, copyState);
+            genotypeBuilder.attribute(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, ploidy);
             genotypeBuilder.alleles(Collections.singletonList(Allele.NO_CALL));
             genotypes.add(genotypeBuilder.make());
         }

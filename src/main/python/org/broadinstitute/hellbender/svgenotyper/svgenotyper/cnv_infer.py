@@ -66,6 +66,7 @@ def get_output(data: SVDepthData, stats: dict, params: dict):
             'start': int(data.starts[i]),
             'bin_size': int(data.bin_size[i]),
             'freq_z': stats['z']['mean'][i, :],
+            'ploidy': data.sample_ploidy[i, :].int().tolist(),
             'p_hw_loss': stats['p_hw']['mean'][i, 0],
             'p_hw_gain': stats['p_hw']['mean'][i, 2],
             'eps': stats['eps']['mean'][i] * params['mu_eps'],

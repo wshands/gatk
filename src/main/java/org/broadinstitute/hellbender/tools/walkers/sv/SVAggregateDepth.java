@@ -19,7 +19,6 @@ import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.VariantWalker;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.tools.copynumber.formats.collections.CalledContigPloidyCollection;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.CopyNumberPosteriorDistribution;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVUtils;
@@ -74,11 +73,6 @@ import java.util.stream.Collectors;
 @DocumentedFeature
 public final class SVAggregateDepth extends VariantWalker {
     public static final String COPY_NUMBER_INTERVALS_LONG_NAME = "cnv-intervals-vcf";
-    public static final String CONTIG_PLOIDY_CALLS_LONG_NAME = "ploidy-calls-file";
-    public static final String MIN_SIZE_LONG_NAME = "min-size";
-    public static final String COPY_NEUTRAL_PRIOR_LONG_NAME = "copy-neutral-prior";
-    public static final String CNV_BND_PROB_THRESHOLD_LONG_NAME = "cnv-bnd-max-phred";
-    public static final String CNV_BND_SAMPLE_THRESHOLD_LONG_NAME = "cnv-bnd-carrier-fraction";
     public static final String GENOTYPE_DEPTH_CALLS_LONG_NAME = "genotype-depth-calls";
 
     @Argument(
@@ -86,12 +80,6 @@ public final class SVAggregateDepth extends VariantWalker {
             fullName = COPY_NUMBER_INTERVALS_LONG_NAME
     )
     private List<File> copyNumberPosteriorsFiles;
-
-    @Argument(
-            doc = "Contig ploidy calls file. Can be specified for multiple samples.",
-            fullName = CONTIG_PLOIDY_CALLS_LONG_NAME
-    )
-    private List<File> contigPloidyCallFiles;
 
     @Argument(
             doc = "Output VCF",
@@ -124,11 +112,8 @@ public final class SVAggregateDepth extends VariantWalker {
         }
         posteriorsReaders = copyNumberPosteriorsFiles.stream().map(VCFFileReader::new).collect(Collectors.toList());
         samples = getHeaderForVariants().getSampleNamesInOrder();
-        final Collection<CalledContigPloidyCollection> contigPloidyCollections = contigPloidyCallFiles.stream()
-                .map(CalledContigPloidyCollection::new)
-                .collect(Collectors.toList());
-        validateSampleSets(contigPloidyCollections);
-        depthEvidenceAggregator = new DepthEvidenceAggregator(posteriorsReaders, contigPloidyCollections, samples, dictionary);
+        validateSampleSets();
+        depthEvidenceAggregator = new DepthEvidenceAggregator(posteriorsReaders, samples, dictionary);
         outputWriter = createVCFWriter(outputFile);
         outputWriter.writeHeader(composeHeader());
     }
@@ -151,23 +136,15 @@ public final class SVAggregateDepth extends VariantWalker {
         outputWriter.add(finalVariant);
     }
 
-    private void validateSampleSets(final Collection<CalledContigPloidyCollection> contigPloidyCollections) {
+    private void validateSampleSets() {
         final Set<String> svSamples = new HashSet<>(samples);
         final Set<String> cnvSamples = getCNVSamples();
-        final Set<String> contigPloidySamples = getContigPloidySamples(contigPloidyCollections);
         validateSubset(cnvSamples, svSamples, "The following samples from the SV VCF were not in the CNV VCF");
-        validateSubset(contigPloidySamples, svSamples, "The following samples from the SV VCF were not in the contig ploidy calls");
     }
 
     private void validateSubset(final Set<String> set, final Set<String> subset, final String msg) {
         final Set<String> diff = Sets.difference(subset, set);
         Utils.validate(diff.isEmpty(), msg + ":" + String.join(", ", diff));
-    }
-
-    private Set<String> getContigPloidySamples(final Collection<CalledContigPloidyCollection> contigPloidyCollections) {
-        return contigPloidyCollections.stream()
-                .map(p -> p.getMetadata().getSampleName())
-                .collect(Collectors.toSet());
     }
 
     private Set<String> getCNVSamples() {
@@ -184,10 +161,10 @@ public final class SVAggregateDepth extends VariantWalker {
     private VCFHeader composeHeader() {
         final Set<VCFHeaderLine> headerInfo = new HashSet<>();
         headerInfo.addAll(getDefaultToolVCFHeaderLines());
-        headerInfo.add(new VCFFormatHeaderLine(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, 1,
-                VCFHeaderLineType.Integer, "Phred-scaled copy number posterior over the event region"));
         headerInfo.add(new VCFFormatHeaderLine(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, 1,
                 VCFHeaderLineType.Integer, "Neutral copy number"));
+        headerInfo.add(new VCFFormatHeaderLine(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, VCFHeaderLineCount.UNBOUNDED,
+                VCFHeaderLineType.Integer, "Phred-scaled copy number posterior over the event region"));
         headerInfo.add(new VCFInfoHeaderLine(GATKSVVCFConstants.DEPTH_OVERLAP_KEY, 1,
                 VCFHeaderLineType.Integer, "Length of variant overlapping read depth evidence (CNV/BND only)"));
         if (genotypeDepthCalls) {
@@ -209,7 +186,8 @@ public final class SVAggregateDepth extends VariantWalker {
             final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(genotype);
             final String sample = genotype.getSampleName();
             genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, copyStateQuals.get(sample));
-            genotypeBuilder.attribute(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, depthEvidenceAggregator.getSamplePloidy(sample, variant.getContig()));
+            final Integer neutralCopyNumber = depthEvidenceAggregator.getPloidy(genotype.getSampleName(), variant.getContig());
+            genotypeBuilder.attribute(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, neutralCopyNumber);
             newGenotypes.add(genotypeBuilder.make());
         }
         variantBuilder.genotypes(newGenotypes);

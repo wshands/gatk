@@ -20,14 +20,6 @@ public class SVGenotypeEngineFromModel extends SVGenotypeEngine {
     private static final String FIRST_DIM_SEPARATOR = ";";
     private static final String SECOND_DIM_SEPARATOR = ",";
 
-    public static int getNeutralCopyNumber(final Genotype genotype) {
-        Utils.validateArg(genotype.hasExtendedAttribute(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY),
-                "Genotype missing format field " + GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY
-                        + " for sample " + genotype.getSampleName());
-        Utils.nonNull(genotype);
-        return VariantContextGetters.getAttributeAsInt(genotype, GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, 0);
-    }
-
     public static boolean isDepthOnlyVariant(final VariantContext variant) {
         if (!variant.hasAttribute(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE)) {
             throw new GATKException("Variant record is missing attribute: " + GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE);
