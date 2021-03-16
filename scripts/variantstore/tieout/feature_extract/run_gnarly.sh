@@ -17,7 +17,7 @@ reference="/Users/marymorg/gatk/src/test/resources/large/Homo_sapiens_assembly38
 ~/gatk/gatk --java-options "-Xms8g -Xdebug -Xrunjdwp:transport=dt_socket,address=5005,server=y,suspend=n" \
   GnarlyGenotyper \
   -R $reference \
-  -O debug_warp_10492.vcf \
+  -O debug_warp_${POS}.vcf \
   -V gendb://$WORKSPACE \
   --only-output-calls-starting-in-intervals \
   -stand-call-conf 10 \
