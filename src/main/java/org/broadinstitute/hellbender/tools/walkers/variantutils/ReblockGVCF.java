@@ -106,12 +106,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
     public static final String ALLOW_MISSING_LONG_NAME = "allow-missing-hom-ref-data";
     public static final String POSTERIORS_KEY_LONG_NAME = "genotype-posteriors-key";
 
-    private final class VariantContextBuilderComparator implements Comparator<VariantContextBuilder> {
-        @Override
-        public int compare(final VariantContextBuilder builder1, final VariantContextBuilder builder2) {
-            return (int)(builder1.getStart() - builder2.getStart());
-        }
-    }
+    private static final Comparator<? super VariantContextBuilder> VCB_COMPARATOR = Comparator.comparingLong(VariantContextBuilder::getStart);
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="File to which variants should be written")
@@ -179,7 +174,6 @@ public final class ReblockGVCF extends MultiVariantWalker {
     private String currentContig;
     private VariantContextWriter vcfWriter;
     private CachingIndexedFastaSequenceFile referenceReader;
-    private final VariantContextBuilderComparator refBufferComparator = new VariantContextBuilderComparator();
 
     @Override
     public boolean useVariantAnnotations() { return true;}
@@ -312,7 +306,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
             if (result.getEnd() <= vcfOutputEnd) {
                 return null;
             }
-            final VariantContext filtered = filterHomRefBlock(result);
+            final VariantContext filtered = processHomRefBlock(result);
             if (filtered != null) {
                 updateHomRefBlockBuffer(filtered);
             }
@@ -359,15 +353,10 @@ public final class ReblockGVCF extends MultiVariantWalker {
         //high quality variant
         else {
             final VariantContext trimmedVariant = cleanUpHighQualityVariant(result);
-            //handle overlapping deletions so there are no duplicate bases
-            //this is under the assumption that HaplotypeCaller doesn't give us overlapping bases, which isn't really tru
 
-            if (homRefBlockBuffer.size() > 0) {
-                //Queue the low quality deletions until we hit a high quality variant or the start is past the oldBlockEnd
-                //Oh no, do we have to split the deletion-ref blocks???
-                //For variants inside spanning deletion, * likelihood goes to zero?  Or matches ref?
-                updateHomRefBlockBuffer(trimmedVariant);
-            }
+            //Handle overlapping deletions so there are no duplicate bases
+            //Queue the low quality deletions until we hit a high quality variant or the start is past the oldBlockEnd
+            updateHomRefBlockBuffer(trimmedVariant);
             return trimmedVariant;
         }
     }
@@ -378,6 +367,9 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @param variantContextToOutput can overlap existing ref blocks in buffer, but should never start before vcfOutputEnd
      */
     private void updateHomRefBlockBuffer(final VariantContext variantContextToOutput) {
+        if (variantContextToOutput == null || homRefBlockBuffer.isEmpty()) {
+            return;
+        }
         Utils.validate(variantContextToOutput.getStart() <= variantContextToOutput.getEnd(),
                 "Input variant context at position " + currentContig + ":" + variantContextToOutput.getStart() + " has negative length: start=" + variantContextToOutput.getStart() + " end=" + variantContextToOutput.getEnd());
         if (variantContextToOutput.getGenotype(0).isHomRef() && variantContextToOutput.getStart() < vcfOutputEnd) {
@@ -438,7 +430,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
             homRefBlockBuffer.add(newHomRefBlock);
         }
         homRefBlockBuffer.addAll(tailBuffer);
-        homRefBlockBuffer.sort(refBufferComparator);  //this may seem lazy, but it's more robust to assumptions about overlap being violated
+        homRefBlockBuffer.sort(VCB_COMPARATOR);  //this may seem lazy, but it's more robust to assumptions about overlap being violated
         bufferEnd = Math.max(bufferEnd, variantContextToOutput.getEnd());
     }
 
@@ -478,7 +470,9 @@ public final class ReblockGVCF extends MultiVariantWalker {
      */
     private boolean isMonomorphicCallWithAlts(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
-        return ((genotype.isHomRef() || genotype.isNoCall()) && hasGenotypeValuesArray(genotype) && result.getLog10PError() != VariantContext.NO_LOG10_PERROR);
+        return (hasGenotypeValuesArray(genotype)
+                && (genotype.isHomRef() || isNoCalledHomRef(genotype))
+                && result.getAlternateAlleles().stream().anyMatch(this::isConcreteAlt));
     }
 
     /**
@@ -490,6 +484,11 @@ public final class ReblockGVCF extends MultiVariantWalker {
         return genotype.hasPL() || (posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey));
     }
 
+    private boolean isNoCalledHomRef(final Genotype genotype) {
+        return genotype.isNoCall()
+                && hasGenotypeValuesArray(genotype)
+                && getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey)[0] == 0;
+    }
 
     /**
      * Process a reference block VC:
@@ -499,7 +498,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @return  null if this block is entirely overlapped by positions already written out or
      * if the ref block is low quality and we'redropping low quality variants
      */
-    private VariantContext filterHomRefBlock(final VariantContext result) {
+    private VariantContext processHomRefBlock(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
         final VariantContextBuilder vcBuilder = new VariantContextBuilder(result);
         if (result.getStart() <= vcfOutputEnd) {
@@ -553,8 +552,8 @@ public final class ReblockGVCF extends MultiVariantWalker {
             throw new IllegalStateException("Variant contexts must contain genotypes to be reblocked.");
         }
         final Genotype genotype = vc.getGenotype(0);
-        final int[] pls = getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey);
-        return (pls != null && (pls[0] < rgqThreshold || pls[0] == 0)) || genotype.isHomRef()
+        final int[] pls = getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey);
+        return (pls != null && pls[0] < rgqThreshold) || genotype.isHomRef()
                 || !genotypeHasConcreteAlt(genotype)
                 || genotype.getAlleles().stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE))
                 || (!genotype.hasPL() && !genotype.hasGQ())
@@ -567,7 +566,11 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @return true if the genotype has a called allele that is a "real" alternate
      */
     private boolean genotypeHasConcreteAlt(final Genotype g) {
-        return g.getAlleles().stream().anyMatch(a -> !a.isReference() && !a.isSymbolic() && !a.equals(Allele.SPAN_DEL));
+        return g.getAlleles().stream().anyMatch(this::isConcreteAlt);
+    }
+
+    private boolean isConcreteAlt(final Allele a) {
+        return !a.isReference() && !a.isSymbolic() && !a.equals(Allele.SPAN_DEL);
     }
 
     /**
@@ -581,8 +584,8 @@ public final class ReblockGVCF extends MultiVariantWalker {
             return null;
         }
 
-        //change no-calls with PL values to ref blocks
-        if (!lowQualityVariant.getGenotype(0).isCalled() && !lowQualityVariant.getGenotype(0).hasPL()) {
+        //change no-calls with no PL values to ref blocks
+        if (genotypeHasNoData(lowQualityVariant.getGenotype(0))) {
             final Map<String, Object> blockAttributes = new LinkedHashMap<>(2);
             final GenotypeBuilder gb = changeCallToHomRefVersusNonRef(lowQualityVariant, blockAttributes);
             final List<Allele> blockAlleles = Arrays.asList(Allele.create(lowQualityVariant.getReference().getBases()[0], true), Allele.NON_REF_ALLELE);
@@ -611,34 +614,38 @@ public final class ReblockGVCF extends MultiVariantWalker {
                 .log10PError(VariantContext.NO_LOG10_PERROR).attributes(attrMap); //genotyping engine will add lowQual filter, so strip it off
     }
 
+    private boolean genotypeHasNoData(final Genotype g) {
+        return !g.isCalled() && !g.hasPL();
+    }
+
     /**
      * Produce a GenotypeBuilder for a hom-ref call suitable to be merged into a reference block, i.e. set with PLs as
      * appropriate for a variant with only reference and <NON_REF> as alleles and END applied as appropriate
      * Note that this may modify {@code attrMap} as a side effect for END key
-     * @param result a VC containing a genotype to be converted to a GQ0 homRef call; needed for alleles that correspond to PLs and other things
+     * @param lowQualVariant a VC containing a genotype to be converted to a GQ0 homRef call; needed for alleles that correspond to PLs and other things
      * @param attrMap the new VC attribute map, to update the END tag for deletions
      * @return a GenotypeBuilder to make a 0/0 call with updated PLs and GQ
      */
     @VisibleForTesting
-    protected GenotypeBuilder changeCallToHomRefVersusNonRef(final VariantContext result, final Map<String, Object> attrMap) {
-        final Genotype genotype = result.getGenotype(0);
-        Allele newRef = result.getReference();
+    protected GenotypeBuilder changeCallToHomRefVersusNonRef(final VariantContext lowQualVariant, final Map<String, Object> attrMap) {
+        final Genotype genotype = lowQualVariant.getGenotype(0);
+        final Allele inputRefAllele = lowQualVariant.getReference();
         GenotypeBuilder gb = new GenotypeBuilder(genotype);
         //if GT is not homRef, correct it and set GQ=0
-        if (!isMonomorphicCallWithAlts(result)) {
+        if (!isMonomorphicCallWithAlts(lowQualVariant)) {
             gb.PL(new int[GenotypeLikelihoods.numLikelihoods(2, genotype.getPloidy())]);  //2 alleles for ref and non-ref
-            gb.GQ(0).noAD().alleles(Collections.nCopies(genotype.getPloidy(), newRef)).noAttributes();
+            gb.GQ(0).noAD().alleles(Collections.nCopies(genotype.getPloidy(), inputRefAllele)).noAttributes();
         //for hom-ref variants, drop other ALTs and subset PLs, GQ is recalculated (may be > 0)
         } else {
             if (genotype.hasExtendedAttribute(posteriorsKey)) {
-                subsetPosteriorsToRefVersusNonRef(result, gb);
+                subsetPosteriorsToRefVersusNonRef(lowQualVariant, gb);
             } else {
-                final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAllelesForMonomorphicSite(result, PLOIDY_TWO, 1);
+                final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAllelesForMonomorphicSite(lowQualVariant, PLOIDY_TWO, 1);
                 final Allele bestAlt = bestAlleles.stream().filter(a -> !a.isReference() && !a.isNonRefAllele()).findFirst().orElse(Allele.NON_REF_ALLELE);  //allow span dels
                 //here we're assuming that an alt that isn't <NON_REF> will have higher likelihood than non-ref, which should be true
-                final GenotypesContext context = AlleleSubsettingUtils.subsetAlleles(result.getGenotypes(),
-                        genotype.getPloidy(), result.getAlleles(), Arrays.asList(result.getReference(), bestAlt),
-                        null, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL, result.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));  //BEST_MATCH to avoid no-calling low qual genotypes
+                final GenotypesContext context = AlleleSubsettingUtils.subsetAlleles(lowQualVariant.getGenotypes(),
+                        genotype.getPloidy(), lowQualVariant.getAlleles(), Arrays.asList(inputRefAllele, bestAlt),
+                        null, GenotypeAssignmentMethod.BEST_MATCH_TO_ORIGINAL, lowQualVariant.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));  //BEST_MATCH to avoid no-calling low qual genotypes
                 final Genotype subsetG = context.get(0);
                 gb = new GenotypeBuilder(subsetG).noAttributes();  //remove attributes because hom ref blocks shouldn't have posteriors
                 //subsetting may strip GQ and PLs for low qual genotypes
@@ -650,8 +657,8 @@ public final class ReblockGVCF extends MultiVariantWalker {
                 }
             }
         }
-        if (result.hasAttribute(VCFConstants.DEPTH_KEY)) {
-            final int depth = result.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0);
+        if (lowQualVariant.hasAttribute(VCFConstants.DEPTH_KEY)) {
+            final int depth = lowQualVariant.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0);
             gb.DP(depth);
             gb.attribute(GATKVCFConstants.MIN_DP_FORMAT_KEY, depth);
         } else if (genotype.hasAD()) {
@@ -660,11 +667,14 @@ public final class ReblockGVCF extends MultiVariantWalker {
             gb.attribute(GATKVCFConstants.MIN_DP_FORMAT_KEY, depth);
         }
         //NOTE: If we're dropping a deletion allele, then we need to trim the reference and add an END tag with the vc stop position
-        if (result.getReference().length() > 1 || genotype.getAlleles().contains(Allele.SPAN_DEL) || genotype.getAlleles().contains(Allele.NO_CALL)) {
-            newRef = Allele.create(newRef.getBases()[0], true);
+        final Allele outputRefAllele;
+        if (inputRefAllele.length() > 1 || genotype.getAlleles().contains(Allele.SPAN_DEL) || genotype.getAlleles().contains(Allele.NO_CALL)) {
+            outputRefAllele = Allele.create(inputRefAllele.getBases()[0], true);
+        } else {
+            outputRefAllele = inputRefAllele;
         }
-        attrMap.put(VCFConstants.END_KEY, result.getEnd());
-        gb.alleles(Collections.nCopies(genotype.getPloidy(), newRef));
+        attrMap.put(VCFConstants.END_KEY, lowQualVariant.getEnd());
+        gb.alleles(Collections.nCopies(genotype.getPloidy(), outputRefAllele));
         return gb;
     }
 
@@ -837,7 +847,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
                         GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN, 0);  //don't need depth to get PLs for quals
 
                 final Genotype subsettedGenotype = gc.get(0);
-                final int[] likelihoods = getGenotypeLikelihoodsOrPosteriors(subsettedGenotype, posteriorsKey);
+                final int[] likelihoods = getGenotypePosteriorsOtherwiseLikelihoods(subsettedGenotype, posteriorsKey);
                 if (likelihoods != null) {
                     quals.add(Integer.toString(likelihoods[0]));
                 }  else {  //AlleleSubsettingUtils can no-call genotypes with super duper low GQs
@@ -957,7 +967,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         final Genotype genotype = result.getGenotype(0);
         if (newLongestAlleleLength < oldLongestAlleleLength) {
             //need to add a ref block to make up for the allele trimming or there will be a hole in the GVCF
-            final int[] originalLikelihoods = getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey);
+            final int[] originalLikelihoods = getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey);
             if (originalLikelihoods != null) {
                 final Allele oldShortestAltAllele;
                 try {
@@ -1022,7 +1032,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @param posteriorsKey may be null
      * @return may be null
      */
-    private int[] getGenotypeLikelihoodsOrPosteriors(final Genotype genotype, final String posteriorsKey) {
+    private int[] getGenotypePosteriorsOtherwiseLikelihoods(final Genotype genotype, final String posteriorsKey) {
         if ((posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey))) {
             final double[] posteriors = VariantContextGetters.getAttributeAsDoubleArray(genotype, posteriorsKey, () -> null, 0);
             return Arrays.stream(posteriors).mapToInt(x -> (int)Math.round(x)).toArray();
@@ -1045,7 +1055,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         //here we're assuming that an alt that isn't <NON_REF> will have higher likelihood than non-ref, which should be true
         final int[] idxVector = result.getGLIndicesOfAlternateAllele(bestAlt);
         final Genotype genotype = result.getGenotype(0);
-        final int[] multiallelicPLs = getGenotypeLikelihoodsOrPosteriors(genotype, posteriorsKey);
+        final int[] multiallelicPLs = getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey);
         if (multiallelicPLs != null) {
             int[] newPLs = new int[GenotypeLikelihoods.numLikelihoods(2, genotype.getPloidy())];
             for (int i = 0; i < idxVector.length; i++) {

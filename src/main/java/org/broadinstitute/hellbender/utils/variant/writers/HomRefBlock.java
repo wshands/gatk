@@ -84,15 +84,13 @@ final class HomRefBlock extends GVCFBlock {
     /**
      * Add a homRef block to the current block
      *
-     * @param pos current genomic position
+     * @param pos current genomic position, must be directly following this block (i.e. contiguous and non-overlapping)
      * @param newEnd new calculated block end position
      * @param genotype A non-null Genotype with GQ and DP attributes
      */
     @Override
     public void add(final int pos, final int newEnd, final Genotype genotype) {
         Utils.nonNull(genotype, "genotype cannot be null");
-        //if ( pos > end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
-        //if ( pos < getStart())  { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contained in block with start " + getStart()); }
         if ( pos != end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
         if ( genotype.getPloidy() != ploidy) { throw new IllegalArgumentException("cannot add a genotype with a different ploidy: " + genotype.getPloidy() + " != " + ploidy); }
         // Make sure the GQ is within the bounds of this band. Treat GQs > 99 as 99.

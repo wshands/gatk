@@ -35,12 +35,12 @@ public class GVCFWriter implements VariantContextWriter {
      *  @param underlyingWriter the ultimate destination of the GVCF records
      * @param gqPartitions     a list of GQ partitions, this list must be non-empty and every element must be larger than previous element
      */
-    public GVCFWriter(final VariantContextWriter underlyingWriter, final List<Number> gqPartitions, final boolean floorBlocks) {
+    public GVCFWriter(final VariantContextWriter underlyingWriter, final List<? extends Number> gqPartitions, final boolean floorBlocks) {
         this.underlyingWriter = Utils.nonNull(underlyingWriter);
         this.gvcfBlockCombiner = new GVCFBlockCombiner(gqPartitions, floorBlocks);
     }
 
-    public GVCFWriter(final VariantContextWriter underlyingWriter, final List<Number> gqPartitions) {
+    public GVCFWriter(final VariantContextWriter underlyingWriter, final List<? extends Number> gqPartitions) {
         this(underlyingWriter, gqPartitions, false);
     }
 
