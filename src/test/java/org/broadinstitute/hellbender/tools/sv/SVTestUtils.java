@@ -25,29 +25,47 @@ public class SVTestUtils {
                     new SAMSequenceRecord("chrX", 155270560)));
 
     private final static GenomeLocParser glParser = new GenomeLocParser(SVTestUtils.dict);
-
-    public static final LocatableClusterEngine.CLUSTERING_TYPE defaultClusteringType = LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE;
     public static final Function<Collection<SVCallRecord>, SVCallRecord> defaultCollapser =
             new CNVCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END)::collapse;
 
-    public static SVClusterEngine<SVCallRecord> getNewDefaultEngine() {
-        return new SVClusterEngine<>(SVTestUtils.dict, defaultClusteringType, false, defaultCollapser);
+    public static SVClusterEngine<SVCallRecord> getNewDefaultSingleLinkageEngine() {
+        final SVClusterEngine<SVCallRecord> engine = new SVClusterEngine<>(SVTestUtils.dict, LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE, false, defaultCollapser);
+        engine.setDepthOnlyParams(defaultDepthOnlyParameters);
+        engine.setMixedParams(defaultMixedParameters);
+        engine.setEvidenceParams(defaultEvidenceParameters);
+        return engine;
     }
 
-    public static final SVClusterEngine<SVCallRecord> defaultEngine = getNewDefaultEngine();
+    public static SVClusterEngine<SVCallRecord> getNewDefaultMaxCliqueEngine() {
+        final SVClusterEngine<SVCallRecord> engine = new SVClusterEngine<>(SVTestUtils.dict, LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE, false, defaultCollapser);
+        engine.setDepthOnlyParams(defaultDepthOnlyParameters);
+        engine.setMixedParams(defaultMixedParameters);
+        engine.setEvidenceParams(defaultEvidenceParameters);
+        return engine;
+    }
+
+    protected static final SVClusterEngine.ClusteringParameters defaultDepthOnlyParameters =
+            new SVClusterEngine.DepthClusteringParameters(0.8, 0);
+    protected static final SVClusterEngine.ClusteringParameters defaultMixedParameters =
+            new SVClusterEngine.MixedClusteringParameters(0.8, 1000);
+    protected static final SVClusterEngine.ClusteringParameters defaultEvidenceParameters =
+            new SVClusterEngine.EvidenceClusteringParameters(0.5, 500);
+
+    public static final SVClusterEngine<SVCallRecord> defaultSingleLinkageEngine = getNewDefaultSingleLinkageEngine();
+    public static final SVClusterEngine<SVCallRecord> defaultMaxCliqueEngine = getNewDefaultMaxCliqueEngine();
 
     public final static int start = 10001;
 
     public final static int length = 10000;
 
-    public final static int length1b = (int)Math.round(defaultEngine.getDepthOnlyParams().getReciprocalOverlap() * length);
+    public final static int length1b = (int)Math.round(defaultSingleLinkageEngine.getDepthOnlyParams().getReciprocalOverlap() * length);
 
     public final static int start1b = start + length - length1b;
 
     //separated from end of call1 by defragmenter padding (in bin space, according to bins defined by targetIntervals below)
     public final static int start2 = start + length*14/9;
 
-    public final static int start3 = start + (int)Math.round(Math.floor((1-defaultEngine.getDepthOnlyParams().getReciprocalOverlap())*length));
+    public final static int start3 = start + (int)Math.round(Math.floor((1- defaultSingleLinkageEngine.getDepthOnlyParams().getReciprocalOverlap())*length));
 
     //make intervals like xxxx----xxxx----xxxx----xxxx----xxxx
     public final static List<GenomeLoc> targetIntervals = new ArrayList<>(
@@ -169,11 +187,11 @@ public class SVTestUtils {
     public static final SVCallRecord depthAndStuff = new SVCallRecord("depthAndStuff", "chr1", 10000, true, "chr1", 20000, true,
                     StructuralVariantType.CNV, 10001, Arrays.asList("depth", "PE"), Collections.singletonList(sample2));
 
-    public static final SVCallRecord depthAndStuff2 = new SVCallRecord("depthAndStuff2", "chr1", 10000 - defaultEngine.getEvidenceParams().getWindow(), true, "chr1", 20000, true,
-            StructuralVariantType.CNV, 10001 + defaultEngine.getEvidenceParams().getWindow(), Arrays.asList("depth", "PE"), Collections.singletonList(sample2));
+    public static final SVCallRecord depthAndStuff2 = new SVCallRecord("depthAndStuff2", "chr1", 10000 - defaultSingleLinkageEngine.getEvidenceParams().getWindow(), true, "chr1", 20000, true,
+            StructuralVariantType.CNV, 10001 + defaultSingleLinkageEngine.getEvidenceParams().getWindow(), Arrays.asList("depth", "PE"), Collections.singletonList(sample2));
 
-    public static final SVCallRecord depthAndStuff3 = new SVCallRecord("depthAndStuff3", "chr1", 10000 + defaultEngine.getEvidenceParams().getWindow(), true, "chr1", 20000, true,
-            StructuralVariantType.CNV, 10001 - defaultEngine.getEvidenceParams().getWindow(), Arrays.asList("depth", "PE"), Collections.singletonList(sample2));
+    public static final SVCallRecord depthAndStuff3 = new SVCallRecord("depthAndStuff3", "chr1", 10000 + defaultSingleLinkageEngine.getEvidenceParams().getWindow(), true, "chr1", 20000, true,
+            StructuralVariantType.CNV, 10001 - defaultSingleLinkageEngine.getEvidenceParams().getWindow(), Arrays.asList("depth", "PE"), Collections.singletonList(sample2));
 
     public final static SVCallRecord overlapsCall1 = new SVCallRecord("overlapsCall1", "chr1", start3, true,
             "chr1", start3 + length -1, true,

@@ -79,6 +79,10 @@ public class SVCallRecord implements SVLocatable {
         this(id, contigA, positionA, strandA, contigB, positionB, strandB, type, length, algorithms, genotypes, Collections.emptyMap());
     }
 
+    public boolean isDepthOnlyCall() {
+        return getAlgorithms().size() == 1 && getAlgorithms().get(0).equals(GATKSVVCFConstants.DEPTH_ALGORITHM);
+    }
+
     public Map<String, Object> getAttributes() {
         return attributes;
     }

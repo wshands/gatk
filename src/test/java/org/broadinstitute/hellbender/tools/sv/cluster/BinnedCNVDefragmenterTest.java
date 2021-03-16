@@ -18,7 +18,7 @@ public class BinnedCNVDefragmenterTest {
     private static final CNVDefragmenter singleSampleDefragmenter = new BinnedCNVDefragmenter(SVTestUtils.dict, paddingFraction, 0, SVTestUtils.targetIntervals);
 
     @Test
-    public void testFlattenCluster() {
+    public void testCollapser() {
         final SVCallRecord call1FlattenedDefault = defaultDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
         SVTestUtils.assertEquals(SVTestUtils.call1, call1FlattenedDefault);
 
@@ -71,14 +71,9 @@ public class BinnedCNVDefragmenterTest {
     }
 
     @Test
-    public void testGetClusteringInterval() {
+    public void testGetMaxClusterableStartingPosition() {
         Assert.assertEquals(defaultDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall), SVTestUtils.chr1Length);
         Assert.assertTrue(singleSampleDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall) == SVTestUtils.chr1Length);  //will be less than chr1length if target intervals are smaller than chr1
-
-        //final int totalPosition = defaultDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.call2);
-        //padding is added to the input call
-        //Assert.assertEquals(totalPosition, SVTestUtils.call2.getPositionA()+(int)Math.round(SVTestUtils.length*defaultDefragmenter.getPaddingFraction()));
-        // TODO this needs to be reworked
     }
 
     @Test

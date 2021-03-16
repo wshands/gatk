@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
-import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -33,7 +32,7 @@ public class DiscordantPairEvidenceAggregator extends CachingSVEvidenceAggregato
     protected SVCallRecordWithEvidence assignEvidence(final SVCallRecordWithEvidence call, final List<DiscordantPairEvidence> evidence) {
         Utils.nonNull(call);
         final SVCallRecordWithEvidence callWithEvidence;
-        if (SVClusterEngine.isDepthOnlyCall(call)) {
+        if (call.isDepthOnlyCall()) {
             callWithEvidence = new SVCallRecordWithEvidence(call, call.getStartSplitReadSites(), call.getEndSplitReadSites(), Collections.emptyList(), call.getCopyNumberDistribution());
         } else {
             callWithEvidence = new SVCallRecordWithEvidence(call, call.getStartSplitReadSites(), call.getEndSplitReadSites(), evidence, call.getCopyNumberDistribution());

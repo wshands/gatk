@@ -102,10 +102,10 @@ public abstract class SVCollapser<T extends SVCallRecord> {
     }
 
     protected Collection<T> getMostPreciseCalls(final Collection<T> items) {
-        if (items.stream().allMatch(SVClusterEngine::isDepthOnlyCall)) {
+        if (items.stream().allMatch(call -> call.isDepthOnlyCall())) {
             return items;
         } else {
-            return items.stream().filter(call -> !SVClusterEngine.isDepthOnlyCall(call)).collect(Collectors.toList());
+            return items.stream().filter(call -> !call.isDepthOnlyCall()).collect(Collectors.toList());
         }
     }
 

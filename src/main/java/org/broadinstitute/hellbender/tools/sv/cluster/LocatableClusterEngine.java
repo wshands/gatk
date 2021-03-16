@@ -44,17 +44,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     abstract protected boolean clusterTogether(final T a, final T b);
     abstract protected int getMaxClusterableStartingPosition(final T item);
 
-    protected final int getMaxClusterableStartingPosition(final Collection<Integer> itemIds) {
-        Utils.nonNull(itemIds);
-        Utils.nonEmpty(itemIds);
-        final List<T> items = itemIds.stream().map(this::getItem).collect(Collectors.toList());
-        final List<String> contigA = items.stream().map(T::getContigA).distinct().collect(Collectors.toList());
-        if (contigA.size() > 1) {
-            throw new IllegalArgumentException("Items start on multiple contigs");
-        }
-        return items.stream().mapToInt(item -> getMaxClusterableStartingPosition(item)).max().getAsInt();
-    }
-
     public final List<T> getOutput() {
         flushClusters();
         final List<T> output = new ArrayList<>(outputBuffer);
@@ -63,13 +52,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     }
 
     public final boolean isEmpty() {
-        return outputBuffer.isEmpty();
-    }
-
-    private final int registerItem(final T item) {
-        final int itemId = nextItemId++;
-        idToItemMap.put(itemId, item);
-        return itemId;
+        return idToClusterMap.isEmpty() && outputBuffer.isEmpty();
     }
 
     public final void add(final T item) {
@@ -85,8 +68,30 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         processFinalizedClusters(clusterIdsToProcess);
     }
 
-    public final String getCurrentContig() {
-        return currentContig;
+    private final int registerItem(final T item) {
+        final int itemId = nextItemId++;
+        idToItemMap.put(itemId, item);
+        return itemId;
+    }
+
+    private final int getMaxClusterableStartingPositionByIds(final Collection<Integer> itemIds) {
+        Utils.nonNull(itemIds);
+        Utils.nonEmpty(itemIds);
+        return getMaxClusterableStartingPosition(itemIds.stream().map(this::getItem).collect(Collectors.toList()));
+    }
+
+    @VisibleForTesting
+    protected final int getMaxClusterableStartingPosition(final Collection<T> items) {
+        final List<String> contigA = items.stream().map(T::getContigA).distinct().collect(Collectors.toList());
+        if (contigA.size() > 1) {
+            throw new IllegalArgumentException("Items start on multiple contigs");
+        }
+        return items.stream().mapToInt(item -> getMaxClusterableStartingPosition(item)).max().getAsInt();
+    }
+
+    @VisibleForTesting
+    protected final Function<Collection<T>, T> getCollapser() {
+        return collapser;
     }
 
     /**
@@ -189,7 +194,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         final List<Integer> newClusterItems = new ArrayList<>(clusterItems.size() + 1);
         newClusterItems.addAll(clusterItems);
         newClusterItems.add(itemId);
-        idToClusterMap.put(nextClusterId++, new Cluster(getMaxClusterableStartingPosition(newClusterItems), newClusterItems));
+        idToClusterMap.put(nextClusterId++, new Cluster(getMaxClusterableStartingPositionByIds(newClusterItems), newClusterItems));
     }
 
     private final void processCluster(final int clusterIndex) {
@@ -244,7 +249,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         final List<Integer> newClusterItems = new ArrayList<>(1 + seedItems.size());
         newClusterItems.addAll(seedItems);
         newClusterItems.add(item);
-        final Cluster newCluster = new Cluster(getMaxClusterableStartingPosition(newClusterItems), newClusterItems);
+        final Cluster newCluster = new Cluster(getMaxClusterableStartingPositionByIds(newClusterItems), newClusterItems);
 
         //Do not add duplicates
         if (!idToClusterMap.entrySet().contains(newCluster)) {
@@ -252,14 +257,14 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         }
     }
 
-    protected final Cluster getCluster(final int id) {
+    private final Cluster getCluster(final int id) {
         if (!idToClusterMap.containsKey(id)) {
             throw new IllegalArgumentException("Specified cluster ID " + id + " does not exist.");
         }
         return idToClusterMap.get(id);
     }
 
-    protected final T getItem(final int id) {
+    private final T getItem(final int id) {
         if (!idToItemMap.containsKey(id)) {
             throw new IllegalArgumentException("Specified item ID " + id + " does not exist.");
         }
@@ -279,11 +284,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         final T item = getItem(itemId);
         final int itemClusterableStartPosition = getMaxClusterableStartingPosition(item);
         cluster.setMaxClusterableStart(Math.max(cluster.getMaxClusterableStart(), itemClusterableStartPosition));
-    }
-
-    @VisibleForTesting
-    protected final Function<Collection<T>, T> getCollapser() {
-        return collapser;
     }
 
     private static final class Cluster {

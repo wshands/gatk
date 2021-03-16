@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.StructuralVariantType;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -48,7 +47,13 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
             }
         }
         // Contigs match
-        if (!(a.getContigA().equals(b.getContigA()) && a.getContigB().equals(b.getContigB()))) return false;
+        if (!(a.getContigA().equals(b.getContigA()) && a.getContigB().equals(b.getContigB()))) {
+            return false;
+        }
+        // Strands match
+        if (a.getStrandA() != b.getStrandA() || a.getStrandB() != b.getStrandB()) {
+            return false;
+        }
         // Checks appropriate parameter set
         return clusterTogetherWithParams(a, b, evidenceParams)
                 || clusterTogetherWithParams(a, b, depthOnlyParams)
@@ -85,7 +90,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     @Override
     protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
         final String contig = call.getContigA();
-        final boolean isDepthOnly = isDepthOnlyCall(call);
+        final boolean isDepthOnly = call.isDepthOnlyCall();
         final int contigLength = dictionary.getSequence(contig).getSequenceLength();
         // Reciprocal overlap window
         final int maxPositionByOverlap;
@@ -101,14 +106,6 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         final int window = Math.max(isDepthOnly ? depthOnlyParams.getWindow() : evidenceParams.getWindow(), mixedParams.getWindow());
         final int maxPositionByWindow = Math.min(call.getPositionA() + window, contigLength);
 
-        // TODO for debugging
-        /*
-        if (isDepthOnly) {
-            return contigLength;
-        } else {
-            return contigLength;
-        }
-*/
         if (isDepthOnly) {
             return Math.max(maxPositionByOverlap, maxPositionByWindow);
         } else {
@@ -119,34 +116,23 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     public final ClusteringParameters getDepthOnlyParams() {
         return depthOnlyParams;
     }
-
-    public final void setDepthOnlyParams(ClusteringParameters depthOnlyParams) {
-        this.depthOnlyParams = depthOnlyParams;
-    }
-
     public final ClusteringParameters getMixedParams() {
         return mixedParams;
     }
-
-    public final void setMixedParams(ClusteringParameters mixedParams) {
-        this.mixedParams = mixedParams;
-    }
-
     public final ClusteringParameters getEvidenceParams() {
         return evidenceParams;
     }
 
+    public final void setDepthOnlyParams(ClusteringParameters depthOnlyParams) { this.depthOnlyParams = depthOnlyParams; }
+    public final void setMixedParams(ClusteringParameters mixedParams) {
+        this.mixedParams = mixedParams;
+    }
     public final void setEvidenceParams(ClusteringParameters evidenceParams) {
         this.evidenceParams = evidenceParams;
     }
 
     public static boolean isCnvType(final StructuralVariantType type) {
         return type == StructuralVariantType.DEL || type == StructuralVariantType.DUP || type == StructuralVariantType.CNV;
-    }
-
-
-    public static boolean isDepthOnlyCall(final SVCallRecord call) {
-        return call.getAlgorithms().size() == 1 && call.getAlgorithms().get(0).equals(GATKSVVCFConstants.DEPTH_ALGORITHM);
     }
 
     public static class ClusteringParameters {
@@ -183,19 +169,19 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
     public static final class DepthClusteringParameters extends ClusteringParameters {
         public DepthClusteringParameters(final double reciprocalOverlap, final int window) {
-            super(reciprocalOverlap, window, false, (a,b) -> isDepthOnlyCall(a) && isDepthOnlyCall(b));
+            super(reciprocalOverlap, window, false, (a,b) -> a.isDepthOnlyCall() && b.isDepthOnlyCall());
         }
     }
 
     public static final class EvidenceClusteringParameters extends ClusteringParameters {
         public EvidenceClusteringParameters(final double reciprocalOverlap, final int window) {
-            super(reciprocalOverlap, window, true, (a,b) -> !isDepthOnlyCall(a) && !isDepthOnlyCall(b));
+            super(reciprocalOverlap, window, true, (a,b) -> !a.isDepthOnlyCall() && !b.isDepthOnlyCall());
         }
     }
 
     public static final class MixedClusteringParameters extends ClusteringParameters {
         public MixedClusteringParameters(final double reciprocalOverlap, final int window) {
-            super(reciprocalOverlap, window, true, (a,b) -> isDepthOnlyCall(a) != isDepthOnlyCall(b));
+            super(reciprocalOverlap, window, true, (a,b) -> a.isDepthOnlyCall() != b.isDepthOnlyCall());
         }
     }
 

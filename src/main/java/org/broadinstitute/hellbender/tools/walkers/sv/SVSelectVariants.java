@@ -16,7 +16,6 @@ import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
-import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 
 import java.util.HashMap;
@@ -184,7 +183,7 @@ public final class SVSelectVariants extends VariantWalker {
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
         final SVCallRecord record = SVCallRecordUtils.create(variant);
-        final boolean variantDepthOnly = SVClusterEngine.isDepthOnlyCall(record);
+        final boolean variantDepthOnly = record.isDepthOnlyCall();
         if (depthOnly && !variantDepthOnly) {
             return;
         }

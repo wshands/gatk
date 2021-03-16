@@ -3,7 +3,6 @@ package org.broadinstitute.hellbender.tools.sv;
 import com.google.common.collect.Ordering;
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
-import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -49,7 +48,7 @@ public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<Spl
     protected SVCallRecordWithEvidence assignEvidence(final SVCallRecordWithEvidence call, final List<SplitReadEvidence> evidence) {
         Utils.nonNull(call);
         final SVCallRecordWithEvidence refinedCall;
-        if (SVClusterEngine.isDepthOnlyCall(call)) {
+        if (call.isDepthOnlyCall()) {
             refinedCall = call;
         } else if (isStart) {
             final List<SplitReadSite> startSitesList = computeSites(evidence);

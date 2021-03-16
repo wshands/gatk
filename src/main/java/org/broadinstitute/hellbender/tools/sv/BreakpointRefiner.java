@@ -4,7 +4,6 @@ import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.util.Tuple;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.apache.commons.math3.special.Gamma;
-import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
@@ -73,7 +72,7 @@ public class BreakpointRefiner {
         SVCallRecordUtils.validateCoordinatesWithDictionary(call, dictionary);
 
         // Depth-only calls cannot be refined
-        if (SVClusterEngine.isDepthOnlyCall(call)) {
+        if (call.isDepthOnlyCall()) {
             return call;
         }
 

@@ -11,7 +11,6 @@ import htsjdk.variant.vcf.VCFConstants;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.copynumber.gcnv.GermlineCNVSegmentVariantComposer;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
-import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -98,7 +97,7 @@ public final class SVCallRecordUtils {
 
     public static VariantContextBuilder createBuilderWithEvidence(final SVCallRecordWithEvidence call, boolean updateSplitRead, boolean updateDiscordantPair) {
         final VariantContextBuilder builder = getVariantBuilder(call);
-        final boolean includeEvidence = !SVClusterEngine.isDepthOnlyCall(call);
+        final boolean includeEvidence = !call.isDepthOnlyCall();
         final SplitReadSite startSplitReadCounts = includeEvidence ? getSplitReadCountsAtPosition(call.getStartSplitReadSites(), call.getPositionA()) : null;
         final SplitReadSite endSplitReadCounts = includeEvidence ? getSplitReadCountsAtPosition(call.getEndSplitReadSites(), call.getPositionB()) : null;
         final Map<String,Integer> discordantPairCounts = includeEvidence ? getDiscordantPairCountsMap(call.getDiscordantPairs()) : null;
