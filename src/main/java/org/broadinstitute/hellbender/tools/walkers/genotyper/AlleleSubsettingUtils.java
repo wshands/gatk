@@ -322,7 +322,7 @@ public final class AlleleSubsettingUtils {
         Utils.validateArg(defaultPloidy > 0, () -> "default ploidy must be > 0 but defaultPloidy=" + defaultPloidy);
         Utils.validateArg(numAltAllelesToKeep > 0, () -> "numAltAllelesToKeep must be > 0, but numAltAllelesToKeep=" + numAltAllelesToKeep);
         if (allHomRefData) {
-            Utils.validate(vc.getGenotypes().stream().allMatch(g -> g.hasPL() && g.getPL()[0] == 0), "Site contains variant genotypes, but method was called for monorphic site.");
+            Utils.validate(vc.getGenotypes().stream().allMatch(g -> g.hasPL() && g.getPL()[0] == 0), "Site contains variant genotypes, but method was called for monomorphic site.");
         }
 
         final boolean hasSymbolicNonRef = vc.hasAllele(Allele.NON_REF_ALLELE);

@@ -471,7 +471,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
     private boolean isMonomorphicCallWithAlts(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
         return (hasGenotypeValuesArray(genotype)
-                && (genotype.isHomRef() || isNoCalledHomRef(genotype))
+                && (genotype.isHomRef() || isNoCalledHomRef(genotype) || (genotype.hasPL() && MathUtils.minElementIndex(genotype.getPL()) == 0))
                 && result.getAlternateAlleles().stream().anyMatch(this::isConcreteAlt));
     }
 
@@ -632,12 +632,12 @@ public final class ReblockGVCF extends MultiVariantWalker {
         final Allele inputRefAllele = lowQualVariant.getReference();
         GenotypeBuilder gb = new GenotypeBuilder(genotype);
         //if GT is not homRef, correct it and set GQ=0
-        if (!isMonomorphicCallWithAlts(lowQualVariant)) {
+        if (posteriorsKey == null && genotype.hasPL() && genotype.getPL()[0] != 0) {
             gb.PL(new int[GenotypeLikelihoods.numLikelihoods(2, genotype.getPloidy())]);  //2 alleles for ref and non-ref
             gb.GQ(0).noAD().alleles(Collections.nCopies(genotype.getPloidy(), inputRefAllele)).noAttributes();
         //for hom-ref variants, drop other ALTs and subset PLs, GQ is recalculated (may be > 0)
         } else {
-            if (genotype.hasExtendedAttribute(posteriorsKey)) {
+            if (posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey)) {
                 subsetPosteriorsToRefVersusNonRef(lowQualVariant, gb);
             } else {
                 final List<Allele> bestAlleles = AlleleSubsettingUtils.calculateMostLikelyAllelesForMonomorphicSite(lowQualVariant, PLOIDY_TWO, 1);
