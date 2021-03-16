@@ -5,20 +5,21 @@ workflow NgsCohortExtract {
 
         File wgs_intervals
         Int scatter_count
-       
+
         File reference
         File reference_index
         File reference_dict
-        
+
         String fq_sample_table
         String fq_cohort_extract_table
         String query_project
         String? fq_filter_set_table
         String? filter_set_name
         Boolean? emit_pls = false
-    
+
         String output_file_base_name
         File? gatk_override
+        File? service_account_json
     }
 
     call SplitIntervals {
@@ -29,7 +30,7 @@ workflow NgsCohortExtract {
           ref_dict = reference_dict,
           scatter_count = scatter_count
     }
-    
+
     scatter(i in range(scatter_count) ) {
         call ExtractTask {
             input:
@@ -45,6 +46,7 @@ workflow NgsCohortExtract {
                 filter_set_name          = filter_set_name,
                 emit_pls                 = emit_pls,
                 output_file              = "${output_file_base_name}_${i}.vcf.gz"
+                service_account_json     = service_account_json
         }
     }
 }
@@ -62,7 +64,7 @@ task ExtractTask {
         File reference
         File reference_index
         File reference_dict
-    
+
         String fq_sample_table
 
         File intervals
@@ -72,14 +74,18 @@ task ExtractTask {
         String output_file
         String? fq_filter_set_table
         String? filter_set_name
-        
+
         Boolean? emit_pls
+
+        File? service_account_json
 
         # Runtime Options:
         File? gatk_override
-        
+
         Int? local_sort_max_records_in_ram = 10000000
     }
+
+    String has_service_account_file = if (defined(service_account_json)) then 'true' else 'false'
 
 
     # ------------------------------------------------
@@ -89,6 +95,11 @@ task ExtractTask {
         export GATK_LOCAL_JAR=~{default="/root/gatk.jar" gatk_override}
 
         df -h
+
+        if [ ~{has_service_account_file} = 'true' ]; then
+            export GOOGLE_APPLICATION_CREDENTIALS=~{service_account_json}
+            gcloud auth activate-service-account --key-file='~{service_account_json}'
+        fi
 
         gatk --java-options "-Xmx9g" \
             ExtractCohort \
@@ -150,7 +161,7 @@ task ExtractTask {
             localization_optional: true
         }
      }
-	
+
      command {
          set -e
          export GATK_LOCAL_JAR=~{default="/root/gatk.jar" gatk_override}

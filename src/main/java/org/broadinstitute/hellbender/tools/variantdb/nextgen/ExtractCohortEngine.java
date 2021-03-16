@@ -3,15 +3,13 @@ package org.broadinstitute.hellbender.tools.variantdb.nextgen;
 import com.google.cloud.bigquery.FieldValueList;
 import com.google.cloud.bigquery.TableResult;
 import com.google.common.collect.Sets;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.GenotypeBuilder;
-import htsjdk.variant.variantcontext.VariantContext;
-import htsjdk.variant.variantcontext.VariantContextBuilder;
+import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFHeader;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.ProgressMeter;
@@ -20,9 +18,11 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.variantdb.CommonCode;
 import org.broadinstitute.hellbender.tools.variantdb.SchemaUtils;
 import org.broadinstitute.hellbender.tools.walkers.ReferenceConfidenceVariantContextMerger;
+import org.broadinstitute.hellbender.tools.walkers.annotator.ExcessHet;
 import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.gnarlyGenotyper.GnarlyGenotyperEngine;
+import org.broadinstitute.hellbender.utils.GenotypeCounts;
 import org.broadinstitute.hellbender.utils.IndexRange;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.bigquery.*;
@@ -328,8 +328,8 @@ public class ExtractCohortEngine {
         // Non-AS QualApprox (used for qualapprox filter) is simply the sum of the AS values (see GnarlyGenotyper)
         if (s.contains("|")) {
 
-            // take the sum of all non-* alleles
-            // basically if our alleles are '*,T' or 'G,*' we want to ignore the * part            
+            // take the average of all non-* alleles
+            // basically if our alleles are '*,T' or 'G,*' we want to ignore the * part
             String[] alleles = sampleRecord.get(SchemaUtils.ALT_ALLELE_FIELD_NAME).toString().split(",");
             String[] parts = s.split("\\|");
 
@@ -371,6 +371,11 @@ public class ExtractCohortEngine {
 
         double totalAsQualApprox = 0;
         boolean hasSnpAllele = false;
+        final int[] rawGenotypeCounts = new int[6];
+        int missing = 0;
+        int spdel = 0;
+        int gq0 = 0;
+
 
         for ( final GenericRecord sampleRecord : sampleRecordsAtPosition ) {
             final String sampleName = sampleRecord.get(SchemaUtils.SAMPLE_NAME_FIELD_NAME).toString();
@@ -387,9 +392,15 @@ public class ExtractCohortEngine {
                     VariantContext vc = createVariantContextFromSampleRecord(sampleRecord, columnNames, contig, currentPosition, sampleName, vqsLodMap, yngMap);
                     unmergedCalls.add(vc);
 
+                    for ( final Genotype g : vc.getGenotypes() ) {
+                        final int altCount = (int) g.getAlleles().stream().filter(a -> !a.isReference()).count();
+                        rawGenotypeCounts[altCount]++;
+                    }
+
+
                     totalAsQualApprox += getQUALapproxFromSampleRecord(sampleRecord);
 
-                    // hasSnpAllele should be set to true if any sample has at least one snp (gnarly definition here)                    
+                    // hasSnpAllele should be set to true if any sample has at least one snp (gnarly definition here)
                     boolean thisHasSnp = vc.getAlternateAlleles().stream().anyMatch(allele -> allele != Allele.SPAN_DEL && allele.length() == vc.getReference().length());
 //                    logger.info("\t" + contig + ":" + currentPosition + ": calculated thisHasSnp of " + thisHasSnp + " from " + vc.getAlternateAlleles() + " and ref " + vc.getReference());
                     hasSnpAllele = hasSnpAllele || thisHasSnp;
@@ -398,29 +409,39 @@ public class ExtractCohortEngine {
                     break;
                 case "0":   // Non Variant Block with GQ < 10
                     unmergedCalls.add(createRefSiteVariantContextWithGQ(sampleName, contig, currentPosition, refAllele, 0));
+                    // count gq0 as missing
+                    gq0++;
                     break;
                 case "1":  // Non Variant Block with 10 <=  GQ < 20
                     unmergedCalls.add(createRefSiteVariantContextWithGQ(sampleName, contig, currentPosition, refAllele, 10));
+                    rawGenotypeCounts[0]++;
                     break;
                 case "2":  // Non Variant Block with 20 <= GQ < 30
                     unmergedCalls.add(createRefSiteVariantContextWithGQ(sampleName, contig, currentPosition, refAllele, 20));
+                    rawGenotypeCounts[0]++;
                     break;
                 case "3":  // Non Variant Block with 30 <= GQ < 40
                     unmergedCalls.add(createRefSiteVariantContextWithGQ(sampleName, contig, currentPosition, refAllele, 30));
+                    rawGenotypeCounts[0]++;
                     break;
                 case "4":  // Non Variant Block with 40 <= GQ < 50
                     unmergedCalls.add(createRefSiteVariantContextWithGQ(sampleName, contig, currentPosition, refAllele, 40));
+                    rawGenotypeCounts[0]++;
                     break;
                 case "5":  // Non Variant Block with 50 <= GQ < 60
                     unmergedCalls.add(createRefSiteVariantContextWithGQ(sampleName, contig, currentPosition, refAllele, 50));
+                    rawGenotypeCounts[0]++;
                     break;
                 case "6":  // Non Variant Block with 60 <= GQ (usually omitted from tables)
                     unmergedCalls.add(createRefSiteVariantContextWithGQ(sampleName, contig, currentPosition, refAllele, 60));
+                    rawGenotypeCounts[0]++;
                     break;
                 case "*":   // Spanning Deletion - do nothing. just mark the sample as seen
+                    spdel++;
                     break;
                 case "m":   // Missing
                     // Nothing to do here -- just needed to mark the sample as seen so it doesn't get put in the high confidence ref band
+                    missing++;
                     break;
                 case "u":   // unknown GQ used for array data
                     unmergedCalls.add(createRefSiteVariantContext(sampleName, contig, currentPosition, refAllele));
@@ -446,11 +467,14 @@ public class ExtractCohortEngine {
             return;
         }
 
+        rawGenotypeCounts[3] = missing;
+        rawGenotypeCounts[4] = gq0;
+        rawGenotypeCounts[5] = spdel;
 
-        finalizeCurrentVariant(unmergedCalls, currentPositionSamplesSeen, currentPositionHasVariant, contig, currentPosition, refAllele, vqsLodMap, yngMap, noFilteringRequested, totalAsQualApprox);
+        finalizeCurrentVariant(unmergedCalls, currentPositionSamplesSeen, currentPositionHasVariant, contig, currentPosition, refAllele, vqsLodMap, yngMap, noFilteringRequested, totalAsQualApprox, rawGenotypeCounts);
     }
 
-    private void finalizeCurrentVariant(final List<VariantContext> unmergedCalls, final Set<String> currentVariantSamplesSeen, final boolean currentPositionHasVariant, final String contig, final long start, final Allele refAllele, HashMap<Allele, HashMap<Allele, Double>> vqsLodMap, HashMap<Allele, HashMap<Allele, String>> yngMap, boolean noFilteringRequested, double qualApprox) {
+    private void finalizeCurrentVariant(final List<VariantContext> unmergedCalls, final Set<String> currentVariantSamplesSeen, final boolean currentPositionHasVariant, final String contig, final long start, final Allele refAllele, HashMap<Allele, HashMap<Allele, Double>> vqsLodMap, HashMap<Allele, HashMap<Allele, String>> yngMap, boolean noFilteringRequested, double qualApprox, final int[] rawGenotypeCounts) {
         // If there were no variants at this site, we don't emit a record and there's nothing to do here
         if ( ! currentPositionHasVariant ) {
             return;
@@ -464,6 +488,7 @@ public class ExtractCohortEngine {
 
             } else {
                 unmergedCalls.add(createRefSiteVariantContextWithGQ(missingSample, contig, start, refAllele, MISSING_CONF_THRESHOLD));
+                rawGenotypeCounts[0]++;
             }
         }
 
@@ -483,9 +508,34 @@ public class ExtractCohortEngine {
         builder.getAttributes().put("QUALapprox", Integer.toString((int) qualApprox));
         final VariantContext qualapproxVC = builder.make();
 
+//        From the warp JointGenotyping pipeline
+//        # ExcessHet is a phred-scaled p-value. We want a cutoff of anything more extreme
+//        # than a z-score of -4.5 which is a p-value of 3.4e-06, which phred-scaled is 54.69
+        double excess_het_threshold = 54.69;
+
+        // gcApprox includes the missing calls (rawGenotypeCounts[3]) and the gq0 calls (rawGenotypeCounts[4]) this is the number we would get if we use sampleNum - variants
+        int samplesMinusVariants = sampleNames.size() - (rawGenotypeCounts[1] + rawGenotypeCounts[2]);
+        GenotypeCounts gcApprox = new GenotypeCounts(samplesMinusVariants, rawGenotypeCounts[1], rawGenotypeCounts[2]);
+        String debugStr = gcApprox.toString() + "; missing: " + rawGenotypeCounts[3] + "; gq0: " + rawGenotypeCounts[4] + ";" + samplesMinusVariants;
+
+        double excessHetApprox = ExcessHet.calculateEH(gcApprox, sampleNames.size()).getRight();
 
         final VariantContext genotypedVC = disableGnarlyGenotyper ? qualapproxVC : gnarlyGenotyper.finalizeGenotype(qualapproxVC);
-        final VariantContext finalVC = noFilteringRequested || mode.equals(CommonCode.ModeEnum.ARRAYS) ? genotypedVC : filterVariants(genotypedVC, vqsLodMap, yngMap);
+        VariantContextBuilder vcBuilder = new VariantContextBuilder(genotypedVC).attribute(GATKVCFConstants.EXCESS_HET_APPROX_KEY, excessHetApprox);
+
+        double excessHet = genotypedVC.getAttributeAsDouble(GATKVCFConstants.EXCESS_HET_KEY, 0.0);
+        if (excessHet < excess_het_threshold && (excessHetApprox > excess_het_threshold)) { // || excessHetApprox2 > excess_het_threshold)) {
+            logger.info(debugStr);
+            logger.info("fail; eh: " + excessHet + "; eha: " + excessHetApprox); // + "; eha2: " + excessHetApprox2);
+            vcBuilder.filter(GATKVCFConstants.FAIL);
+        }
+        if (excessHet > excess_het_threshold && (excessHetApprox < excess_het_threshold)) { // || || excessHetApprox2 < excess_het_threshold)) {
+            logger.info(debugStr);
+            logger.info("fail; eh: " + excessHet + "; eha: " + excessHetApprox); // + "; eha2: " + excessHetApprox2);
+            vcBuilder.filter((GATKVCFConstants.LOW_HET_FILTER_NAME));
+        }
+        final VariantContext vcWithExcessHet = vcBuilder.make();
+        final VariantContext finalVC = noFilteringRequested || mode.equals(CommonCode.ModeEnum.ARRAYS) ? vcWithExcessHet : filterVariants(vcWithExcessHet, vqsLodMap, yngMap);
 
         if ( finalVC != null ) {
             vcfWriter.add(finalVC);

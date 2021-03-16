@@ -187,7 +187,7 @@ public final class GnarlyGenotyperEngine {
         //Get AC and SB annotations
         //remove the NON_REF allele and update genotypes if necessary
         final int[] rawGenotypeCounts = new int[3];
-        final GenotypesContext calledGenotypes = 
+        final GenotypesContext calledGenotypes =
             iterateOnGenotypes(variant, targetAlleles, alleleCountMap, SBsum, removeNonRef, summarizePls, emitPls, variant.hasAttribute(GATKVCFConstants.RAW_GENOTYPE_COUNT_KEY) ? null : rawGenotypeCounts);
 
         Integer numCalledAlleles = 0;
@@ -367,7 +367,7 @@ public final class GnarlyGenotyperEngine {
                     } else {
                         genotypeBuilder.noPL();
                     }
-                    
+
                     genotypeBuilder.GQ(MathUtils.secondSmallestMinusSmallest(PLs, 0));
                     //If GenomicsDB returns no-call genotypes like CombineGVCFs (depending on the GenomicsDBExportConfiguration),
                     // then we need to actually find the GT from PLs

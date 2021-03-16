@@ -1,6 +1,8 @@
 package org.broadinstitute.hellbender.tools.variantdb.nextgen;
 
 import htsjdk.variant.vcf.VCFHeader;
+import htsjdk.variant.vcf.VCFHeaderLineType;
+import htsjdk.variant.vcf.VCFInfoHeaderLine;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.barclay.argparser.Argument;
@@ -14,6 +16,8 @@ import org.broadinstitute.hellbender.tools.variantdb.SchemaUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 
 import java.util.*;
+
+import static org.broadinstitute.hellbender.utils.variant.GATKVCFConstants.EXCESS_HET_APPROX_KEY;
 
 
 @CommandLineProgramProperties(

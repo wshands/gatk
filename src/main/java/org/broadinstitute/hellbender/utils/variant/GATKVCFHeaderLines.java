@@ -141,8 +141,10 @@ public class GATKVCFHeaderLines {
         addInfoLine(new VCFInfoHeaderLine(GQ_STDEV_KEY, 1, VCFHeaderLineType.Float, "Standard deviation of all GQ values"));
         addInfoLine(new VCFInfoHeaderLine(HAPLOTYPE_SCORE_KEY, 1, VCFHeaderLineType.Float, "Consistency of the site with at most two segregating haplotypes"));
         addInfoLine(new VCFInfoHeaderLine(INBREEDING_COEFFICIENT_KEY, 1, VCFHeaderLineType.Float, "Inbreeding coefficient as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation"));
+        addInfoLine(new VCFInfoHeaderLine(INBREEDING_COEFFICIENT_APPROX_KEY, 1, VCFHeaderLineType.Float, "Inbreeding coefficient approximate as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation (approx will include missing and GQ0"));
         addInfoLine(new VCFInfoHeaderLine(AS_INBREEDING_COEFFICIENT_KEY, VCFHeaderLineCount.A, VCFHeaderLineType.Float, "Allele-specific inbreeding coefficient as estimated from the genotype likelihoods per-sample when compared against the Hardy-Weinberg expectation"));
         addInfoLine(new VCFInfoHeaderLine(EXCESS_HET_KEY, 1, VCFHeaderLineType.Float, "Phred-scaled p-value for exact test of excess heterozygosity"));
+        addInfoLine(new VCFInfoHeaderLine(EXCESS_HET_APPROX_KEY, 1, VCFHeaderLineType.Float, "Phred-scaled p-value for approximate test of excess heterozygosity"));
         addInfoLine(new VCFInfoHeaderLine(RAW_GENOTYPE_COUNT_KEY, 3, VCFHeaderLineType.Integer, "Counts of genotypes w.r.t. the reference allele: 0/0, 0/*, */*, i.e. all alts lumped together; for use in calculating excess heterozygosity"));
         addInfoLine(new VCFInfoHeaderLine(LIKELIHOOD_RANK_SUM_KEY, 1, VCFHeaderLineType.Float, "Z-score from Wilcoxon rank sum test of Alt Vs. Ref haplotype likelihoods"));
         addInfoLine(new VCFInfoHeaderLine(MAP_QUAL_RANK_SUM_KEY, 1, VCFHeaderLineType.Float, "Z-score From Wilcoxon rank sum test of Alt vs. Ref read mapping qualities"));

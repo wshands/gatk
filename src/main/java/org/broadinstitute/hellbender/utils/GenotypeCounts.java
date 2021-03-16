@@ -25,4 +25,9 @@ public final class GenotypeCounts {
         return hom;
     }
 
+    @Override
+    public String toString() {
+        return ref + ";" + het + ";" + hom;
+    }
+
 }

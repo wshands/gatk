@@ -44,7 +44,7 @@ public final class ExcessHet extends PedigreeAnnotation implements InfoFieldAnno
 
     private static final double MIN_NEEDED_VALUE = 1.0E-16;
     private static final boolean ROUND_GENOTYPE_COUNTS = true;
-    
+
     public static final double PHRED_SCALED_MIN_P_VALUE = -10.0 * Math.log10(MIN_NEEDED_VALUE);
     public static final int NUMBER_OF_GENOTYPE_COUNTS = 3;
 
@@ -79,7 +79,7 @@ public final class ExcessHet extends PedigreeAnnotation implements InfoFieldAnno
     }
 
     @VisibleForTesting
-    static Pair<Integer, Double> calculateEH(final VariantContext vc, final GenotypesContext genotypes) {
+    public static Pair<Integer, Double> calculateEH(final VariantContext vc, final GenotypesContext genotypes) {
         final GenotypeCounts t = GenotypeUtils.computeDiploidGenotypeCounts(vc, genotypes, ROUND_GENOTYPE_COUNTS);
         // number of samples that have likelihoods
         final int sampleCount = (int) genotypes.stream().filter(g->GenotypeUtils.isDiploidWithLikelihoods(g)).count();

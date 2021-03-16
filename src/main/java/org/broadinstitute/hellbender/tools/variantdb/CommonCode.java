@@ -52,7 +52,7 @@ public class CommonCode {
         return StringUtils.join(gsStrings, separator);
     }
 
-    public static VCFHeader generateRawArrayVcfHeader(Set<String> sampleNames, final SAMSequenceDictionary sequenceDictionary) {       
+    public static VCFHeader generateRawArrayVcfHeader(Set<String> sampleNames, final SAMSequenceDictionary sequenceDictionary) {
         final Set<VCFHeaderLine> lines = new HashSet<>();
 
         lines.add(VCFStandardHeaderLines.getFormatLine(VCFConstants.GENOTYPE_KEY));
@@ -84,6 +84,7 @@ public class CommonCode {
         final Set<VCFHeaderLine> headerLines = new HashSet<>();
 
         headerLines.addAll( getEvoquerVcfHeaderLines() );
+
 //        headerLines.addAll( defaultHeaderLines );
 
         final VCFHeader header = new VCFHeader(headerLines, sampleNames);
@@ -161,6 +162,10 @@ public class CommonCode {
         headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.VQSR_TRANCHE_SNP));
         headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.VQSR_TRANCHE_INDEL));
         headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.NAY_FROM_YNG));
+
+        headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.FAIL));
+        headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.LOW_HET_FILTER_NAME));
+        headerLines.add(GATKVCFHeaderLines.getInfoLine(GATKVCFConstants.EXCESS_HET_APPROX_KEY));
 
         return headerLines;
     }
