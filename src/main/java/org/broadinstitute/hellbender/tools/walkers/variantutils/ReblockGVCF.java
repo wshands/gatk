@@ -632,7 +632,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         final Allele inputRefAllele = lowQualVariant.getReference();
         GenotypeBuilder gb = new GenotypeBuilder(genotype);
         //if GT is not homRef, correct it and set GQ=0
-        if (posteriorsKey == null && genotype.hasPL() && genotype.getPL()[0] != 0) {
+        if (posteriorsKey == null && (!genotype.hasPL() || (genotype.hasPL() && genotype.getPL()[0] != 0))) {
             gb.PL(new int[GenotypeLikelihoods.numLikelihoods(2, genotype.getPloidy())]);  //2 alleles for ref and non-ref
             gb.GQ(0).noAD().alleles(Collections.nCopies(genotype.getPloidy(), inputRefAllele)).noAttributes();
         //for hom-ref variants, drop other ALTs and subset PLs, GQ is recalculated (may be > 0)
