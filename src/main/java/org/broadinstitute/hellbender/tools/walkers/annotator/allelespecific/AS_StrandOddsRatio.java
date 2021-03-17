@@ -98,6 +98,7 @@ public final class AS_StrandOddsRatio extends AS_StrandBiasTest implements AS_St
         final List<Integer> refStrandCounts = perAlleleData.get(combinedData.getRefAllele());
         for (final Allele a : perAlleleData.keySet()) {
             List<Integer> altStrandCounts = perAlleleData.get(a);
+
             int[][] refAltTable = new int[][] {new int[]{refStrandCounts.get(FORWARD),refStrandCounts.get(REVERSE)},
                     new int[]{altStrandCounts.get(FORWARD),altStrandCounts.get(REVERSE)}};
             annotationMap.put(a,StrandOddsRatio.calculateSOR(refAltTable));

@@ -178,6 +178,9 @@ public final class AS_RMSMappingQuality implements InfoFieldAnnotation, AS_Stand
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})//FIXME generics here blow up
     public Map<String, Object> finalizeRawData(final VariantContext vc, final VariantContext originalVC) {
+        System.out.println("getPrimaryRawKey()");
+        System.out.println(getPrimaryRawKey());
+
         if (!vc.hasAttribute(getPrimaryRawKey())) {
             return new HashMap<>();
         }
@@ -189,10 +192,16 @@ public final class AS_RMSMappingQuality implements InfoFieldAnnotation, AS_Stand
         final Map<String,Object> annotations = new HashMap<>();
         final ReducibleAnnotationData myData = new AlleleSpecificAnnotationData<Double>(originalVC.getAlleles(), rawMQdata);
         parseRawDataString(myData);
+        System.out.println("myData.getAttributeMap():");
+        System.out.println(myData.getAttributeMap());
 
         final String annotationString = makeFinalizedAnnotationString(vc, myData.getAttributeMap());
         annotations.put(getKeyNames().get(0), annotationString);
         annotations.put(getPrimaryRawKey(), makeRawAnnotationString(vc.getAlleles(), myData.getAttributeMap()));
+
+        System.out.println("vc.getAlleles():");
+        System.out.println(vc.getAlleles());
+
         return annotations;
     }
 
@@ -231,15 +240,24 @@ public final class AS_RMSMappingQuality implements InfoFieldAnnotation, AS_Stand
         final Map<Allele, Integer> variantADs = getADcounts(vc);
         String annotationString = "";
         for (final Allele current : vc.getAlternateAlleles()) {
+            System.out.println("current:");
+            System.out.println(current);
             if (!annotationString.isEmpty()) {
                 annotationString += ",";
             }
             if (perAlleleValues.containsKey(current)) {
+                System.out.println("perAlleleValues:");
+                System.out.println(perAlleleValues.get(current));
+                System.out.println("variantADs:");
+                System.out.println(variantADs.get(current));
                 annotationString += String.format(printFormat, Math.sqrt((double) perAlleleValues.get(current) / variantADs.get(current)));
             } else {
                 allele_logger.warn("ERROR: VC allele is not found in annotation alleles -- maybe there was trimming?");
             }
         }
+
+        System.out.println("annotationString:");
+        System.out.println(annotationString);
         return annotationString;
     }
 

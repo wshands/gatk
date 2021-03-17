@@ -196,9 +196,29 @@ public class AS_QualByDepth implements InfoFieldAnnotation, ReducibleAnnotation,
         List<Double> QDlist = new ArrayList<>();
         double refDepth = (double)standardDepth.get(0);
         for (int i = 0; i < alleleQualList.size(); i++) {
+            System.out.print("alleleQualList.get(i)");
+            System.out.print(alleleQualList.get(i));
+
+            System.out.print("(double)standardDepth.get(i+1)");
+            System.out.print((double)standardDepth.get(i+1));
+
+            System.out.print("standardDepth.get(i)");
+            System.out.print(standardDepth.get(i));
+
+            System.out.print("refDepth");
+            System.out.print(refDepth);
+
             double AS_QD = alleleQualList.get(i) / ((double)standardDepth.get(i+1) + refDepth); //+1 to skip the reference field of the AD, add ref counts to each to match biallelic case
             // Hack: see note in the fixTooHighQD method below
+
+            System.out.print("AS_QD before fixTooHighQD");
+            System.out.print(AS_QD);
+
             AS_QD = QualByDepth.fixTooHighQD(AS_QD);
+
+            System.out.print("AS_QD after fixTooHighQD");
+            System.out.print(AS_QD);
+
             QDlist.add(AS_QD);
         }
 

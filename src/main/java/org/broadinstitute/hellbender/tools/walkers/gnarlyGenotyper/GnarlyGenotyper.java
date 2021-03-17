@@ -287,6 +287,9 @@ public final class GnarlyGenotyper extends VariantWalker {
             return;
         }
 
+        System.out.println("variant.getAttributes()");
+        System.out.println(variant.getAttributes());
+
         final VariantContext finalizedVC;
         final VariantContextBuilder annotationDBBuilder;
         if (annotationDatabaseWriter != null) {

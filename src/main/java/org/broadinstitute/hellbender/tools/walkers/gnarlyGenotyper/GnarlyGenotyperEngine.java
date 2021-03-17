@@ -109,6 +109,9 @@ public final class GnarlyGenotyperEngine {
             QUALapprox = 0;
         }
 
+        System.out.println("QUALapprox:");
+        System.out.println(QUALapprox);
+
         //Don't apply the indel prior to mixed sites if there's a SNP, but don't count a '*' as a SNP
         final boolean hasSnpAllele = variant.getAlternateAlleles().stream().anyMatch(allele -> allele != Allele.SPAN_DEL && allele.length() == variant.getReference().length());
         final boolean isIndel = !hasSnpAllele;
@@ -154,9 +157,16 @@ public final class GnarlyGenotyperEngine {
         }
         vcfBuilder.attributes(annotationsToBeModified);
 
+        if ( variant.hasAttribute(GATKVCFConstants.SAMPLE_LIST_KEY ) ) {
+            final String samples = variant.getAttributeAsString(GATKVCFConstants.SAMPLE_LIST_KEY, "none found");
+            System.out.println("samples");
+            System.out.println(samples);
+        }
         // tolerate lack of VarDP annotation
         if ( variant.hasAttribute(GATKVCFConstants.VARIANT_DEPTH_KEY) ) {
             final int variantDP = variant.getAttributeAsInt(GATKVCFConstants.VARIANT_DEPTH_KEY, 0);
+            System.out.println("variantDP:");
+            System.out.println(variantDP);
             final double QD = QUALapprox / (double) variantDP;
             vcfBuilder.attribute(GATKVCFConstants.QUAL_BY_DEPTH_KEY, QD).log10PError(QUALapprox / -10.0 - Math.log10(sitePrior));
         }
@@ -187,7 +197,7 @@ public final class GnarlyGenotyperEngine {
         //Get AC and SB annotations
         //remove the NON_REF allele and update genotypes if necessary
         final int[] rawGenotypeCounts = new int[3];
-        final GenotypesContext calledGenotypes = 
+        final GenotypesContext calledGenotypes =
             iterateOnGenotypes(variant, targetAlleles, alleleCountMap, SBsum, removeNonRef, summarizePls, emitPls, variant.hasAttribute(GATKVCFConstants.RAW_GENOTYPE_COUNT_KEY) ? null : rawGenotypeCounts);
 
         Integer numCalledAlleles = 0;
@@ -367,7 +377,7 @@ public final class GnarlyGenotyperEngine {
                     } else {
                         genotypeBuilder.noPL();
                     }
-                    
+
                     genotypeBuilder.GQ(MathUtils.secondSmallestMinusSmallest(PLs, 0));
                     //If GenomicsDB returns no-call genotypes like CombineGVCFs (depending on the GenomicsDBExportConfiguration),
                     // then we need to actually find the GT from PLs
