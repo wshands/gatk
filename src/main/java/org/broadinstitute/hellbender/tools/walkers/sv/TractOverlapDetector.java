@@ -52,7 +52,11 @@ public class TractOverlapDetector {
         System.out.println("ok.");
     }
 
-    public String getName() { return tractPath.getFileName().toString(); }
+    public String getName() {
+        final String fileName = tractPath.getFileName().toString();
+        final int dotIndex = fileName.indexOf(".");
+        return dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
+    }
 
     public boolean hasOther() { return otherOverlapDetector != null; }
 
@@ -73,7 +77,7 @@ public class TractOverlapDetector {
     }
 
     public boolean spansPrimaryAndOther(final Locatable location1, final Locatable location2) {
-        if(otherOverlapDetector == null) {
+        if(otherOverlapDetector == null || location1 == null || location2 == null) {
             return false;
         }
         return !(
@@ -131,6 +135,9 @@ public class TractOverlapDetector {
     }
 
     private static double getOverlapFraction(final Locatable location, final SVIntervalTree<TractInterval> detector) {
+        if(location == null) {
+            return 0.0;
+        }
         final Iterator<Locatable> unionIterator = new UnionIterator(
             detector.overlappers(TractInterval.locatableToSVInterval(location))
         );

@@ -113,7 +113,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                 );
                 baseline[idx] = baseline_idx;
                 weights[idx] = 1F;
-                labels[idx] = sampleVariantTruth[idx] ? 1F : 0F;
+                labels[idx] = sampleVariantTruth[idx] ? 1F : -1F;
             }
             dMatrix.setLabel(labels);
             dMatrix.setBaseMargin(baseline);
@@ -276,7 +276,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             }
         }
 
-        private Loss getMiniBatchLoss(final Booster booster, final int miniBatchIndex) {
+        private Loss getMiniBatchLoss(final Booster booster, final int miniBatchIndex, final boolean training) {
             final DMatrix miniBatchDMatrix = getBatchDMatrix(miniBatchIndex);
             final float[][] rawPredictions = getRawPredictions(booster, miniBatchDMatrix);
             final float[] pVSGood = pSampleVariantGood == null ? new float[rawPredictions.length] : pSampleVariantGood;
@@ -285,7 +285,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             }
             final Loss loss;
 
-            if(isTrainingSet) {
+            if(isTrainingSet && training) {
                 final float[] d1Loss, d2Loss;
                 if (miniBatchSplits == null) {
                     d1Loss = this.d1Loss;
@@ -297,10 +297,15 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                     this.lossDerivatives[1] = d2Loss;
                 }
                 loss = getLoss(pVSGood, d1Loss, d2Loss, variantIndices);
-                displayFloatHistogram(d1Loss, "d1Loss", 10);
-                displayFloatHistogram(d2Loss, "d2Loss", 10);
-                if(miniBatchIndex == 0) {
-                    System.out.format("\tBoosting round %d on %s\n", 1 + getRound(), name);
+                if(printProgress > 0) {
+                    if(miniBatchIndex == 0) {
+                        System.out.format("\tBoosting round %d on %s\n", 1 + getRound(), name);
+                    }
+                    System.out.format("\tOld loss for %s: %s\n", name, getLoss(pVSGood, variantIndices));
+                    if(printProgress > 1) {
+                        displayFloatHistogram(d1Loss, "d1Loss", 10);
+                        displayFloatHistogram(d2Loss, "d2Loss", 10);
+                    }
                 }
                 try {
                     booster.boost(miniBatchDMatrix, lossDerivatives[0], lossDerivatives[1]);
@@ -327,45 +332,18 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             return builder.build();
         }
 
-        public void predictOneRound(final Booster booster) {
-            final Loss roundLoss;
-            if(miniBatchSplits == null) {
-                roundLoss = getMiniBatchLoss(booster, 0); //.divide(this.size());
-            } else {
-                roundLoss = IntStream.range(0, miniBatchSplits.length)
-                    .mapToObj(idx -> this.getMiniBatchLoss(booster, idx))
+        public Loss getRoundLoss(final Booster booster, final boolean training) {
+            final Loss roundLoss = miniBatchSplits == null ?
+                getMiniBatchLoss(booster, 0, training) : //.divide(this.size());
+                IntStream.range(0, miniBatchSplits.length)
+                    .mapToObj(idx -> this.getMiniBatchLoss(booster, idx, training))
                     .reduce(Loss::add)
                     .orElseThrow(RuntimeException::new)
                     .divide(this.size());
-            }
-            appendScore(roundLoss.toFloat());
             if(printProgress > 0) {
                 System.out.format("\t%s: %s\n", name, roundLoss);
             }
-        }
-
-        void calculateDerivatives(final float[] pGood) {
-            final float[] d1Loss, d2Loss;
-            if (miniBatchSplits == null) {
-                d1Loss = this.d1Loss;
-                d2Loss = this.d2Loss;
-            } else {
-                d1Loss = new float[pGood.length];
-                d2Loss = new float[pGood.length];
-                this.lossDerivatives[0] = d1Loss;
-                this.lossDerivatives[1] = d2Loss;
-            }
-            /*
-            for (int i = 0; i < pGood.length; ++i) {
-                final float pTrue = pGood[i];
-                final float pFalse = 1F - pTrue;
-                // using raw predictions as logits:
-                d1Loss[i] = sampleVariantTruth[i] ? -pFalse / scale : pTrue / scale;
-                d2Loss[i] = pTrue * pFalse / scale;
-            }
-            */
-            getLoss(pGood, d1Loss, d2Loss, variantIndices);
-
+            return roundLoss;
         }
 
         public float getLastScore() { return scores.get(scores.size() - 1); }
@@ -458,7 +436,8 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
         boolean needSaveCheckpoint = !dataSubsets.isEmpty();
         boolean needStop = !dataSubsets.isEmpty();
         for(final DataSubset dataSubset : dataSubsets) {
-            dataSubset.predictOneRound(booster);
+            final Loss roundLoss = dataSubset.getRoundLoss(booster, true);
+            dataSubset.appendScore(roundLoss.toFloat());
             if(!dataSubset.isTrainingSet) {
                 // check if need to stop iterating or save model checkpoint
                 needSaveCheckpoint = needSaveCheckpoint && dataSubset.isBestScore();
@@ -510,6 +489,12 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             ;
 
         loadModelCheckpoint();
+        if(printProgress > 0) {
+            System.out.println("Losses of final trained classifier:");
+            for (final DataSubset dataSubset : dataSubsets) {
+                dataSubset.getRoundLoss(booster, false);
+            }
+        }
         displayHistogram("Final training adjusted GQ histogram",
                           dataSubsets.get(0).streamPredictions(booster).mapToInt(p -> phredScale(1.0 - p)),true);
         displayHistogram("Final training probability histogram",

@@ -945,6 +945,9 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
             Arrays.stream(values, 0, numRows).forEach(jsonArray::add);
             return jsonArray;
         }
+        public String getAsString(final int rowIndex) {
+            return values[rowIndex];
+        }
         @Override public float getAsFloat(final int rowIndex, final int hyperIndex) {
             throw new IllegalArgumentException("String properties cannot be converted to Float, they must be one-hot-encoded");
         }
