@@ -367,7 +367,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @param variantContextToOutput can overlap existing ref blocks in buffer, but should never start before vcfOutputEnd
      */
     private void updateHomRefBlockBuffer(final VariantContext variantContextToOutput) {
-        if (variantContextToOutput == null || homRefBlockBuffer.isEmpty()) {
+        if (variantContextToOutput == null) {
             return;
         }
         Utils.validate(variantContextToOutput.getStart() <= variantContextToOutput.getEnd(),
