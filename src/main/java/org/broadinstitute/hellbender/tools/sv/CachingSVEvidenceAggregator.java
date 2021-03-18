@@ -9,6 +9,8 @@ import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.engine.ProgressMeter;
 import org.broadinstitute.hellbender.utils.*;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -18,7 +20,7 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
 
     private final FeatureDataSource<T> source;
     private SimpleInterval cacheInterval;
-    private IntervalTree<T> cacheEvidence;
+    private IntervalTree<List<T>> cacheEvidence;
     private final ProgressMeter progressMeter;
     protected final SAMSequenceDictionary dictionary;
 
@@ -75,19 +77,32 @@ public abstract class CachingSVEvidenceAggregator<T extends Feature> {
             Utils.nonNull(overlapDetector, "Evidence cache missed but overlap detector is null");
             final Set<SimpleInterval> queryIntervalSet = overlapDetector.getOverlaps(interval);
             if (queryIntervalSet.size() != 1) {
-                throw new IllegalArgumentException("Dvidence interval " + interval + " overlapped " + queryIntervalSet.size() + " query intervals");
+                throw new IllegalArgumentException("Evidence interval " + interval + " overlapped " + queryIntervalSet.size() + " query intervals");
             }
             cacheInterval = queryIntervalSet.iterator().next();
             cacheEvidence = new IntervalTree<>();
-            source.queryAndPrefetch(cacheInterval).stream().forEachOrdered(t -> cacheEvidence.put(t.getStart(), t.getEnd(), t));
+            source.queryAndPrefetch(cacheInterval).stream().forEachOrdered(this::addItemToCacheTree);
         } else {
             cacheEvidence.remove(0, interval.getStart() - 1);
         }
         return Streams.stream(cacheEvidence.overlappers(interval.getStart(), interval.getEnd()))
-                .map(IntervalTree.Node::getValue).collect(Collectors.toList()); //source.queryAndPrefetch(interval);
+                .map(IntervalTree.Node::getValue).flatMap(List::stream).collect(Collectors.toList()); //source.queryAndPrefetch(interval);
     }
 
-    private final OverlapDetector<SimpleInterval> getEvidenceOverlapDetector(final List<SVCallRecordWithEvidence> calls) {
+    private void addItemToCacheTree(final T item) {
+        final IntervalTree.Node<List<T>> overlapper = cacheEvidence.find(item.getStart(), item.getEnd());
+        if (overlapper == null) {
+            cacheEvidence.put(item.getStart(), item.getEnd(), Collections.singletonList(item));
+        } else {
+            final List<T> currentList = overlapper.getValue();
+            final List<T> newList = new ArrayList<>(currentList.size());
+            newList.addAll(currentList);
+            newList.add(item);
+            overlapper.setValue(newList);
+        }
+    }
+
+    private OverlapDetector<SimpleInterval> getEvidenceOverlapDetector(final List<SVCallRecordWithEvidence> calls) {
         final List<SimpleInterval> rawIntervals = calls.stream()
                 .map(this::getEvidenceQueryInterval)
                 .sorted(IntervalUtils.getDictionaryOrderComparator(dictionary))

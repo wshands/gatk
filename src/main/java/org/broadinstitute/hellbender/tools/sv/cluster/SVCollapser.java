@@ -66,7 +66,7 @@ public abstract class SVCollapser<T extends SVCallRecord> {
         final List<String> algorithms = collapseAlgorithms(items);
         final List<Genotype> clusterSamples = collapseAllGenotypes(items);
         final StructuralVariantType type = collapseTypes(items);
-        final Map.Entry<Integer, Integer> coordinates = collapseInterval(items);
+        final Map.Entry<Integer, Integer> coordinates = collapseInterval(mostPreciseCalls);
         final int start = coordinates.getKey();
         final int end = coordinates.getValue();
         final int length = collapseLength(mostPreciseCalls, start, end, type);
@@ -93,7 +93,7 @@ public abstract class SVCollapser<T extends SVCallRecord> {
         } else if (newType.equals(StructuralVariantType.INS)) {
             return (int) Math.round(items.stream().mapToInt(T::getLength).average().getAsDouble());
         } else {
-            return newEnd - newStart + 1;
+            return newEnd - newStart;
         }
     }
 

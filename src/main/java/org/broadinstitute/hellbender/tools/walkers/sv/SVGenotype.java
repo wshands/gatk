@@ -1,6 +1,5 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
-import com.google.common.collect.Lists;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
@@ -14,7 +13,6 @@ import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDisc
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVGenotypeEngineFromModel;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
@@ -101,17 +99,6 @@ public class SVGenotype extends TwoPassVariantWalker {
     private BufferedReader modelOutput;
     private List<String> sampleList;
 
-    public static List<String> FORMAT_FIELDS = Lists.newArrayList(
-            GATKSVVCFConstants.DISCORDANT_PAIR_COUNT_ATTRIBUTE,
-            GATKSVVCFConstants.START_SPLIT_READ_COUNT_ATTRIBUTE,
-            GATKSVVCFConstants.END_SPLIT_READ_COUNT_ATTRIBUTE,
-            GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY,
-            GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY
-    );
-
-    @Override
-    public void onTraversalStart() {}
-
     @Override
     public void firstPassApply(final VariantContext variant,
                                final ReadsContext readsContext,
@@ -133,7 +120,6 @@ public class SVGenotype extends TwoPassVariantWalker {
 
     @Override
     public void afterFirstPass() {
-
         logger.info("Reading genotype model sample list...");
         final Path sampleListPath = Paths.get(modelDir.toString(), modelName + ".sample_ids.list");
         try (final BufferedReader file = new BufferedReader(IOUtils.makeReaderMaybeGzipped(sampleListPath))) {
@@ -193,14 +179,18 @@ public class SVGenotype extends TwoPassVariantWalker {
     }
 
     @Override
-    public Object onTraversalSuccess() {
-        vcfWriter.close();
-        try {
-            modelOutput.close();
-        } catch (final IOException e) {
-            throw new GATKException("Error closing model output file", e);
+    public void closeTool() {
+        super.closeTool();
+        if (vcfWriter != null) {
+            vcfWriter.close();
         }
-        return null;
+        if (modelOutput != null) {
+            try {
+                modelOutput.close();
+            } catch (final IOException e) {
+                throw new GATKException("Error closing model output file", e);
+            }
+        }
     }
 
     private List<String> generatePythonArguments(final File output) {

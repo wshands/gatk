@@ -9,10 +9,7 @@ import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.argparser.ExperimentalFeature;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
-import org.broadinstitute.hellbender.engine.FeatureContext;
-import org.broadinstitute.hellbender.engine.ReadsContext;
-import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.engine.VariantWalker;
+import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
@@ -26,23 +23,14 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Annotate a VCF with scores from a Convolutional Neural Network (CNN).
- *
- * This tool streams variants and their reference context to a python program,
- * which evaluates a pre-trained neural network on each variant.
- * The default models were trained on single-sample VCFs.
- * The default model should not be used on VCFs with annotations from joint call-sets.
- *
- * <h3>1D Model with pre-trained architecture</h3>
+ * Train model to genotype structural variants
  *
  * <pre>
- * gatk CNNScoreVariants \
- *   -V vcf_to_annotate.vcf.gz \
- *   -R reference.fasta \
- *   -O annotated.vcf
+ * gatk SVTrainGenotyping ...
  * </pre>
  *
  */
@@ -66,13 +54,13 @@ public class SVTrainGenotyping extends VariantWalker {
     static final String USAGE_SUMMARY = "Runs training on a set of variants and generates a genotyping model.";
 
     @Argument(fullName = "coverage-file", doc = "Tab-delimited table of sample mean coverage")
-    private File coverageFile;
+    private GATKPath inputDepthTablePath;
 
     @Argument(fullName = "output-name", doc = "Output name")
     private String outputName;
 
     @Argument(fullName = "output-dir", doc = "Output directory")
-    private String outputDir;
+    private GATKPath outputDir;
 
     @Argument(fullName = "device", doc = "Device for Torch backend (e.g. \"cpu\", \"cuda\")", optional = true)
     private String device = "cpu";
@@ -136,6 +124,7 @@ public class SVTrainGenotyping extends VariantWalker {
     final PythonScriptExecutor pythonExecutor = new PythonScriptExecutor(true);
 
     private File samplesFile;
+    private File modelDepthTable;
     private StructuralVariantType svType;
     private File variantsFile;
     private PrintStream variantsFileStream;
@@ -160,7 +149,13 @@ public class SVTrainGenotyping extends VariantWalker {
 
     @Override
     public void onTraversalStart() {
-        samplesFile = createSampleList();
+        final List<String> variantSampleList = getHeaderForVariants().getSampleNamesInOrder();
+        final Set<String> variantSampleSet = SVModelToolUtils.assertDistinctSampleIds(variantSampleList);
+        final Map<String, Double> sampleDepthMap = SVModelToolUtils.readSampleDepthTable(inputDepthTablePath);
+        final List<String> sampleList = SVModelToolUtils.negotiateSampleSets(Lists.newArrayList(variantSampleSet, sampleDepthMap.keySet()), logger);
+        samplesFile = SVModelToolUtils.createSampleFile(sampleList);
+        modelDepthTable = SVModelToolUtils.createSampleDepthTable(sampleList, sampleDepthMap);
+
         variantsFile = IOUtils.createTempFile(outputName + ".variants", ".tsv");
         try {
             variantsFileStream = new PrintStream(variantsFile);
@@ -211,7 +206,7 @@ public class SVTrainGenotyping extends VariantWalker {
             throw new GATKException("Python process returned non-zero exit code");
         }
         logger.info("Script completed with normal exit code.");
-        return null;
+        return super.onTraversalSuccess();
     }
 
     private String encodeVariant(final VariantContext variant) {
@@ -267,15 +262,10 @@ public class SVTrainGenotyping extends VariantWalker {
         return variant.getAttributeAsString(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE, "").equals(GATKSVVCFConstants.DEPTH_ALGORITHM);
     }
 
-    private File createSampleList() {
-        final List<String> samples = getHeaderForVariants().getSampleNamesInOrder();
-        return IOUtils.writeTempFile(samples, outputName + ".samples", ".tmp");
-    }
-
     private List<String> generatePythonArguments() {
         final List<String> arguments = new ArrayList<>();
         arguments.add("--variants_file=" + variantsFile.getAbsolutePath());
-        arguments.add("--coverage_file=" + coverageFile.getAbsolutePath());
+        arguments.add("--coverage_file=" + modelDepthTable.getAbsolutePath());
         arguments.add("--samples_file=" + samplesFile.getAbsolutePath());
         arguments.add("--output_name=" + outputName);
         arguments.add("--output_dir=" + outputDir);

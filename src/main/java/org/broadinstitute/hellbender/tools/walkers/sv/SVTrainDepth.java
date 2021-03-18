@@ -1,6 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
-import avro.shaded.com.google.common.collect.Sets;
+import com.google.common.collect.Lists;
 import htsjdk.tribble.Feature;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
@@ -9,15 +9,19 @@ import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.copynumber.formats.collections.CalledContigPloidyCollection;
-import org.broadinstitute.hellbender.tools.sv.*;
+import org.broadinstitute.hellbender.tools.sv.BafEvidence;
+import org.broadinstitute.hellbender.tools.sv.DepthEvidence;
+import org.broadinstitute.hellbender.tools.sv.DiscordantPairEvidence;
+import org.broadinstitute.hellbender.tools.sv.SplitReadEvidence;
 import org.broadinstitute.hellbender.utils.codecs.DepthEvidenceCodec;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.python.PythonScriptExecutor;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintStream;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -61,7 +65,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     static final String USAGE_SUMMARY = "Runs training on a set of variants and generates a genotyping model.";
 
     @Argument(fullName = "coverage-file", doc = "Tab-delimited table of binned read counts for the reference state")
-    private GATKPath sampleDepthFilePath;
+    private GATKPath sampleDepthTablePath;
 
     @Argument(fullName = "depth-file", doc = "Read depth evidence file")
     private GATKPath depthEvidenceFilePath;
@@ -136,7 +140,6 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     private PrintStream modelDataFileStream;
     private List<Integer> sampleIndexes;
     private List<String> samplesList;
-    private Map<String, Double> sampleDepthMap;
     private Map<String, Map<String,Integer>> sampleContigPloidyMap;
 
     @Override
@@ -155,19 +158,20 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         super.onTraversalStart();
 
         // Check for required Python package
-        // TODO PythonScriptExecutor.checkPythonEnvironmentForPackage("svgenotyper");
+        PythonScriptExecutor.checkPythonEnvironmentForPackage("svgenotyper");
 
         // Process inputs
         sampleContigPloidyMap = readContigPloidyMaps();
-        final List<String> depthTableSampleList = readSampleDepthTable();
+        final Map<String, Double> sampleDepthMap = SVModelToolUtils.readSampleDepthTable(sampleDepthTablePath);
         final List<String> evidenceFileSampleList = getSamplesFromEvidenceFileHeader();
-        samplesList = negoatiateSampleList(depthTableSampleList, evidenceFileSampleList, sampleContigPloidyMap.keySet());
+        final Set<String> evidenceFileSampleSet = SVModelToolUtils.assertDistinctSampleIds(evidenceFileSampleList);
+        samplesList = SVModelToolUtils.negotiateSampleSets(Lists.newArrayList(evidenceFileSampleSet, sampleDepthMap.keySet(), sampleContigPloidyMap.keySet()), logger);
         final Map<String, Integer> sampleToEvidenceFileIndexMap = getSampleToEvidenceRecordIndexMap(evidenceFileSampleList);
         sampleIndexes = samplesList.stream().map(sampleToEvidenceFileIndexMap::get).collect(Collectors.toList());
 
         // Create files consumed by Python tool
-        createSampleFile();
-        createSampleDepthTable();
+        samplesFile = SVModelToolUtils.createSampleFile(samplesList);
+        modelSampleDepthFile = SVModelToolUtils.createSampleDepthTable(samplesList, sampleDepthMap);
         createModelDataFile();
     }
 
@@ -227,21 +231,6 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         }
     }
 
-    private List<String> readSampleDepthTable() {
-        try {
-            sampleDepthMap = new BufferedReader(new FileReader(sampleDepthFilePath.toPath().toFile())).lines()
-                    .map(s -> s.split("\t"))
-                    .collect(Collectors.toMap(arr -> arr[0], arr -> Double.valueOf(arr[1])));
-            final List<String> samples = sampleDepthMap.keySet().stream().sorted().collect(Collectors.toList());
-            if (new HashSet<>(samples).size() != samples.size()) {
-                throw new UserException.BadInput("Sample depth table contained duplicate sample ids");
-            }
-            return samples;
-        } catch (final IOException e) {
-            throw new GATKException("Error reading sample depth file", e);
-        }
-    }
-
     private void createModelDataFile() {
         modelDataFile = IOUtils.createTempFile(outputName + ".model_data", ".tsv");
         try {
@@ -263,6 +252,9 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     }
 
     public static Map<String,Map<String,Integer>> getSampleContigPloidyMap(final Collection<CalledContigPloidyCollection> contigPloidyCollections) {
+        final List<String> samples = contigPloidyCollections.stream().map(CalledContigPloidyCollection::getMetadata)
+                .map(m -> m.getSampleName()).collect(Collectors.toList());
+        SVModelToolUtils.assertDistinctSampleIds(samples);
         return contigPloidyCollections.stream().collect(Collectors.toMap(p -> p.getMetadata().getSampleName(), p -> getContigToPloidyCallMap(p)));
     }
 
@@ -270,34 +262,6 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         return IntStream.range(0, headerSampleList.size())
                 .mapToObj(i -> new AbstractMap.SimpleImmutableEntry<>(headerSampleList.get(i), i))
                 .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue()));
-    }
-
-    private List<String> negoatiateSampleList(final Collection<String> collectionA,
-                                              final Collection<String> collectionB,
-                                              final Collection<String> collectionC) {
-        final Set<String> setA = new HashSet<>(collectionA);
-        final Set<String> setB = new HashSet<>(collectionB);
-        final Set<String> setC = new HashSet<>(collectionC);
-        if (!setA.equals(setB) || !setB.equals(setC)) {
-            // If sample lists differ, use intersection
-            final List<String> result = Sets.intersection(Sets.intersection(setA, setB), setC).stream().sorted().collect(Collectors.toList());
-            if (result.isEmpty()) {
-                throw new UserException.BadInput("Evidence file, coverage table, and contig ploidy inputs had no samples in common");
-            }
-            logger.warn("Sample sets from evidence file, coverage table, and contig ploidy calls are not equal " +
-                    "- using intersection with " + result.size() + " samples");
-            return result;
-        }
-        return collectionA.stream().sorted().collect(Collectors.toList());
-    }
-
-    private void createSampleDepthTable() {
-        final List<String> depthTableFileLines = samplesList.stream().map(s -> s + "\t" + sampleDepthMap.get(s)).collect(Collectors.toList());
-        modelSampleDepthFile = IOUtils.writeTempFile(depthTableFileLines, outputName + ".sample_depth_table", ".tmp");
-    }
-
-    private void createSampleFile() {
-        samplesFile = IOUtils.writeTempFile(samplesList, outputName + ".samples", ".tmp");
     }
 
     private List<String> generatePythonArguments() {

@@ -6,9 +6,11 @@ import pandas as pd
 import pysam
 
 
-def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_small, rd_tabix_large, args):
-    carriers = [s for s in record.samples if sum(record.samples[s]['GT']) > 0]
-    #carriers = [s for s in record.samples if record.samples[s]['RC'] == 1]
+def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_small, rd_tabix_large, sample_depth, args):
+    if record.stop - record.pos < args.min_length:
+        return
+    #carriers = [s for s in record.samples if sum(record.samples[s]['GT']) > 0]
+    carriers = [s for s in record.samples if record.samples[s]['RC'] == 1]
     allele_freq = len(carriers) / float(len(record.samples))
     if allele_freq > args.max_af:
         return
@@ -20,7 +22,7 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
     end = record.stop
 
     length = end - start
-    if length < args.size_cutoff:
+    if length < args.model_size_cutoff:
         posteriors_vcf = small_posteriors_vcf
         rd_tabix = rd_tabix_small
         bin_size = 200
@@ -43,7 +45,7 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
 
     posteriors_cnlp = np.asarray([[record.samples[s]['CNLP'] for s in record.samples] for record in posteriors_records])
 
-    posteriors_carrier_cn = [[record.samples[s]['CN'][0] for s in carriers] for record in posteriors_records]
+    posteriors_carrier_cn = [[record.samples[s]['CN'] for s in carriers] for record in posteriors_records]
     posteriors_carrier_cnlp = [[sorted(record.samples[s]['CNLP']) for s in carriers] for record in posteriors_records]
     posteriors_carrier_gq = [[min(x[1] - x[0], 31) for x in y] for y in posteriors_carrier_cnlp]
 
@@ -57,7 +59,6 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
     posteriors_carrier_gq.append(posteriors_carrier_gq[-1])
 
     non_carriers = list(set(record.samples) - set(carriers))
-    sample_depth = pd.read_csv(args.mean_depth_file, sep='\t', index_col=0, header=None).transpose()
 
     mt = pd.DataFrame(data=[x.split('\t') for x in rd_tabix.fetch(reference=chrom, start=query_start, end=query_end)], columns=header) \
         .set_index(keys=['#Chr', 'Start', 'End']) \
@@ -84,7 +85,7 @@ def plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_smal
     figure_height = 8
 
     linewidth = 0.5
-    alpha_carrier = max(0.5 / max(len(carriers), 1), 0.1)
+    alpha_carrier = 1 #max(0.5 / max(len(carriers), 1), 0.1)
     alpha_non_carrier = max(min([1, 5. / max(1, len(non_carriers))]), 0.1)
     title = "{} {} {}:{}-{}".format(record.id, record.info['SVTYPE'], chrom, start, end)
 
@@ -203,11 +204,12 @@ def parse_args():
     parser.add_argument('--large-posteriors-vcf', help='Large CNV posteriors vcf path', required=True)
     parser.add_argument('--out-name', help='Output base name', required=True)
 
-    parser.add_argument('--site', help='Plot only this site')
+    parser.add_argument('--sites', nargs='+', help='Plot only these site(s)')
 
     parser.add_argument('--max-af', type=float, help='Max allele frequency (inclusive)', default=1)
     parser.add_argument('--min-af', type=float, help='Min allele frequency (exclusive)', default=0)
-    parser.add_argument('--size-cutoff', type=int, help='Size cutoff for depth models', default=5000)
+    parser.add_argument('--min-length', type=float, help='Min SV length', default=0)
+    parser.add_argument('--model-size-cutoff', type=int, help='Size cutoff for switching depth models', default=5000)
 
     args = parser.parse_args()
     return args
@@ -221,11 +223,13 @@ def main():
     large_posteriors_vcf = pysam.VariantFile(args.large_posteriors_vcf)
     rd_tabix_small = pysam.TabixFile(args.small_depth_file)
     rd_tabix_large = pysam.TabixFile(args.large_depth_file)
+    sample_depth = pd.read_csv(args.mean_depth_file, sep='\t', index_col=0, header=None).transpose()
     for record in vcf:
-        if args.site is not None and args.site != record.id:
+        if args.sites is not None and record.id not in args.sites:
             continue
-        if record.info['SVTYPE'] in ['DEL', 'DUP', 'CNV'] or (record.info['SVTYPE'] == 'BND' and record.chrom == record.info['CHR2']):
-            plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_small, rd_tabix_large, args)
+        if record.info['SVTYPE'] in ['DEL', 'DUP', 'CNV'] \
+                or (record.info['SVTYPE'] == 'BND' and record.chrom == record.info['CHR2']):
+            plot_depth(record, small_posteriors_vcf, large_posteriors_vcf, rd_tabix_small, rd_tabix_large, sample_depth, args)
 
 
 if __name__ == "__main__":

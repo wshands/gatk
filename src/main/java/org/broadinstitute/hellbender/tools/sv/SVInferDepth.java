@@ -241,13 +241,22 @@ public class SVInferDepth extends GATKTool {
 
     @Override
     public Object onTraversalSuccess() {
-        vcfWriter.close();
-        try {
-            modelOutput.close();
-        } catch (final IOException e) {
-            throw new GATKException("Error closing model output file", e);
+        return super.onTraversalSuccess();
+    }
+
+    @Override
+    public void closeTool() {
+        super.closeTool();
+        if (vcfWriter != null) {
+            vcfWriter.close();
         }
-        return null;
+        if (modelOutput != null) {
+            try {
+                modelOutput.close();
+            } catch (final IOException e) {
+                throw new GATKException("Error closing model output file", e);
+            }
+        }
     }
 
     private List<String> generatePythonArguments(final File output) {
