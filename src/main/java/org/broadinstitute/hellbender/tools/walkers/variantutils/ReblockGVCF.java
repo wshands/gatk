@@ -14,6 +14,7 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.annotator.*;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.AS_QualByDepth;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.AS_StandardAnnotation;
+import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.AlleleSpecificAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.ReducibleAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.*;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerArgumentCollection;
@@ -106,7 +107,13 @@ public final class ReblockGVCF extends MultiVariantWalker {
     public static final String ALLOW_MISSING_LONG_NAME = "allow-missing-hom-ref-data";
     public static final String POSTERIORS_KEY_LONG_NAME = "genotype-posteriors-key";
 
-    private static final Comparator<? super VariantContextBuilder> VCB_COMPARATOR = Comparator.comparingLong(VariantContextBuilder::getStart);
+    private final class VariantContextBuilderComparator implements Comparator<VariantContextBuilder> {
+        @Override
+        public int compare(final VariantContextBuilder builder1, final VariantContextBuilder builder2) {
+            return (int)(builder1.getStart() - builder2.getStart());
+        }
+    }
+    private static final GenotypeLikelihoodCalculators GL_CALCS = new GenotypeLikelihoodCalculators();
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="File to which variants should be written")
@@ -174,6 +181,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
     private String currentContig;
     private VariantContextWriter vcfWriter;
     private CachingIndexedFastaSequenceFile referenceReader;
+    private final VariantContextBuilderComparator refBufferComparator = new VariantContextBuilderComparator();
 
     @Override
     public boolean useVariantAnnotations() { return true;}
@@ -354,9 +362,12 @@ public final class ReblockGVCF extends MultiVariantWalker {
         else {
             final VariantContext trimmedVariant = cleanUpHighQualityVariant(result);
 
-            //Handle overlapping deletions so there are no duplicate bases
-            //Queue the low quality deletions until we hit a high quality variant or the start is past the oldBlockEnd
-            updateHomRefBlockBuffer(trimmedVariant);
+            if (homRefBlockBuffer.size() > 0) {
+                //Queue the low quality deletions until we hit a high quality variant or the start is past the oldBlockEnd
+                //Oh no, do we have to split the deletion-ref blocks???
+                //For variants inside spanning deletion, * likelihood goes to zero?  Or matches ref?
+                updateHomRefBlockBuffer(trimmedVariant);
+            }
             return trimmedVariant;
         }
     }
@@ -430,7 +441,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
             homRefBlockBuffer.add(newHomRefBlock);
         }
         homRefBlockBuffer.addAll(tailBuffer);
-        homRefBlockBuffer.sort(VCB_COMPARATOR);  //this may seem lazy, but it's more robust to assumptions about overlap being violated
+        homRefBlockBuffer.sort(refBufferComparator);  //this may seem lazy, but it's more robust to assumptions about overlap being violated
         bufferEnd = Math.max(bufferEnd, variantContextToOutput.getEnd());
     }
 
@@ -553,8 +564,13 @@ public final class ReblockGVCF extends MultiVariantWalker {
         }
         final Genotype genotype = vc.getGenotype(0);
         final int[] pls = getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey);
-        return (pls != null && pls[0] < rgqThreshold) || genotype.isHomRef()
-                || !genotypeHasConcreteAlt(genotype)
+        final int minLikelihoodIndex = MathUtils.minElementIndex(pls);
+        final GenotypeLikelihoodCalculator glCalc = GL_CALCS.getInstance(genotype.getPloidy(), vc.getAlleles().size());
+        final GenotypeAlleleCounts alleleCounts = glCalc.genotypeAlleleCountsAt(minLikelihoodIndex);
+
+        final List<Allele> finalAlleles = alleleCounts.asAlleleList(vc.getAlleles());
+        return (pls != null && pls[0] < rgqThreshold)
+                || !genotypeHasConcreteAlt(finalAlleles)
                 || genotype.getAlleles().stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE))
                 || (!genotype.hasPL() && !genotype.hasGQ())
                 || (genotype.hasDP() && genotype.getDP() == 0);
@@ -562,11 +578,11 @@ public final class ReblockGVCF extends MultiVariantWalker {
 
     /**
      * Is there a real ALT allele that's not <NON_REF> or * ?
-     * @param g called genotype
+     * @param alleles   alleles in the called genotype
      * @return true if the genotype has a called allele that is a "real" alternate
      */
-    private boolean genotypeHasConcreteAlt(final Genotype g) {
-        return g.getAlleles().stream().anyMatch(this::isConcreteAlt);
+    private boolean genotypeHasConcreteAlt(final List<Allele> alleles) {
+        return alleles.stream().anyMatch(this::isConcreteAlt);
     }
 
     private boolean isConcreteAlt(final Allele a) {
@@ -778,7 +794,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @return  a called genotype (if possible)
      */
     private Genotype getCalledGenotype(final VariantContext variant) {
-        if (variant.getGenotype(0).isNoCall()) {
+        if (variant.getGenotype(0).isNoCall() || variant.getGenotype(0).isHom()) {  //might be homRef if posteriors and PLs don't agree
             final Genotype noCallGT = variant.getGenotype(0);
             final GenotypeBuilder builderToCallAlleles = new GenotypeBuilder(noCallGT);
             //TODO: update to support DRAGEN posteriors
@@ -914,8 +930,10 @@ public final class ReblockGVCF extends MultiVariantWalker {
                     if (origMap.containsKey(rawKey)) {
                         if (allelesNeedSubsetting && AnnotationUtils.isAlleleSpecific(annotation)) {
                             final List<String> alleleSpecificValues = AnnotationUtils.getAlleleLengthListOfString(originalVC.getAttributeAsString(rawKey, null));
-                            final List<?> subsetList = alleleSpecificValues.size() > 0 ? AlleleSubsettingUtils.remapRLengthList(alleleSpecificValues, relevantIndices, "")
+                            final List<String> subsetList = alleleSpecificValues.size() > 0 ? AlleleSubsettingUtils.remapRLengthList(alleleSpecificValues, relevantIndices, "")
                                     : Collections.nCopies(relevantIndices.length, "");
+                            //zero out non-ref value, just in case
+                            subsetList.set(subsetList.size()-1,((AlleleSpecificAnnotation)annotation).getEmptyRawValue());
                             newVCAttrMap.put(rawKey, AnnotationUtils.encodeAnyASListWithRawDelim(subsetList));
                         } else {
                             newVCAttrMap.put(rawKey, origMap.get(rawKey));

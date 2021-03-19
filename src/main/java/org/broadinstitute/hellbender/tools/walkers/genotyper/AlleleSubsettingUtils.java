@@ -92,6 +92,9 @@ public final class AlleleSubsettingUtils {
                 final Map<String, Object> attributes = new HashMap<>(g.getExtendedAttributes());
                 gb.PL(newLikelihoods).log10PError(newLog10GQ);
                 attributes.remove(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY);
+                //TODO: make this more rigorous, e.g. remove other G-length attributes
+                attributes.remove("GP");
+                attributes.remove("PG");
                 gb.noAttributes().attributes(attributes);
             }
             else {
