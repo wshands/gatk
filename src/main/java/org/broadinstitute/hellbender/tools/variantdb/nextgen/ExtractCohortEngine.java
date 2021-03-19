@@ -289,7 +289,7 @@ public class ExtractCohortEngine {
     }
 
     private GenericRecord mergeSampleRecord(GenericRecord r1, GenericRecord r2) {
-        logger.info("In SampleRecord Merge Logic for " + r1 + " and " + r2);
+//        logger.info("In SampleRecord Merge Logic for " + r1 + " and " + r2);
 
         final String r1State = r1.get(SchemaUtils.STATE_FIELD_NAME).toString();
         final String r2State = r2.get(SchemaUtils.STATE_FIELD_NAME).toString();
@@ -533,6 +533,9 @@ public class ExtractCohortEngine {
             logger.info(debugStr);
             logger.info("fail; eh: " + excessHet + "; eha: " + excessHetApprox); // + "; eha2: " + excessHetApprox2);
             vcBuilder.filter((GATKVCFConstants.LOW_HET_FILTER_NAME));
+        }
+        if (excessHet > excess_het_threshold) {
+            vcBuilder.filter(GATKVCFConstants.POSSIBLE_NUMT_FILTER_NAME);
         }
         final VariantContext vcWithExcessHet = vcBuilder.make();
         final VariantContext finalVC = noFilteringRequested || mode.equals(CommonCode.ModeEnum.ARRAYS) ? vcWithExcessHet : filterVariants(vcWithExcessHet, vqsLodMap, yngMap);

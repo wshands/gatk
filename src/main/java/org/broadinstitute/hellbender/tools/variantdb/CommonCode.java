@@ -165,6 +165,7 @@ public class CommonCode {
 
         headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.FAIL));
         headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.LOW_HET_FILTER_NAME));
+        headerLines.add(GATKVCFHeaderLines.getFilterLine(GATKVCFConstants.POSSIBLE_NUMT_FILTER_NAME));
         headerLines.add(GATKVCFHeaderLines.getInfoLine(GATKVCFConstants.EXCESS_HET_APPROX_KEY));
 
         return headerLines;
