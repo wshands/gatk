@@ -564,6 +564,9 @@ public final class ReblockGVCF extends MultiVariantWalker {
         }
         final Genotype genotype = vc.getGenotype(0);
         final int[] pls = getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey);
+        if (pls == null) {
+            return true;
+        }
         final int minLikelihoodIndex = MathUtils.minElementIndex(pls);
         final GenotypeLikelihoodCalculator glCalc = GL_CALCS.getInstance(genotype.getPloidy(), vc.getAlleles().size());
         final GenotypeAlleleCounts alleleCounts = glCalc.genotypeAlleleCountsAt(minLikelihoodIndex);
@@ -705,7 +708,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
 
         final Genotype genotype = getCalledGenotype(variant);
         VariantContextBuilder builder = new VariantContextBuilder(variant);  //QUAL from result is carried through
-        builder.attributes(attrMap);  //clear attributes
+        builder.attributes(attrMap).genotypes(genotype);  //clear attributes
 
         final List<Allele> allelesToDrop = getAllelesToDrop(variant, genotype);
 
@@ -930,10 +933,15 @@ public final class ReblockGVCF extends MultiVariantWalker {
                     if (origMap.containsKey(rawKey)) {
                         if (allelesNeedSubsetting && AnnotationUtils.isAlleleSpecific(annotation)) {
                             final List<String> alleleSpecificValues = AnnotationUtils.getAlleleLengthListOfString(originalVC.getAttributeAsString(rawKey, null));
-                            final List<String> subsetList = alleleSpecificValues.size() > 0 ? AlleleSubsettingUtils.remapRLengthList(alleleSpecificValues, relevantIndices, "")
-                                    : Collections.nCopies(relevantIndices.length, "");
-                            //zero out non-ref value, just in case
-                            subsetList.set(subsetList.size()-1,((AlleleSpecificAnnotation)annotation).getEmptyRawValue());
+                            final List<String> subsetList;
+                            if (alleleSpecificValues.size() > 0) {
+                                subsetList = AlleleSubsettingUtils.remapRLengthList(alleleSpecificValues, relevantIndices, "");
+                                //zero out non-ref value, just in case
+                                subsetList.set(subsetList.size()-1,((AlleleSpecificAnnotation)annotation).getEmptyRawValue());
+                            } else {
+                                subsetList = Collections.nCopies(relevantIndices.length, "");
+                            }
+
                             newVCAttrMap.put(rawKey, AnnotationUtils.encodeAnyASListWithRawDelim(subsetList));
                         } else {
                             newVCAttrMap.put(rawKey, origMap.get(rawKey));
