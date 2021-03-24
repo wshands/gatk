@@ -1,16 +1,13 @@
 package org.broadinstitute.hellbender.tools.sv;
 
-import com.google.common.collect.Streams;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.samtools.util.IntervalTree;
 import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFFileReader;
 import org.apache.commons.math3.util.FastMath;
-import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.CopyNumberPosteriorDistribution;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.IntervalCopyNumberGenotypingData;
@@ -21,7 +18,10 @@ import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
-import java.util.*;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 public class DepthEvidenceAggregator {
@@ -34,7 +34,6 @@ public class DepthEvidenceAggregator {
 
     private String currentContig;
     private List<IntervalTree<Map<String,double[]>>> currentPosteriorsTreeList;
-    private Map<SampleContigPair, Integer> sampleContigToPloidyMap;
 
     public DepthEvidenceAggregator(final List<VCFFileReader> posteriorsReaders,
                                    final List<String> samples,
@@ -48,7 +47,6 @@ public class DepthEvidenceAggregator {
         final VariantContext exampleVariant = posteriorsReaders.get(0).iterator().next();
         copyStates = getCopyNumberStates(exampleVariant);
         numCopyStates = copyStates.size();
-        sampleContigToPloidyMap = new HashMap<>();
         validateCopyStates();
     }
 
@@ -57,7 +55,6 @@ public class DepthEvidenceAggregator {
         if (!call.getContigA().equals(currentContig)) {
             currentContig = call.getContigA();
             currentPosteriorsTreeList = posteriorsReaders.stream().map(this::getCurrentPosteriorsTree).collect(Collectors.toList());
-            updateContigPloidy();
         }
         if (!(call.getType().equals(StructuralVariantType.DEL)  || call.getType().equals(StructuralVariantType.DUP)
                 || call.getType().equals(StructuralVariantType.BND))) {
@@ -75,27 +72,6 @@ public class DepthEvidenceAggregator {
             if (!copyStates.equals(otherCopyStates)) {
                 throw new UserException.BadInput("CNV VCFs do not contain identical copy number states.");
             }
-        }
-    }
-
-    private void updateContigPloidy() {
-        final Map<String, Set<Integer>> currentContigPloidyValues = posteriorsReaders.stream().map(reader -> queryContig(currentContig, reader))
-                .flatMap(Streams::stream)
-                .map(VariantContext::getGenotypes)
-                .flatMap(GenotypesContext::stream)
-                .collect(Collectors.groupingBy(Genotype::getSampleName,
-                        Collectors.collectingAndThen(Collectors.toList(), list -> list.stream()
-                                .map(g -> Integer.valueOf((String) g.getExtendedAttribute(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY)))
-                                .filter(Objects::nonNull)
-                                .collect(Collectors.toSet()))));
-        for (final Map.Entry<String, Set<Integer>> entry : currentContigPloidyValues.entrySet()) {
-            if (entry.getValue().size() == 0) {
-                throw new GATKException("No neutral copy number info found in CNV vcfs for at least one sample on contig " + currentContig);
-            }
-            if (entry.getValue().size() > 1) {
-                throw new GATKException("Inconsistent neutral copy numbers found in CNV vcfs on contig " + currentContig);
-            }
-            sampleContigToPloidyMap.put(new SampleContigPair(entry.getKey(), currentContig), entry.getValue().iterator().next());
         }
     }
 
@@ -162,31 +138,5 @@ public class DepthEvidenceAggregator {
                 new CopyNumberPosteriorDistribution(copyNumberPosteriors),
                 new IntegerCopyNumberState(Integer.valueOf(neutralCopyState))
         );
-    }
-
-    public Integer getPloidy(final String sample, final String contig) {
-        return sampleContigToPloidyMap.get(new SampleContigPair(sample, contig));
-    }
-
-    private static final class SampleContigPair {
-        private final String sample;
-        private final String contig;
-        public SampleContigPair(final String sample, final String contig) {
-            this.sample = sample;
-            this.contig = contig;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof SampleContigPair)) return false;
-            SampleContigPair that = (SampleContigPair) o;
-            return Objects.equals(sample, that.sample) && Objects.equals(contig, that.contig);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(sample, contig);
-        }
     }
 }

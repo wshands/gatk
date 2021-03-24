@@ -14,10 +14,7 @@ import org.broadinstitute.barclay.argparser.ExperimentalFeature;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.CoverageAnalysisProgramGroup;
-import org.broadinstitute.hellbender.engine.FeatureContext;
-import org.broadinstitute.hellbender.engine.ReadsContext;
-import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.engine.VariantWalker;
+import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.CopyNumberPosteriorDistribution;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
@@ -88,6 +85,10 @@ public final class SVAggregateDepth extends VariantWalker {
     )
     private File outputFile;
 
+    @Argument(doc = "Contig ploidy calls file. Can be specified for multiple samples.",
+            fullName = SVTrainDepth.CONTIG_PLOIDY_CALLS_LONG_NAME)
+    private List<GATKPath> contigPloidyCallFilePaths;
+
     @Argument(
             doc = "Perform genotyping on depth-only calls.",
             fullName = GENOTYPE_DEPTH_CALLS_LONG_NAME
@@ -99,6 +100,7 @@ public final class SVAggregateDepth extends VariantWalker {
     private VariantContextWriter outputWriter;
     private SVGenotypeEngineDepthOnly depthOnlyGenotypeEngine;
     private DepthEvidenceAggregator depthEvidenceAggregator;
+    private MultisampleContigPloidy sampleContigPloidy;
     private SAMSequenceDictionary dictionary;
 
     @Override
@@ -110,6 +112,7 @@ public final class SVAggregateDepth extends VariantWalker {
         if (genotypeDepthCalls) {
             depthOnlyGenotypeEngine = new SVGenotypeEngineDepthOnly();
         }
+        sampleContigPloidy = new MultisampleContigPloidy(contigPloidyCallFilePaths);
         posteriorsReaders = copyNumberPosteriorsFiles.stream().map(VCFFileReader::new).collect(Collectors.toList());
         samples = getHeaderForVariants().getSampleNamesInOrder();
         validateSampleSets();
@@ -129,11 +132,15 @@ public final class SVAggregateDepth extends VariantWalker {
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
         final SVCallRecord call = SVCallRecordUtils.create(variant);
         final SVCallRecordDepthPosterior posterior = depthEvidenceAggregator.apply(call);
-        VariantContext finalVariant = posterior == null ? variant : createBaseVariant(variant, posterior);
-        if (genotypeDepthCalls && SVGenotypeEngineFromModel.isDepthOnlyVariant(finalVariant)) {
-            finalVariant = depthOnlyGenotypeEngine.genotypeVariant(finalVariant);
+        final VariantContextBuilder newVariantBuilder = createBaseVariant(variant);
+        if (posterior != null) {
+            addPosterior(newVariantBuilder, posterior);
         }
-        outputWriter.add(finalVariant);
+        VariantContext newVariant = newVariantBuilder.make();
+        if (genotypeDepthCalls && SVGenotypeEngineFromModel.isDepthOnlyVariant(newVariant)) {
+            newVariant = depthOnlyGenotypeEngine.genotypeVariant(newVariant);
+        }
+        outputWriter.add(newVariant);
     }
 
     private void validateSampleSets() {
@@ -175,23 +182,35 @@ public final class SVAggregateDepth extends VariantWalker {
         return vcfHeader;
     }
 
-    private VariantContext createBaseVariant(final VariantContext variant, final SVCallRecordDepthPosterior posteriors) {
+    private VariantContextBuilder createBaseVariant(final VariantContext variant) {
         Utils.nonNull(variant);
-        Utils.nonNull(posteriors);
         final VariantContextBuilder variantBuilder = new VariantContextBuilder(variant);
-        variantBuilder.attribute(GATKSVVCFConstants.DEPTH_OVERLAP_KEY, posteriors.getPosteriorIntervalsOverlap());
-        final Map<String, List<Integer>> copyStateQuals = getCopyStateQuals(posteriors.getSamplePosteriors());
         final List<Genotype> newGenotypes = new ArrayList<>(variant.getGenotypes().size());
         for (final Genotype genotype : variant.getGenotypes()) {
             final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(genotype);
-            final String sample = genotype.getSampleName();
-            genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, copyStateQuals.get(sample));
-            final Integer neutralCopyNumber = depthEvidenceAggregator.getPloidy(genotype.getSampleName(), variant.getContig());
+            final Integer neutralCopyNumber = sampleContigPloidy.get(genotype.getSampleName(), variant.getContig());
+            if (neutralCopyNumber == null) {
+                throw new UserException.BadInput("Missing ploidy for sample " + genotype.getSampleName() + " / contig " + variant.getContig());
+            }
             genotypeBuilder.attribute(GATKSVVCFConstants.NEUTRAL_COPY_NUMBER_KEY, neutralCopyNumber);
             newGenotypes.add(genotypeBuilder.make());
         }
         variantBuilder.genotypes(newGenotypes);
-        return variantBuilder.make();
+        return variantBuilder;
+    }
+
+    private void addPosterior(final VariantContextBuilder variantBuilder, final SVCallRecordDepthPosterior posteriors) {
+        Utils.nonNull(variantBuilder);
+        Utils.nonNull(posteriors);
+        variantBuilder.attribute(GATKSVVCFConstants.DEPTH_OVERLAP_KEY, posteriors.getPosteriorIntervalsOverlap());
+        final Map<String, List<Integer>> copyStateQuals = getCopyStateQuals(posteriors.getSamplePosteriors());
+        final List<Genotype> newGenotypes = new ArrayList<>(variantBuilder.getGenotypes().size());
+        for (final Genotype genotype : variantBuilder.getGenotypes()) {
+            final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(genotype);
+            genotypeBuilder.attribute(GATKSVVCFConstants.COPY_NUMBER_LOG_POSTERIORS_KEY, copyStateQuals.get( genotype.getSampleName()));
+            newGenotypes.add(genotypeBuilder.make());
+        }
+        variantBuilder.genotypes(newGenotypes);
     }
 
     private Map<String, List<Integer>> getCopyStateQuals(final Map<String, CopyNumberPosteriorDistribution> variantPosteriors) {

@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
 
 public final class SVModelToolUtils {
 
-    static Map<String, Double> readSampleDepthTable(final GATKPath path) {
+    public static Map<String, Double> readSampleDepthTable(final GATKPath path) {
         try {
             final List<Map.Entry<String, Double>> entries = new BufferedReader(new FileReader(path.toPath().toFile()))
                     .lines()
@@ -32,7 +32,7 @@ public final class SVModelToolUtils {
         }
     }
 
-    static Set<String> assertDistinctSampleIds(final Collection<String> samples) {
+    public static Set<String> assertDistinctSampleIds(final Collection<String> samples) {
         final Set<String> set = new HashSet<>(samples);
         if (set.size() != samples.size()) {
             throw new UserException.BadInput("Sample ids are not distinct");
@@ -40,7 +40,7 @@ public final class SVModelToolUtils {
         return set;
     }
 
-    static List<String> negotiateSampleSets(final List<Set<String>> sampleSets, final Logger logger) {
+    public static List<String> negotiateSampleSets(final List<Set<String>> sampleSets, final Logger logger) {
         Utils.nonNull(sampleSets);
         Utils.nonEmpty(sampleSets);
         Utils.containsNoNull(sampleSets, "Null sample set");

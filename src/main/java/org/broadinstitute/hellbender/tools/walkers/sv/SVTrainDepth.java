@@ -9,11 +9,8 @@ import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.tools.copynumber.formats.collections.CalledContigPloidyCollection;
-import org.broadinstitute.hellbender.tools.sv.BafEvidence;
-import org.broadinstitute.hellbender.tools.sv.DepthEvidence;
-import org.broadinstitute.hellbender.tools.sv.DiscordantPairEvidence;
-import org.broadinstitute.hellbender.tools.sv.SplitReadEvidence;
+import org.broadinstitute.hellbender.tools.sv.*;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.codecs.DepthEvidenceCodec;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.io.Resource;
@@ -70,7 +67,8 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     @Argument(fullName = "depth-file", doc = "Read depth evidence file")
     private GATKPath depthEvidenceFilePath;
 
-    @Argument(fullName = CONTIG_PLOIDY_CALLS_LONG_NAME, doc = "Contig ploidy calls file. Can be specified for multiple samples.")
+    @Argument(doc = "Contig ploidy calls file. Can be specified for multiple samples.",
+            fullName = SVTrainDepth.CONTIG_PLOIDY_CALLS_LONG_NAME)
     private List<GATKPath> contigPloidyCallFilePaths;
 
     @Argument(fullName = "output-name", doc = "Output name")
@@ -140,7 +138,7 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
     private PrintStream modelDataFileStream;
     private List<Integer> sampleIndexes;
     private List<String> samplesList;
-    private Map<String, Map<String,Integer>> sampleContigPloidyMap;
+    private MultisampleContigPloidy sampleContigPloidy;
 
     @Override
     protected boolean isAcceptableFeatureType(final Class<? extends Feature> featureType) {
@@ -161,11 +159,11 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         PythonScriptExecutor.checkPythonEnvironmentForPackage("svgenotyper");
 
         // Process inputs
-        sampleContigPloidyMap = readContigPloidyMaps();
+        sampleContigPloidy = new MultisampleContigPloidy(contigPloidyCallFilePaths);
         final Map<String, Double> sampleDepthMap = SVModelToolUtils.readSampleDepthTable(sampleDepthTablePath);
         final List<String> evidenceFileSampleList = getSamplesFromEvidenceFileHeader();
         final Set<String> evidenceFileSampleSet = SVModelToolUtils.assertDistinctSampleIds(evidenceFileSampleList);
-        samplesList = SVModelToolUtils.negotiateSampleSets(Lists.newArrayList(evidenceFileSampleSet, sampleDepthMap.keySet(), sampleContigPloidyMap.keySet()), logger);
+        samplesList = SVModelToolUtils.negotiateSampleSets(Lists.newArrayList(evidenceFileSampleSet, sampleDepthMap.keySet(), sampleContigPloidy.getSampleSet()), logger);
         final Map<String, Integer> sampleToEvidenceFileIndexMap = getSampleToEvidenceRecordIndexMap(evidenceFileSampleList);
         sampleIndexes = samplesList.stream().map(sampleToEvidenceFileIndexMap::get).collect(Collectors.toList());
 
@@ -204,8 +202,9 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         final List<String> counts = sampleIndexes.stream().map(i -> String.valueOf(allCounts[i])).collect(Collectors.toList());
         sb.append(String.join(DATA_VALUE_SEPARATOR, counts));
         sb.append(DATA_TYPE_SEPARATOR);
-        final List<String> ploidies = samplesList.stream().map(s -> sampleContigPloidyMap.get(s).get(contig).toString()).collect(Collectors.toList());
-        sb.append(String.join(DATA_VALUE_SEPARATOR, ploidies));
+        final List<Integer> ploidyList = samplesList.stream().map(s -> sampleContigPloidy.get(s, contig)).collect(Collectors.toList());
+        Utils.containsNoNull(ploidyList, "Contig ploidy information missing for at least one sample in contig " + contig);
+        sb.append(String.join(DATA_VALUE_SEPARATOR, ploidyList.stream().map(String::valueOf).collect(Collectors.toList())));
         return sb.toString();
     }
 
@@ -240,23 +239,6 @@ public class SVTrainDepth extends FeatureWalker<DepthEvidence> {
         }
     }
 
-    private Map<String,Map<String,Integer>> readContigPloidyMaps() {
-        final Collection<CalledContigPloidyCollection> contigPloidyCollections = contigPloidyCallFilePaths.stream()
-                .map(p -> new CalledContigPloidyCollection(p.toPath().toFile()))
-                .collect(Collectors.toList());
-        return getSampleContigPloidyMap(contigPloidyCollections);
-    }
-
-    private static Map<String,Integer> getContigToPloidyCallMap(final CalledContigPloidyCollection contigPloidyCollection) {
-        return contigPloidyCollection.getRecords().stream().collect(Collectors.toMap(p -> p.getContig(), p -> p.getPloidy()));
-    }
-
-    public static Map<String,Map<String,Integer>> getSampleContigPloidyMap(final Collection<CalledContigPloidyCollection> contigPloidyCollections) {
-        final List<String> samples = contigPloidyCollections.stream().map(CalledContigPloidyCollection::getMetadata)
-                .map(m -> m.getSampleName()).collect(Collectors.toList());
-        SVModelToolUtils.assertDistinctSampleIds(samples);
-        return contigPloidyCollections.stream().collect(Collectors.toMap(p -> p.getMetadata().getSampleName(), p -> getContigToPloidyCallMap(p)));
-    }
 
     private static Map<String, Integer> getSampleToEvidenceRecordIndexMap(final List<String> headerSampleList) {
         return IntStream.range(0, headerSampleList.size())
