@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.variantdb.nextgen;
 
+import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.vcf.VCFHeader;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -11,9 +12,10 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.variantdb.CommonCode;
 import org.broadinstitute.hellbender.tools.variantdb.SampleList;
 import org.broadinstitute.hellbender.tools.variantdb.SchemaUtils;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.*;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 
 @CommandLineProgramProperties(
@@ -68,16 +70,21 @@ public class ExtractCohort extends ExtractTool {
         SampleList sampleList = new SampleList(sampleTableName, sampleFileName, projectID, printDebugInformation);
         Set<String> sampleNames = new HashSet<>(sampleList.getSampleNames());
 
+        final SAMSequenceDictionary referenceDictionary = reference.getSequenceDictionary();
         VCFHeader header = CommonCode.generateVcfHeader(sampleNames, reference.getSequenceDictionary());
 
+        final List<SimpleInterval> traversalIntervals = getTraversalIntervals();
+        System.out.println("traversalIntervals:");
+        System.out.println(traversalIntervals);
+
         if (minLocation == null && maxLocation == null && hasUserSuppliedIntervals()) {
-            final SimpleInterval firstInterval = getTraversalIntervals().get(0);
-            final SimpleInterval lastInterval = getTraversalIntervals().get(getTraversalIntervals().size() - 1);
+            final SimpleInterval firstInterval = traversalIntervals.get(0);
+            final SimpleInterval lastInterval = traversalIntervals.get(getTraversalIntervals().size() - 1);
 
             minLocation = SchemaUtils.encodeLocation(firstInterval.getContig(), firstInterval.getStart());
             maxLocation = SchemaUtils.encodeLocation(lastInterval.getContig(), lastInterval.getEnd());
         } else if ((minLocation != null || maxLocation != null) && hasUserSuppliedIntervals()) {
-            throw new UserException("min-location and max-location should not be used together with intervals (-L).");
+            throw new UserException("min-location and max-location should not be used together with intervals (-L and/or -XL).");
         }
 
 
@@ -91,6 +98,8 @@ public class ExtractCohort extends ExtractTool {
                 mode,
                 cohortTable,
                 cohortAvroFileName,
+                traversalIntervals,
+                referenceDictionary,
                 minLocation,
                 maxLocation,
                 filteringFQTableName,

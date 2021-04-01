@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.variantdb.nextgen;
 import com.google.cloud.bigquery.FieldValueList;
 import com.google.cloud.bigquery.TableResult;
 import com.google.common.collect.Sets;
+import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypeBuilder;
 import htsjdk.variant.variantcontext.VariantContext;
@@ -23,8 +24,7 @@ import org.broadinstitute.hellbender.tools.walkers.ReferenceConfidenceVariantCon
 import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.gnarlyGenotyper.GnarlyGenotyperEngine;
-import org.broadinstitute.hellbender.utils.IndexRange;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.bigquery.*;
 import org.broadinstitute.hellbender.utils.localsort.AvroSortingCollectionCodec;
 import org.broadinstitute.hellbender.utils.localsort.SortingCollection;
@@ -43,6 +43,8 @@ public class ExtractCohortEngine {
     private final boolean printDebugInformation;
     private final int localSortMaxRecordsInRam;
     private final TableReference cohortTableRef;
+    private final List<SimpleInterval> traversalIntervals;
+    private final SAMSequenceDictionary referenceDictionary;
     private final Long minLocation;
     private final Long maxLocation;
     private final TableReference filteringTableRef;
@@ -83,6 +85,8 @@ public class ExtractCohortEngine {
                                final CommonCode.ModeEnum mode,
                                final String cohortTableName,
                                final String cohortAvroFileName,
+                               final List<SimpleInterval> traversalIntervals,
+                               final SAMSequenceDictionary referenceDictionary,
                                final Long minLocation,
                                final Long maxLocation,
                                final String filteringTableName,
@@ -104,6 +108,9 @@ public class ExtractCohortEngine {
 
         this.cohortTableRef = new TableReference(cohortTableName, SchemaUtils.COHORT_FIELDS);
         this.cohortAvroFileName = cohortAvroFileName;
+
+        this.traversalIntervals = traversalIntervals;
+        this.referenceDictionary = referenceDictionary;
         this.minLocation = minLocation;
         this.maxLocation = maxLocation;
         this.filteringTableRef = filteringTableName == null || "".equals(filteringTableName) ? null : new TableReference(filteringTableName, SchemaUtils.YNG_FIELDS);
@@ -244,6 +251,65 @@ public class ExtractCohortEngine {
         return SortingCollection.newInstance(GenericRecord.class, sortingCollectionCodec, sortingCollectionComparator, localSortMaxRecordsInRam, true);
     }
 
+    // Maintains an iterator over a set of coordinate-sorted, disjoint intervals.
+    // It allows you to ask whether a read overlaps any of the intervals by calling isInInterval.
+    // With each call, it advances the iterator as appropriate, and checks for overlap.
+    // The sequence of reads passed to isInInterval must also be coordinate-sorted.
+    static final class RegionChecker {
+        private final List<SimpleInterval> intervals;
+        private final SAMSequenceDictionary dictionary;
+        private Iterator<SimpleInterval> intervalIterator;
+        private SimpleInterval currentInterval;
+
+        public RegionChecker( final List<SimpleInterval> intervals, final SAMSequenceDictionary dictionary ) {
+            this.intervals = intervals;
+            this.dictionary = dictionary;
+            reset();
+        }
+
+        public boolean isInInterval( final long location ) {
+            if ( currentInterval == null ) return false;
+            final String locationContig = SchemaUtils.decodeContig(location);
+            if ( !currentInterval.getContig().equals(locationContig) ) {
+                final int readContigId = dictionary.getSequenceIndex(locationContig);
+                int currentContigId;
+                while ( (currentContigId =
+                        dictionary.getSequenceIndex(currentInterval.getContig())) < readContigId ) {
+                    if ( !intervalIterator.hasNext() ) {
+                        currentInterval = null;
+                        return false;
+                    }
+                    currentInterval = intervalIterator.next();
+                }
+                if ( currentContigId > readContigId ) {
+                    return false;
+                }
+            }
+
+            // we've advanced the iterator so that the current contig is the same as the read's contig
+            final int currentPosition = SchemaUtils.decodePosition(location);
+            while ( currentInterval.getEnd() < currentPosition ) {
+                if ( !intervalIterator.hasNext() ) {
+                    currentInterval = null;
+                    return false;
+                }
+                currentInterval = intervalIterator.next();
+                if ( !currentInterval.getContig().equals(locationContig) ) {
+                    return false;
+                }
+            }
+
+            // we've advanced the iterator so that the current end is no smaller than the read start
+//            return currentInterval.overlaps(read);
+            return currentInterval.getStart() <= currentPosition;
+        }
+
+        public void reset() {
+            intervalIterator = intervals.iterator();
+            currentInterval = intervalIterator.hasNext() ? intervalIterator.next() : null;
+        }
+    }
+
 
     private void createVariantsFromUngroupedTableResult(final GATKAvroReader avroReader, HashMap<Long, HashMap<Allele, HashMap<Allele, Double>>> fullVqsLodMap, HashMap<Long, HashMap<Allele, HashMap<Allele, String>>> fullYngMap, boolean noFilteringRequested) {
 
@@ -256,7 +322,7 @@ public class ExtractCohortEngine {
         schema.getFields().forEach(field -> columnNames.add(field.name()));
 //        validateSchema(columnNames);
 
-        SortingCollection<GenericRecord> sortingCollection =  getAvroSortingCollection(schema, localSortMaxRecordsInRam);
+        SortingCollection<GenericRecord> sortingCollection = getAvroSortingCollection(schema, localSortMaxRecordsInRam);
 
         int recordsProcessed = 0;
         long startTime = System.currentTimeMillis();
@@ -272,11 +338,23 @@ public class ExtractCohortEngine {
 
         sortingCollection.printTempFileStats();
 
+        // only keep locations that are in the desired intervals
+        final RegionChecker regionChecker = new RegionChecker(traversalIntervals, referenceDictionary);
+        List<GenericRecord> intervalFilteredList = new ArrayList<>();
+
+        for ( final GenericRecord queryRow : sortingCollection ) {
+            final long location = Long.parseLong(queryRow.get(SchemaUtils.LOCATION_FIELD_NAME).toString());
+            if ( regionChecker.isInInterval( location ) ) {
+                intervalFilteredList.add(queryRow);
+            }
+        }
+
+
         final Map<String, GenericRecord> currentPositionRecords = new HashMap<>(sampleNames.size() * 2);
 
         long currentLocation = -1;
 
-        for ( final GenericRecord sortedRow : sortingCollection ) {
+        for ( final GenericRecord sortedRow : intervalFilteredList ) {
             final long location = Long.parseLong(sortedRow.get(SchemaUtils.LOCATION_FIELD_NAME).toString());
             final String sampleName = sortedRow.get(SchemaUtils.SAMPLE_NAME_FIELD_NAME).toString();
 
@@ -298,7 +376,7 @@ public class ExtractCohortEngine {
     }
 
     private GenericRecord mergeSampleRecord(GenericRecord r1, GenericRecord r2) {
-        logger.info("In SampleRecord Merge Logic for " + r1 + " and " + r2);
+//        logger.info("In SampleRecord Merge Logic for " + r1 + " and " + r2);
 
         final String r1State = r1.get(SchemaUtils.STATE_FIELD_NAME).toString();
         final String r2State = r2.get(SchemaUtils.STATE_FIELD_NAME).toString();
