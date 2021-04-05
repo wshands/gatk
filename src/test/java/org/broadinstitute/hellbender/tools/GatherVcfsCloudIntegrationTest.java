@@ -6,6 +6,7 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFCodec;
 import htsjdk.variant.vcf.VCFHeader;
+import htsjdk.variant.vcf.VCFHeaderLine;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
@@ -73,8 +74,20 @@ public class GatherVcfsCloudIntegrationTest extends CommandLineProgramTest{
             final List<VariantContext> expectedVariants = StreamSupport.stream(Spliterators.spliteratorUnknownSize(expectedReader.iterator(),Spliterator.ORDERED), false).collect(Collectors.toList());
             VariantContextTestUtils.assertEqualVariants(actualVariants, expectedVariants);
 
-            Assert.assertEquals(((VCFHeader) actualReader.getHeader()).getMetaDataInInputOrder(),
-                    ((VCFHeader) expectedReader.getHeader()).getMetaDataInInputOrder());
+            // get the header lines, but filter out the fileFormat lines before comparison, because the
+            // CONVENTIONAL gather method results in upgrading the file to the current versions
+            final Set<VCFHeaderLine> actualHeaderLines =
+                    ((VCFHeader) actualReader.getHeader()).getMetaDataInInputOrder()
+                            .stream()
+                            .filter(hl -> !hl.getKey().equals("fileFormat"))
+                            .collect(Collectors.toSet());
+            final Set<VCFHeaderLine> expectedHeaderLines =
+                    ((VCFHeader) expectedReader.getHeader()).getMetaDataInInputOrder()
+                            .stream()
+                            .filter(hl -> !hl.getKey().equals("fileFormat"))
+                            .collect(Collectors.toSet());
+
+            Assert.assertEquals(actualHeaderLines, expectedHeaderLines);
         }
     }
 
