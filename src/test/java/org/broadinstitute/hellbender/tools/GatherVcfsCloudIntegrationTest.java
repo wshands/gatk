@@ -87,6 +87,14 @@ public class GatherVcfsCloudIntegrationTest extends CommandLineProgramTest{
                             .filter(hl -> !hl.getKey().equals("fileFormat"))
                             .collect(Collectors.toSet());
 
+            final boolean countsMatch = actualHeaderLines.size() == expectedHeaderLines.size();
+            final VCFHeaderLine[] acts = actualHeaderLines.toArray(new VCFHeaderLine[actualHeaderLines.size()]);
+            final VCFHeaderLine[] exps = expectedHeaderLines.toArray(new VCFHeaderLine[actualHeaderLines.size()]);
+            for (int i = 0; i < acts.length; i++) {
+                if (!exps[i].equals(acts[i])) {
+                    System.out.println(String.format("exp: %s\nact: %s\n", exps[i].toString(), acts[i].toString()));
+                }
+            }
             Assert.assertEquals(actualHeaderLines, expectedHeaderLines);
         }
     }
