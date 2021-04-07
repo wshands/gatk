@@ -20,7 +20,9 @@ def main():
 
     header_str = str(vcf.header) \
         .replace('##FORMAT=<ID=CNLP,Number=1,Type=Integer,Description="Phred-scaled copy number posterior over the event region">',
-                 '##FORMAT=<ID=CNLP,Number=5,Type=Integer,Description="Phred-scaled copy number posterior over the event region">')
+                 '##FORMAT=<ID=CNLP,Number=5,Type=Integer,Description="Phred-scaled copy number posterior over the event region">') \
+        .replace('##INFO=<ID=SVLEN,Number=.,Type=Integer,Description="Difference in length between REF and ALT alleles">',
+                 '##INFO=<ID=SVLEN,Number=1,Type=Integer,Description="Difference in length between REF and ALT alleles">')
     sys.stdout.write(header_str)
 
     for record in vcf.fetch():

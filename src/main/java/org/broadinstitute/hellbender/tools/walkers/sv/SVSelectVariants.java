@@ -183,7 +183,7 @@ public final class SVSelectVariants extends VariantWalker {
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
         final SVCallRecord record = SVCallRecordUtils.create(variant);
-        final boolean variantDepthOnly = record.isDepthOnlyCall();
+        final boolean variantDepthOnly = record.isDepthOnly();
         if (depthOnly && !variantDepthOnly) {
             return;
         }

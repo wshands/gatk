@@ -32,7 +32,7 @@ public class DiscordantPairEvidenceAggregator extends CachingSVEvidenceAggregato
     protected SVCallRecordWithEvidence assignEvidence(final SVCallRecordWithEvidence call, final List<DiscordantPairEvidence> evidence) {
         Utils.nonNull(call);
         final SVCallRecordWithEvidence callWithEvidence;
-        if (call.isDepthOnlyCall()) {
+        if (call.isDepthOnly()) {
             callWithEvidence = new SVCallRecordWithEvidence(call, call.getStartSplitReadSites(), call.getEndSplitReadSites(), Collections.emptyList(), call.getCopyNumberDistribution());
         } else {
             callWithEvidence = new SVCallRecordWithEvidence(call, call.getStartSplitReadSites(), call.getEndSplitReadSites(), evidence, call.getCopyNumberDistribution());

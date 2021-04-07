@@ -10,7 +10,7 @@ import java.util.Arrays;
 
 public class SVDeduplicatorUnitTest {
 
-    final SVCollapser<SVCallRecord> collapser = new SVPreprocessingRecordCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
+    final SVCollapser collapser = new SVCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END);
     final SVDeduplicator<SVCallRecord> deduplicator = new SVDeduplicator<>(collapser::collapse, SVTestUtils.dict);
 
     @Test

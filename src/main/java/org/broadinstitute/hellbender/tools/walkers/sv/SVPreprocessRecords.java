@@ -18,7 +18,6 @@ import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVCollapser;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVDeduplicator;
-import org.broadinstitute.hellbender.tools.sv.cluster.SVPreprocessingRecordCollapser;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
@@ -85,7 +84,13 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
     )
     private GATKPath outputFile;
 
-    final static List<Allele> DEFAULT_ALLELES = Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
+    @Argument(
+            doc = "Low memory mode. Drops hom-ref and no-call genotype fields and emits all as diploid no-calls.",
+            fullName = "low-memory"
+    )
+    private boolean lowMemoryMode;
+
+    final static List<Allele> DEFAULT_ALLELES = Arrays.asList(Allele.NO_CALL);
 
     private VariantContextWriter writer;
     private List<SVCallRecord> records;
@@ -107,7 +112,7 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
         samples = getSamplesForVariants();
         writer = createVCFWriter(outputFile);
         writer.writeHeader(createVcfHeader());
-        final SVCollapser<SVCallRecord> collapser = new SVPreprocessingRecordCollapser(null);
+        final SVCollapser collapser = new SVCollapser(null);
         deduplicator = new SVDeduplicator<>(collapser::collapse, dictionary);
     }
 
@@ -124,7 +129,7 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
                       final ReferenceContext referenceContext,
                       final FeatureContext featureContext) {
         Utils.validate(variant.getNAlleles() == 2, "Records must be biallelic");
-        final SVCallRecord record = sanitizeInputGenotypes(SVCallRecordUtils.create(variant));
+        final SVCallRecord record = preprocessInputGenotypes(SVCallRecordUtils.create(variant));
         if (record.getPositionA() != currentPosition || !record.getContigA().equals(currentContig)) {
             flushRecords();
             currentPosition = record.getPositionA();
@@ -147,26 +152,24 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
         }
     }
 
-    private SVCallRecord sanitizeInputGenotypes(final SVCallRecord record) {
+    private SVCallRecord preprocessInputGenotypes(final SVCallRecord record) {
         // Saves memory to only retain non-ref genotypes
-        final GenotypesContext nonRefGenotypes = GenotypesContext.copy(record.getGenotypes().stream()
-                .filter(g -> SVCallRecord.isRawCall(g) || SVCallRecord.isCarrier(g))
-                .map(this::sanitizeGenotype)
-                .collect(Collectors.toList()));
-        return SVCallRecordUtils.copyCallWithNewGenotypes(record, nonRefGenotypes);
-    }
-
-    private Genotype sanitizeGenotype(final Genotype genotype) {
-        return new GenotypeBuilder(genotype.getSampleName())
-                .alleles(DEFAULT_ALLELES)
-                .attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE)
-                .make();
+        if (lowMemoryMode) {
+            final GenotypesContext genotypes = GenotypesContext.copy(record.getGenotypes().stream()
+                    .filter(SVCallRecordUtils::isAltGenotype)
+                    .map(GenotypeBuilder::new)
+                    .map(GenotypeBuilder::noAttributes)
+                    .map(GenotypeBuilder::make)
+                    .collect(Collectors.toList()));
+            return SVCallRecordUtils.copyCallWithNewGenotypes(record, genotypes);
+        } else {
+            return record;
+        }
     }
 
     private VariantContext createVariant(final SVCallRecord call) {
         final VariantContextBuilder builder = SVCallRecordUtils.getVariantBuilder(call);
-        final Map<String, Object> nonCallAttributes = Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
-        builder.genotypes(SVCallRecordUtils.fillMissingSamplesWithGenotypes(builder.getGenotypes(), DEFAULT_ALLELES, samples, nonCallAttributes));
+        builder.genotypes(SVCallRecordUtils.fillMissingSamplesWithGenotypes(builder.getGenotypes(), DEFAULT_ALLELES, samples, Collections.emptyMap()));
         return builder.make();
     }
 
@@ -174,6 +177,10 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
         final VCFHeader header = new VCFHeader(getDefaultToolVCFHeaderLines(), samples);
         header.setVCFHeaderVersion(VCFHeaderVersion.VCF4_2);
         header.setSequenceDictionary(dictionary);
+
+        // Copy from inputs
+        getHeaderForVariants().getFormatHeaderLines().forEach(header::addMetaDataLine);
+        getHeaderForVariants().getInfoHeaderLines().forEach(header::addMetaDataLine);
 
         // Info lines
         header.addMetaDataLine(VCFStandardHeaderLines.getInfoLine(VCFConstants.END_KEY));
@@ -186,7 +193,6 @@ public final class SVPreprocessRecords extends MultiVariantWalker {
 
         // Format lines
         header.addMetaDataLine(VCFStandardHeaderLines.getFormatLine(VCFConstants.GENOTYPE_KEY));
-        header.addMetaDataLine(new VCFFormatHeaderLine(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, 1, VCFHeaderLineType.Integer, "Sample non-reference in raw calls"));
 
         return header;
     }

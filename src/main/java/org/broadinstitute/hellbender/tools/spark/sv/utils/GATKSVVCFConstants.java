@@ -97,6 +97,9 @@ public final class GATKSVVCFConstants {
     public static final String LOW_QS_SCORE_FILTER_KEY = "LOW_QS";
     public static final String FREQUENCY_FILTER_KEY = "FREQ";
 
+    // Clustering
+    public static final String CLUSTER_MEMBER_IDS_KEY = "MEMBERS";
+
     // evidence metrics
     public static final String COPY_NUMBER_LOG_POSTERIORS_KEY = "CNLP";
     public static final String NEUTRAL_COPY_NUMBER_KEY = "NCN";
@@ -108,9 +111,6 @@ public final class GATKSVVCFConstants {
     public static final String START_SPLIT_READ_COUNT_ATTRIBUTE = "SR1";
     public static final String END_SPLIT_READ_COUNT_ATTRIBUTE = "SR2";
     public static final String DISCORDANT_PAIR_COUNT_ATTRIBUTE = "PE";
-    public static final String RAW_CALL_ATTRIBUTE = "RC";
-    public static final int RAW_CALL_ATTRIBUTE_TRUE = 1;
-    public static final int RAW_CALL_ATTRIBUTE_FALSE = 0;
 
     // genotyping
     public static final String COPY_NUMBER_FIELD = "CN";

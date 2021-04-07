@@ -1,13 +1,12 @@
 package org.broadinstitute.hellbender.tools.sv;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypeType;
 import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -27,6 +26,7 @@ public class SVCallRecord implements SVLocatable {
     private final StructuralVariantType type;
     private int length;
     private final List<String> algorithms;
+    private final List<Allele> alleles;
     private final GenotypesContext genotypes;
     private final Map<String,Object> attributes;    // TODO: utilize this to pass through variant attributes
 
@@ -40,6 +40,7 @@ public class SVCallRecord implements SVLocatable {
                         final StructuralVariantType type,
                         final int length,
                         final List<String> algorithms,
+                        final List<Allele> alleles,
                         final List<Genotype> genotypes,
                         final Map<String,Object> attributes) {
         Utils.nonNull(id);
@@ -47,10 +48,9 @@ public class SVCallRecord implements SVLocatable {
         Utils.nonNull(contigB);
         Utils.nonNull(type);
         Utils.nonNull(algorithms);
+        Utils.nonNull(alleles);
         Utils.nonNull(genotypes);
         Utils.nonNull(attributes);
-        Utils.containsNoNull(algorithms, "Encountered null algorithm");
-        Utils.containsNoNull(genotypes, "Encountered null genotype");
         this.id = id;
         this.contigA = contigA;
         this.positionA = positionA;
@@ -61,6 +61,7 @@ public class SVCallRecord implements SVLocatable {
         this.type = type;
         this.length = length;
         this.algorithms = Collections.unmodifiableList(algorithms);
+        this.alleles = Collections.unmodifiableList(alleles);
         this.genotypes = GenotypesContext.copy(genotypes).immutable();
         this.attributes = Collections.unmodifiableMap(attributes);
     }
@@ -75,11 +76,12 @@ public class SVCallRecord implements SVLocatable {
                         final StructuralVariantType type,
                         final int length,
                         final List<String> algorithms,
+                        final List<Allele> alleles,
                         final List<Genotype> genotypes) {
-        this(id, contigA, positionA, strandA, contigB, positionB, strandB, type, length, algorithms, genotypes, Collections.emptyMap());
+        this(id, contigA, positionA, strandA, contigB, positionB, strandB, type, length, algorithms, alleles, genotypes, Collections.emptyMap());
     }
 
-    public boolean isDepthOnlyCall() {
+    public boolean isDepthOnly() {
         return getAlgorithms().size() == 1 && getAlgorithms().get(0).equals(GATKSVVCFConstants.DEPTH_ALGORITHM);
     }
 
@@ -133,40 +135,13 @@ public class SVCallRecord implements SVLocatable {
         return algorithms;
     }
 
+    public List<Allele> getAlleles() {
+        return alleles;
+    }
+
     public Set<String> getAllSamples() {
         return genotypes.stream().map(Genotype::getSampleName)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    public Set<String> getCalledSamples() {
-        return genotypes.stream()
-                .filter(g -> !g.getType().equals(GenotypeType.NO_CALL) || g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)) //skip no-calls that don't have copy number (i.e. not dupe no-calls)
-                .map(Genotype::getSampleName)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    public Set<String> getCarrierSamples() {
-        return genotypes.stream()
-                .filter(SVCallRecord::isCarrier)
-                .map(Genotype::getSampleName)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    public Set<String> getRawCallSamples() {
-        return genotypes.stream()
-                .filter(SVCallRecord::isRawCall)
-                .map(Genotype::getSampleName)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    public static boolean isCarrier(final Genotype g) {
-        Utils.nonNull(g);
-        return g.getType().equals(GenotypeType.HET) || g.getType().equals(GenotypeType.HOM_VAR);
-    }
-
-    public static boolean isRawCall(final Genotype g) {
-        Utils.nonNull(g);
-        return VariantContextGetters.getAttributeAsInt(g, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE) == GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE;
     }
 
     public GenotypesContext getGenotypes() {

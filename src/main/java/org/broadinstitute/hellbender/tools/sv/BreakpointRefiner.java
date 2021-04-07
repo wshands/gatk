@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.tools.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.util.Tuple;
+import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.apache.commons.math3.special.Gamma;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -72,7 +73,7 @@ public class BreakpointRefiner {
         SVCallRecordUtils.validateCoordinatesWithDictionary(call, dictionary);
 
         // Depth-only calls cannot be refined
-        if (call.isDepthOnlyCall()) {
+        if (call.isDepthOnly()) {
             return call;
         }
 
@@ -103,7 +104,7 @@ public class BreakpointRefiner {
         // Create new record
         return new SVCallRecordWithEvidence(
                 call.getId(), call.getContigA(), refinedStartPosition, call.getStrandA(), call.getContigB(),
-                refinedEndPosition, call.getStrandB(), call.getType(), length, call.getAlgorithms(),
+                refinedEndPosition, call.getStrandB(), call.getType(), length, call.getAlgorithms(), call.getAlleles(),
                 call.getGenotypes(), call.getAttributes(), call.getStartSplitReadSites(), call.getEndSplitReadSites(),
                 call.getDiscordantPairs(), call.getCopyNumberDistribution());
     }
@@ -126,7 +127,10 @@ public class BreakpointRefiner {
      * @return sample ids
      */
     private Set<String> getBackgroundSamples(final SVCallRecord call) {
-        final Set<String> rawCallSamples = call.getRawCallSamples();
+        final Set<String> rawCallSamples = call.getGenotypes().stream()
+                .filter(SVCallRecordUtils::isAltGenotype)
+                .map(Genotype::getSampleName)
+                .collect(Collectors.toSet());
         return sampleCoverageMap.keySet().stream().filter(s -> !rawCallSamples.contains(s)).collect(Collectors.toSet());
     }
 

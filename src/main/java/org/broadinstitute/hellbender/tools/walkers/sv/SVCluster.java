@@ -1,13 +1,9 @@
 package org.broadinstitute.hellbender.tools.walkers.sv;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypesContext;
-import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
-import htsjdk.variant.vcf.VCFHeader;
-import htsjdk.variant.vcf.VCFHeaderLine;
+import htsjdk.variant.vcf.*;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
@@ -16,17 +12,19 @@ import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
+import org.broadinstitute.hellbender.engine.MultiVariantWalker;
 import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.engine.VariantWalker;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
+import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFHeaderLines;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
 import org.broadinstitute.hellbender.tools.sv.cluster.*;
 
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.broadinstitute.hellbender.tools.walkers.sv.JointGermlineCNVSegmentation.BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME;
 
@@ -71,7 +69,7 @@ import static org.broadinstitute.hellbender.tools.walkers.sv.JointGermlineCNVSeg
 )
 @ExperimentalFeature
 @DocumentedFeature
-public final class SVCluster extends VariantWalker {
+public final class SVCluster extends MultiVariantWalker {
     public static final String VARIANT_PREFIX_LONG_NAME = "variant-prefix";
     public static final String ENABLE_CNV_LONG_NAME = "enable-cnv";
     public static final String DEFRAG_PADDING_FRACTION_LONG_NAME = "defrag-padding-fraction";
@@ -92,11 +90,11 @@ public final class SVCluster extends VariantWalker {
     private String outputFile;
 
     @Argument(
-            doc = "Prefix for variant IDs",
+            doc = "If supplied, generate variant IDs with this prefix",
             fullName = VARIANT_PREFIX_LONG_NAME,
             optional = true
     )
-    private String variantPrefix = "SV_x";
+    private String variantPrefix = null;
 
     @Argument(
             doc = "Enable clustering DEL/DUP variants together as CNVs (does not apply to CNV defragmentation)",
@@ -112,16 +110,24 @@ public final class SVCluster extends VariantWalker {
     )
     private boolean convertInversions = false;
 
+    @Argument(
+            doc = "Fast mode. Drops hom-ref and no-call genotype fields and emits them as no-calls.",
+            fullName = "fast-mode",
+            optional = true
+    )
+    private boolean fastMode = false;
+
+    @Argument(
+            doc = "Omit cluster member ID annotations",
+            fullName = "omit-members",
+            optional = true
+    )
+    private boolean omitMembers = false;
+
     @Argument(fullName = BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME,
             doc = "Strategy to use for choosing a representative value for a breakpoint cluster.",
             optional = true)
     private SVCollapser.BreakpointSummaryStrategy breakpointSummaryStrategy = SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END;
-
-    @Argument(fullName = JointGermlineCNVSegmentation.MIN_SAMPLE_NUM_OVERLAP_LONG_NAME,
-            doc = "Minimum fraction of common samples for two variants to cluster together (CNV defragmentation only)",
-            optional = true
-    )
-    private double minSampleSetOverlap = CNVDefragmenter.getDefaultSampleOverlap();
 
     @Argument(fullName = DEFRAG_PADDING_FRACTION_LONG_NAME,
             doc = "Padding as a fraction of variant length (CNV defragmentation only)",
@@ -157,12 +163,12 @@ public final class SVCluster extends VariantWalker {
         if (dictionary == null) {
             throw new UserException("Reference sequence dictionary required");
         }
-        samples = new LinkedHashSet<>(getHeaderForVariants().getSampleNamesInOrder());
+        samples = getSamplesForVariants();
 
         if (algorithm == CLUSTER_ALGORITHM.DEFRAGMENT_CNV) {
-            clusterEngine =  new CNVDefragmenter(dictionary, defragPaddingFraction, minSampleSetOverlap);
+            clusterEngine =  new CNVDefragmenter(dictionary, defragPaddingFraction, clusterParameters.getDepthParameters().getSampleOverlap());
         } else if (algorithm == CLUSTER_ALGORITHM.SINGLE_LINKAGE || algorithm == CLUSTER_ALGORITHM.MAX_CLIQUE) {
-            final SVCollapser<SVCallRecord> collapser = new SVPreprocessingRecordCollapser(breakpointSummaryStrategy);
+            final SVCollapser collapser = new SVCollapser(breakpointSummaryStrategy);
             final LocatableClusterEngine.CLUSTERING_TYPE type = algorithm == CLUSTER_ALGORITHM.SINGLE_LINKAGE ? LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE : LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE;
             clusterEngine = new SVClusterEngine<>(dictionary, type, enableCnv, collapser::collapse);
             clusterEngine.setDepthOnlyParams(clusterParameters.getDepthParameters());
@@ -173,16 +179,13 @@ public final class SVCluster extends VariantWalker {
         }
 
         writer = createVCFWriter(Paths.get(outputFile));
-        writeVCFHeader();
+        writer.writeHeader(createHeader());
         currentContig = null;
     }
 
     @Override
     public Object onTraversalSuccess() {
         processClusters();
-        if (!clusterEngine.isEmpty()) {
-            processClusters();
-        }
         return super.onTraversalSuccess();
     }
 
@@ -197,13 +200,13 @@ public final class SVCluster extends VariantWalker {
     @Override
     public void apply(final VariantContext variant, final ReadsContext readsContext,
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
-        final SVCallRecord originalCall = SVCallRecordUtils.create(variant);
-        final ArrayList<Genotype> filteredGenotypeList = new ArrayList<>(originalCall.getGenotypes().size());
-        originalCall.getGenotypes().stream()
-                .filter(SVCallRecord::isRawCall)
-                .forEach(filteredGenotypeList::add);
-        final GenotypesContext filteredGenotypes = GenotypesContext.create(filteredGenotypeList);
-        final SVCallRecord call = SVCallRecordUtils.copyCallWithNewGenotypes(originalCall, filteredGenotypes);
+        SVCallRecord call = SVCallRecordUtils.create(variant);
+        if (fastMode) {
+            final GenotypesContext filteredGenotypes = GenotypesContext.copy(call.getGenotypes().stream()
+                    .filter(SVCallRecordUtils::isAltGenotype)
+                    .collect(Collectors.toList()));
+            call = SVCallRecordUtils.copyCallWithNewGenotypes(call, filteredGenotypes);
+        }
 
         // Flush clusters if we hit the next contig
         if (!call.getContigA().equals(currentContig)) {
@@ -235,24 +238,45 @@ public final class SVCluster extends VariantWalker {
                 .forEachOrdered(writer::add);
     }
 
-    private void writeVCFHeader() {
+    private VCFHeader createHeader() {
         final VCFHeader header = new VCFHeader(getDefaultToolVCFHeaderLines(), samples);
+        header.setVCFHeaderVersion(VCFHeaderVersion.VCF4_2);
         header.setSequenceDictionary(dictionary);
-        for (final VCFHeaderLine line : getHeaderForVariants().getMetaDataInInputOrder()) {
-            header.addMetaDataLine(line);
+
+        // Copy from inputs
+        getHeaderForVariants().getFormatHeaderLines().forEach(header::addMetaDataLine);
+        getHeaderForVariants().getInfoHeaderLines().forEach(header::addMetaDataLine);
+
+        // Required info lines
+        header.addMetaDataLine(VCFStandardHeaderLines.getInfoLine(VCFConstants.END_KEY));
+        header.addMetaDataLine(GATKSVVCFHeaderLines.getInfoLine(GATKSVVCFConstants.SVLEN));
+        header.addMetaDataLine(GATKSVVCFHeaderLines.getInfoLine(GATKSVVCFConstants.SVTYPE));
+        header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.END2_ATTRIBUTE, 1, VCFHeaderLineType.String, "Second position"));
+        header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.CONTIG2_ATTRIBUTE, 1, VCFHeaderLineType.String, "Second contig"));
+        header.addMetaDataLine(new VCFInfoHeaderLine(GATKSVVCFConstants.STRANDS_ATTRIBUTE, 1, VCFHeaderLineType.String, "First and second strands"));
+        header.addMetaDataLine(new VCFInfoHeaderLine("##INFO=<ID=" + GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE + ",Number=.,Type=String,Description=\"Source algorithms\">", header.getVCFHeaderVersion()));
+        if (!omitMembers) {
+            header.addMetaDataLine(new VCFInfoHeaderLine("##INFO=<ID=" + GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY + ",Number=.,Type=String,Description=\"Cluster variant ids\">", header.getVCFHeaderVersion()));
         }
-        writer.writeHeader(header);
+
+        // Required format lines
+        header.addMetaDataLine(VCFStandardHeaderLines.getFormatLine(VCFConstants.GENOTYPE_KEY));
+
+        return header;
     }
 
     public VariantContext buildVariantContext(final SVCallRecord call) {
-        final Map<String, Object> nonCallAttributes = Collections.singletonMap(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
-        final List<Allele> missingAlleles = Arrays.asList(Allele.NO_CALL, Allele.NO_CALL);
-        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), missingAlleles, samples, nonCallAttributes);
-        final String newId = String.format("%s%08x", variantPrefix, numVariantsWritten++);
+        final List<Allele> missingAlleles = Arrays.asList(Allele.NO_CALL);
+        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), missingAlleles, samples, Collections.emptyMap());
+        final String newId = variantPrefix == null ? call.getId() : String.format("%s%08x", variantPrefix, numVariantsWritten++);
         final SVCallRecord finalCall = new SVCallRecord(newId, call.getContigA(), call.getPositionA(), call.getStrandA(), call.getContigB(),
-                call.getPositionB(), call.getStrandB(), call.getType(), call.getLength(), call.getAlgorithms(),
-                filledGenotypes);
-        return SVCallRecordUtils.getVariantBuilder(finalCall).make();
+                call.getPositionB(), call.getStrandB(), call.getType(), call.getLength(), call.getAlgorithms(), call.getAlleles(),
+                filledGenotypes, call.getAttributes());
+        final VariantContextBuilder builder = SVCallRecordUtils.getVariantBuilder(finalCall);
+        if (omitMembers) {
+            builder.rmAttribute(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY);
+        }
+        return builder.make();
     }
 
 }

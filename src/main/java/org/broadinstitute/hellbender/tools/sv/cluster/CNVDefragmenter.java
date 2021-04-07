@@ -1,13 +1,14 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
+import htsjdk.variant.variantcontext.Genotype;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
-import java.util.LinkedHashSet;
 import java.util.Set;
+
+import static org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants.COPY_NUMBER_FORMAT;
 
 public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
 
@@ -21,7 +22,7 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
     public CNVDefragmenter(final SAMSequenceDictionary dictionary, final double paddingFraction,
                            final double minSampleOverlap) {
         super(dictionary, CLUSTERING_TYPE.SINGLE_LINKAGE, false,
-                (new CNVCollapser(SVCollapser.BreakpointSummaryStrategy.MIN_START_MAX_END))::collapse);
+                (new SVCollapser(SVCollapser.BreakpointSummaryStrategy.MIN_START_MAX_END))::collapse);
         this.minSampleOverlap = minSampleOverlap;
         this.paddingFraction = paddingFraction;
     }
@@ -39,7 +40,7 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
     @Override
     protected boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
         // Only do clustering on depth-only variants
-        if (!isDepthOnlyCall(a) || !isDepthOnlyCall(b)) return false;
+        if (!a.isDepthOnly() || !b.isDepthOnly()) return false;
         Utils.validate(a.getContigA().equals(a.getContigB()), "Variant A is depth-only but interchromosomal");
         Utils.validate(b.getContigA().equals(b.getContigB()), "Variant B is depth-only but interchromosomal");
 
@@ -47,35 +48,60 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
         if (!a.getType().equals(b.getType())) return false;
 
         // Interval overlap
-        if (!getPaddedRecordInterval(a).overlaps(getPaddedRecordInterval(b))) return false;
+        if (!getPaddedRecordInterval(a.getContigA(), a.getPositionA(), a.getPositionB())
+                .overlaps(getPaddedRecordInterval(b.getContigA(), b.getPositionA(), b.getPositionB()))) return false;
 
         // Sample overlap
-        final Set<String> sharedSamples = new LinkedHashSet<>(a.getCalledSamples());
-        sharedSamples.retainAll(b.getCalledSamples());
-        final double sampleOverlap = Math.min(sharedSamples.size() / (double) a.getCalledSamples().size(), sharedSamples.size() / (double) b.getCalledSamples().size());
-        if (sampleOverlap < minSampleOverlap) return false;
-
-        // In the single-sample case, match copy number strictly if we're looking at the same sample
-        if (a.getGenotypes().size() == 1 && b.getGenotypes().size() == 1
-                && a.getGenotypes().get(0).getSampleName().equals(b.getGenotypes().get(0).getSampleName())
-                && a.getGenotypes().get(0).hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)
-                && b.getGenotypes().get(0).hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT) &&
-                !(a.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).equals(b.getGenotypes().get(0).getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)))) {
+        if (!hasSampleOverlap(a, b, minSampleOverlap)) {
             return false;
         }
+
+        // In the single-sample case, match copy number strictly if we're looking at the same sample
+        final Set<String> carriersA = getCopyNumberCarrierSamples(a);
+        final Set<String> carriersB = getCopyNumberCarrierSamples(b);
+        if (carriersA.size() == 1 && carriersB.size() == 1) {
+            final String sampleA = carriersA.iterator().next();
+            final String sampleB = carriersB.iterator().next();
+            if (sampleA.equals(sampleB)) {
+                final Genotype genotypeA = a.getGenotypes().get(sampleA);
+                final Genotype genotypeB = a.getGenotypes().get(sampleB);
+                if (genotypeA.hasExtendedAttribute(COPY_NUMBER_FORMAT) && genotypeB.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
+                    final Object copyNumberA = genotypeA.getExtendedAttribute(COPY_NUMBER_FORMAT);
+                    final Object copyNumberB = genotypeB.getExtendedAttribute(COPY_NUMBER_FORMAT);
+                    if (!copyNumberA.equals(copyNumberB)) {
+                        return false;
+                    }
+                } else {
+                    if (!genotypeA.getAlleles().equals(genotypeB.getAlleles())) {
+                        return false;
+                    }
+                }
+            }
+        }
         return true;
+    }
+
+    /**
+     * Max clusterable position depends on the other variant's length, which is unknown, so we calculate the size
+     * of the largest possible event that would extend to the end of the contig.
+     */
+    @Override
+    protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
+        final int contigLength = dictionary.getSequence(call.getContigA()).getSequenceLength();
+        final int maxEventSize = (int) Math.ceil(contigLength - call.getPositionB());
+        return Math.min((int) Math.ceil(call.getPositionB() + paddingFraction * (call.getLength() + maxEventSize)),
+                dictionary.getSequence(call.getContigA()).getSequenceLength());
     }
 
     /**
      * Determine an overlap interval for clustering using padding specified at object construction
      * Returned interval represents the interval in which the start position of a new event must fall in order to be
      * added to the cluster (including the new event)
-     * @param record  new event to be clustered
      * @return  an interval describing a cluster containing only this variant
      */
-    protected SimpleInterval getPaddedRecordInterval(final SVCallRecord record) {
-        return new SimpleInterval(record.getContigA(), record.getPositionA(), record.getPositionB())
-                .expandWithinContig((int) (paddingFraction * record.getLength()), dictionary);
+    protected SimpleInterval getPaddedRecordInterval(final String contig, final int start, final int end) {
+        return new SimpleInterval(contig, start, end)
+                .expandWithinContig((int) (paddingFraction * (end - start + 1)), dictionary);
     }
 
     public static double getDefaultPaddingFraction() {
@@ -84,14 +110,6 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
 
     public static double getDefaultSampleOverlap() {
         return DEFAULT_SAMPLE_OVERLAP;
-    }
-
-    public static boolean isDepthOnlyCall(final SVCallRecord record) {
-        if (record.getAlgorithms().isEmpty()) return false;
-        for (final String alg : record.getAlgorithms()) {
-            if (!alg.equals(GATKSVVCFConstants.DEPTH_ALGORITHM)) return false;
-        }
-        return true;
     }
 
     public double getPaddingFraction() {

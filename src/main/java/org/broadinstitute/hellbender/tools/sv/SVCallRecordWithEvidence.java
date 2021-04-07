@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.sv;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.broadinstitute.hellbender.tools.copynumber.formats.records.CopyNumberPosteriorDistribution;
@@ -28,8 +29,8 @@ public class SVCallRecordWithEvidence extends SVCallRecord {
                                     final CopyNumberPosteriorDistribution copyNumberDistribution) {
         this(record.getId(), record.getContigA(), record.getPositionA(), record.getStrandA(), record.getContigB(),
                 record.getPositionB(), record.getStrandB(), record.getType(), record.getLength(), record.getAlgorithms(),
-                record.getGenotypes(), record.getAttributes(), startSplitReadSites, endSplitReadSites, discordantPairs,
-                copyNumberDistribution);
+                record.getAlleles(), record.getGenotypes(), record.getAttributes(), startSplitReadSites, endSplitReadSites,
+                discordantPairs, copyNumberDistribution);
     }
 
     public SVCallRecordWithEvidence(final String id,
@@ -42,19 +43,17 @@ public class SVCallRecordWithEvidence extends SVCallRecord {
                                     final StructuralVariantType type,
                                     final int length,
                                     final List<String> algorithms,
+                                    final List<Allele> alleles,
                                     final List<Genotype> genotypes,
                                     final Map<String,Object> attributes,
                                     final List<SplitReadSite> startSplitReadSites,
                                     final List<SplitReadSite> endSplitReadSites,
                                     final List<DiscordantPairEvidence> discordantPairs,
                                     final CopyNumberPosteriorDistribution copyNumberDistribution) {
-        super(id, startContig, position1, strand1, contig2, position2, strand2, type, length, algorithms, genotypes, attributes);
+        super(id, startContig, position1, strand1, contig2, position2, strand2, type, length, algorithms, alleles, genotypes, attributes);
         Utils.nonNull(startSplitReadSites);
         Utils.nonNull(endSplitReadSites);
         Utils.nonNull(discordantPairs);
-        Utils.containsNoNull(startSplitReadSites, "Encountered null in start split reads, use empty list instead");
-        Utils.containsNoNull(endSplitReadSites, "Encountered null in end split reads, use empty list instead");
-        Utils.containsNoNull(discordantPairs, "Encountered null in discordant pairs, use empty list instead");
         this.startSplitReadSites = Collections.unmodifiableList(startSplitReadSites);
         this.endSplitReadSites = Collections.unmodifiableList(endSplitReadSites);
         this.discordantPairs = Collections.unmodifiableList(discordantPairs);

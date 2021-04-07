@@ -5,7 +5,6 @@ import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.variant.variantcontext.*;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
-import org.broadinstitute.hellbender.tools.sv.cluster.CNVCollapser;
 import org.broadinstitute.hellbender.tools.sv.cluster.LocatableClusterEngine;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngine;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVCollapser;
@@ -26,7 +25,7 @@ public class SVTestUtils {
 
     private final static GenomeLocParser glParser = new GenomeLocParser(SVTestUtils.dict);
     public static final Function<Collection<SVCallRecord>, SVCallRecord> defaultCollapser =
-            new CNVCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END)::collapse;
+            new SVCollapser(SVCollapser.BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END)::collapse;
 
     public static SVClusterEngine<SVCallRecord> getNewDefaultSingleLinkageEngine() {
         final SVClusterEngine<SVCallRecord> engine = new SVClusterEngine<>(SVTestUtils.dict, LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE, false, defaultCollapser);

@@ -96,7 +96,7 @@ public class SVClusterEngineTest {
         while (pos <= record.getPositionB()) {
             final SVCallRecord testRecord = new SVCallRecord("", record.getContigA(), pos, record.getStrandA(),
                     record.getContigB(), pos + record.getLength(), record.getStrandB(), record.getType(),
-                    record.getLength(), record.getAlgorithms(), record.getGenotypes());
+                    record.getLength(), record.getAlgorithms(), record.getAlleles(), record.getGenotypes());
             if (engine.clusterTogether(record, testRecord)) {
                 pos++;
             } else {
@@ -127,9 +127,9 @@ public class SVClusterEngineTest {
 
     @Test
     public void testIsDepthOnlyCall() {
-        Assert.assertTrue(SVTestUtils.call1.isDepthOnlyCall());
-        Assert.assertFalse(SVTestUtils.depthAndStuff.isDepthOnlyCall());
-        Assert.assertFalse(SVTestUtils.inversion.isDepthOnlyCall());
+        Assert.assertTrue(SVTestUtils.call1.isDepthOnly());
+        Assert.assertFalse(SVTestUtils.depthAndStuff.isDepthOnly());
+        Assert.assertFalse(SVTestUtils.inversion.isDepthOnly());
     }
 
     @DataProvider(name = "clusterTogetherVaryPositionsProvider")

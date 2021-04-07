@@ -1,6 +1,5 @@
 package org.broadinstitute.hellbender.tools.sv;
 
-import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
@@ -16,7 +15,6 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -30,8 +28,6 @@ public final class SVCallRecordUtils {
      */
     public static VariantContextBuilder getVariantBuilder(final SVCallRecord call) {
         Utils.nonNull(call);
-        final Allele altAllele = Allele.create("<" + call.getType().name() + ">", false);
-        final Allele refAllele = Allele.REF_N;
         final int end;
         if (call.getType().equals(StructuralVariantType.INS) || call.getType().equals(StructuralVariantType.BND)) {
             end = call.getPositionA();
@@ -45,9 +41,29 @@ public final class SVCallRecordUtils {
             end2 = call.getPositionB();
         }
 
+        final List<Allele> altAlleles = call.getAlleles().stream()
+                .filter(a -> !a.isNoCall() && !a.isReference())
+                .distinct()
+                .collect(Collectors.toList());
+        final List<Allele> refAlleles = call.getAlleles().stream()
+                .filter(a -> !a.isNoCall() && a.isReference())
+                .distinct()
+                .collect(Collectors.toList());
+        Utils.validate(refAlleles.size() <= 1, "Encountered multiple reference alleles");
+        final int numAlleles = refAlleles.size() + altAlleles.size();
+        final List<Allele> alleles = new ArrayList<>(numAlleles);
+        if (refAlleles.isEmpty()) {
+            // If no reference allele, use N
+            alleles.add(Allele.REF_N);
+        } else {
+            alleles.add(refAlleles.get(0));
+        }
+        alleles.addAll(altAlleles);
+
         final VariantContextBuilder builder = new VariantContextBuilder(call.getId(), call.getContigA(), call.getPositionA(),
-                end, Lists.newArrayList(refAllele, altAllele));
+                end, alleles);
         builder.id(call.getId());
+        builder.attributes(call.getAttributes());
         builder.attribute(VCFConstants.END_KEY, end);
         builder.attribute(GATKSVVCFConstants.CONTIG2_ATTRIBUTE, call.getContigB());
         builder.attribute(GATKSVVCFConstants.END2_ATTRIBUTE, end2);
@@ -84,20 +100,20 @@ public final class SVCallRecordUtils {
 
     public static SVCallRecord copyCallWithNewGenotypes(final SVCallRecord record, final GenotypesContext genotypes) {
         return new SVCallRecord(record.getId(), record.getContigA(), record.getPositionA(), record.getStrandA(), record.getContigB(),
-                record.getPositionB(), record.getStrandB(), record.getType(), record.getLength(), record.getAlgorithms(),
-                genotypes);
+                record.getPositionB(), record.getStrandB(), record.getType(), record.getLength(), record.getAlgorithms(), record.getAlleles(),
+                genotypes, record.getAttributes());
     }
 
     public static SVCallRecordWithEvidence copyCallWithNewGenotypes(final SVCallRecordWithEvidence record, final GenotypesContext genotypes) {
         return new SVCallRecordWithEvidence(record.getId(), record.getContigA(), record.getPositionA(), record.getStrandA(), record.getContigB(),
-                record.getPositionB(), record.getStrandB(), record.getType(), record.getLength(), record.getAlgorithms(),
+                record.getPositionB(), record.getStrandB(), record.getType(), record.getLength(), record.getAlgorithms(), record.getAlleles(),
                 genotypes, record.getAttributes(), record.getStartSplitReadSites(), record.getEndSplitReadSites(), record.getDiscordantPairs(),
                 record.getCopyNumberDistribution());
     }
 
     public static VariantContextBuilder createBuilderWithEvidence(final SVCallRecordWithEvidence call, boolean updateSplitRead, boolean updateDiscordantPair) {
         final VariantContextBuilder builder = getVariantBuilder(call);
-        final boolean includeEvidence = !call.isDepthOnlyCall();
+        final boolean includeEvidence = !call.isDepthOnly();
         final SplitReadSite startSplitReadCounts = includeEvidence ? getSplitReadCountsAtPosition(call.getStartSplitReadSites(), call.getPositionA()) : null;
         final SplitReadSite endSplitReadCounts = includeEvidence ? getSplitReadCountsAtPosition(call.getEndSplitReadSites(), call.getPositionB()) : null;
         final Map<String,Integer> discordantPairCounts = includeEvidence ? getDiscordantPairCountsMap(call.getDiscordantPairs()) : null;
@@ -265,10 +281,10 @@ public final class SVCallRecordUtils {
         Utils.validateArg(isIntrachromosomal(call), "Inversion is not intrachromosomal");
         final SVCallRecord positiveBreakend = new SVCallRecord(call.getId(), call.getContigA(),
                 call.getPositionA(), true, call.getContigB(), call.getPositionB(), true, StructuralVariantType.BND, -1,
-                call.getAlgorithms(), call.getGenotypes());
+                call.getAlgorithms(), call.getAlleles(), call.getGenotypes(), call.getAttributes());
         final SVCallRecord negativeBreakend = new SVCallRecord(call.getId(), call.getContigA(),
                 call.getPositionA(), false, call.getContigB(), call.getPositionB(), false, StructuralVariantType.BND, -1,
-                call.getAlgorithms(), call.getGenotypes());
+                call.getAlgorithms(), call.getAlleles(), call.getGenotypes(), call.getAttributes());
         return Stream.of(positiveBreakend, negativeBreakend);
     }
 
@@ -304,12 +320,11 @@ public final class SVCallRecordUtils {
     }
 
     public static SVCallRecord create(final VariantContext variant) {
-        return create(variant, false);
+        return create(variant, true);
     }
 
-    public static SVCallRecord create(final VariantContext variant, boolean keepAttributes) {
+    public static SVCallRecord create(final VariantContext variant, boolean keepVariantAttributes) {
         Utils.nonNull(variant);
-        //Utils.validate(variant.getAttributes().keySet().containsAll(nonDepthCallerAttributes), "Call is missing attributes");
         final String id = variant.getID();
         final String contigA = variant.getContig();
         final int positionA = variant.getStart();
@@ -320,7 +335,7 @@ public final class SVCallRecordUtils {
         final boolean strand1 = strands.startsWith(SVCallRecord.STRAND_PLUS);
         final boolean strand2 = strands.endsWith(SVCallRecord.STRAND_PLUS);
         final int length = getLength(variant);
-        final Map<String, Object> attributes = keepAttributes ? variant.getAttributes() : Collections.emptyMap();
+        final Map<String, Object> attributes = keepVariantAttributes ? variant.getAttributes() : Collections.emptyMap();
 
         final String contigB;
         final int positionB;
@@ -341,7 +356,7 @@ public final class SVCallRecordUtils {
             contigB = contigA;
             positionB = variant.getEnd();
         }
-        return new SVCallRecord(id, contigA, positionA, strand1, contigB, positionB, strand2, type, length, algorithms, variant.getGenotypes(), attributes);
+        return new SVCallRecord(id, contigA, positionA, strand1, contigB, positionB, strand2, type, length, algorithms, variant.getAlleles(), variant.getGenotypes(), attributes);
     }
 
     public static int getLength(final VariantContext variant) {
@@ -468,7 +483,7 @@ public final class SVCallRecordUtils {
         final int start = variant.getStart();
         final int end = variant.getEnd();
         final int length = end - start;
-        return new SVCallRecord(id, startContig, start, startStrand, startContig, end, endStrand, type, length, algorithms, variant.getGenotypes());
+        return new SVCallRecord(id, startContig, start, startStrand, startContig, end, endStrand, type, length, algorithms, variant.getAlleles(), variant.getGenotypes(), variant.getAttributes());
     }
 
     /**
@@ -483,103 +498,7 @@ public final class SVCallRecordUtils {
 
     }
 
-    /**
-     * Collapses all given records, with genotype Raw Call flags set if set in any record and combined algorithms list.
-     * @param items records to collapse
-     * @return representative record, or null if the input is empty
-     */
-    public static SVCallRecord deduplicateWithRawCallAttribute(final Collection<SVCallRecord> items,
-                                                               final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
-        Utils.nonNull(items);
-        if (items.isEmpty()) {
-            return null;
-        }
-        final List<Genotype> genotypes = collapseRecordGenotypesWithRawCallAttribute(items, alleleCollapser);
-        final List<String> algorithms = collapseAlgorithms(items);
-        final SVCallRecord example = items.iterator().next();
-        return new SVCallRecord(
-                example.getId(),
-                example.getContigA(),
-                example.getPositionA(),
-                example.getStrandA(),
-                example.getContigB(),
-                example.getPositionB(),
-                example.getStrandB(),
-                example.getType(),
-                example.getLength(),
-                algorithms,
-                genotypes);
-    }
-
-    /**
-     * Same as {@link SVCallRecordUtils#deduplicateWithRawCallAttribute(Collection, Function)} but for {@link SVCallRecordWithEvidence}s.
-     * @param items records to collapse
-     * @return representative record, or null if the input is empty
-     */
-    public static SVCallRecordWithEvidence deduplicateWithRawCallAttributeWithEvidence(final Collection<SVCallRecordWithEvidence> items,
-                                                                                       final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
-        Utils.nonNull(items);
-        if (items.isEmpty()) {
-            return null;
-        }
-        final List<Genotype> genotypes = collapseRecordGenotypesWithRawCallAttribute(items, alleleCollapser);
-        final List<String> algorithms = collapseAlgorithms(items);
-        final SVCallRecordWithEvidence example = items.iterator().next();
-        return new SVCallRecordWithEvidence(
-                example.getId(),
-                example.getContigA(),
-                example.getPositionA(),
-                example.getStrandA(),
-                example.getContigB(),
-                example.getPositionB(),
-                example.getStrandB(),
-                example.getType(),
-                example.getLength(),
-                algorithms,
-                genotypes,
-                Collections.emptyMap(),
-                example.getStartSplitReadSites(),
-                example.getEndSplitReadSites(),
-                example.getDiscordantPairs(),
-                example.getCopyNumberDistribution());
-    }
-
-    /**
-     *
-     * @param records
-     * @return
-     */
-    private static List<Genotype> collapseRecordGenotypesWithRawCallAttribute(final Collection<? extends SVCallRecord> records,
-                                                                              final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
-        return records.stream()
-                .map(SVCallRecord::getGenotypes)
-                .flatMap(g -> g.stream())
-                .collect(Collectors.groupingBy(Genotype::getSampleName))
-                .values()
-                .stream()
-                .map(genotypes -> collapseSampleGenotypesWithRawCallAttribute(genotypes, alleleCollapser))
-                .collect(Collectors.toList());
-    }
-
-    private static Genotype collapseSampleGenotypesWithRawCallAttribute(final Collection<Genotype> genotypes,
-                                                                        final Function<Collection<Genotype>, List<Allele>> alleleCollapser) {
-        final GenotypeBuilder builder = new GenotypeBuilder(genotypes.iterator().next().getSampleName());
-        if (genotypes.stream().anyMatch(SVCallRecord::isRawCall)) {
-            builder.attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_TRUE);
-        } else {
-            builder.attribute(GATKSVVCFConstants.RAW_CALL_ATTRIBUTE, GATKSVVCFConstants.RAW_CALL_ATTRIBUTE_FALSE);
-        }
-        if (alleleCollapser != null) {
-            builder.alleles(alleleCollapser.apply(genotypes));
-        }
-        return builder.make();
-    }
-
-    private static List<String> collapseAlgorithms(final Collection<? extends SVCallRecord> records) {
-        return records.stream()
-                .map(SVCallRecord::getAlgorithms)
-                .flatMap(Collection::stream)
-                .distinct()
-                .collect(Collectors.toList());
+    public static boolean isAltGenotype(final Genotype g) {
+        return g.getAlleles().stream().anyMatch(a -> !a.isNoCall() && !a.isReference());
     }
 }

@@ -48,7 +48,7 @@ public class SplitReadEvidenceAggregator extends CachingSVEvidenceAggregator<Spl
     protected SVCallRecordWithEvidence assignEvidence(final SVCallRecordWithEvidence call, final List<SplitReadEvidence> evidence) {
         Utils.nonNull(call);
         final SVCallRecordWithEvidence refinedCall;
-        if (call.isDepthOnlyCall()) {
+        if (call.isDepthOnly()) {
             refinedCall = call;
         } else if (isStart) {
             final List<SplitReadSite> startSitesList = computeSites(evidence);

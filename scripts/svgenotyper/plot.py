@@ -220,7 +220,7 @@ class GATKSVPlottingSuite(object):
         mt_rows = mt.rows()
         svlens = mt_rows.aggregate(hl.agg.group_by(mt_rows.info.SVTYPE, hl.agg.collect(mt_rows.info.SVLEN)))
         # Flatten if necessary
-        svlens = {key: val if len(val) > 0 and not isinstance(val, list) else [x for y in val for x in y] for key,val in svlens.items()}
+        #svlens = {key: val if len(val) > 0 and not isinstance(val, list) else [x for y in val for x in y] for key,val in svlens.items()}
 
         rows = 1
         cols = 1
