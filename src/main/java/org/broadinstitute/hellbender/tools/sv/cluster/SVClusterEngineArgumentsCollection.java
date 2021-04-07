@@ -53,15 +53,15 @@ public class SVClusterEngineArgumentsCollection implements Serializable {
 
     @Argument(fullName = DEPTH_SAMPLE_OVERLAP_FRACTION_NAME,
             doc="Depth/Depth" + BASE_SAMPLE_OVERLAP_FRACTION_DOC, optional=true)
-    public double depthSampleOverlapFraction = 0.5;
+    public double depthSampleOverlapFraction = 0.8;
 
     @Argument(fullName = MIXED_SAMPLE_OVERLAP_FRACTION_NAME,
             doc="Depth/PESR" + BASE_SAMPLE_OVERLAP_FRACTION_DOC, optional=true)
-    public double mixedSampleOverlapFraction = 0.5;
+    public double mixedSampleOverlapFraction = 0.8;
 
     @Argument(fullName = PESR_SAMPLE_OVERLAP_FRACTION_NAME,
             doc="PESR/PESR" + BASE_SAMPLE_OVERLAP_FRACTION_DOC, optional=true)
-    public double pesrSampleOverlapFraction = 0.5;
+    public double pesrSampleOverlapFraction = 0.8;
 
     public final SVClusterEngine.DepthClusteringParameters getDepthParameters() {
         return new SVClusterEngine.DepthClusteringParameters(depthOverlapFraction, depthBreakendWindow, depthSampleOverlapFraction);

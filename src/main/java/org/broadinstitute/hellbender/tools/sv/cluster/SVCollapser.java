@@ -170,13 +170,17 @@ public class SVCollapser {
             return Collections.emptyList();
         }
         final Allele refOrNoCallAllele = refAllele == null ? Allele.NO_CALL : refAllele;
-        if (altAlleles.isEmpty() || type == StructuralVariantType.CNV || type == StructuralVariantType.DUP) {
-            // CNVs and DUPs use CN tag, which is handled in the attribute collapser
+        if (altAlleles.isEmpty()) {
             return Collections.nCopies(inferredPloidy, refOrNoCallAllele);
         }
 
         if (altAlleles.size() > 1) {
-            throw new UnsupportedOperationException("Cannot collapse non-CNV multi-allelic site");
+            if (type == StructuralVariantType.CNV) {
+                // TODO: this erases CNV genotypes if they exist, but we generally rely on the CN field
+                return Collections.nCopies(inferredPloidy, refOrNoCallAllele);
+            } else {
+                throw new UnsupportedOperationException("Non-CNV multi-allelic sites not supported");
+            }
         }
         final Allele altAllele = altAlleles.get(0);
 
@@ -189,7 +193,7 @@ public class SVCollapser {
             final List<Allele> alleles = entry.getKey();
             final int altCount = (int) entry.getKey().stream().filter(a -> !a.isNoCall() && !a.isReference()).count();
             final int variantFrequency = entry.getValue();
-            if (bestGenotypeAlleles == null || (altCount > 0 && variantFrequency > bestVariantFrequency)) {
+            if (altCount > 0 && (bestGenotypeAlleles == null || variantFrequency > bestVariantFrequency)) {
                 bestGenotypeAlleles = alleles;
                 bestVariantFrequency = entry.getValue();
                 bestAltCount = altCount;
@@ -248,7 +252,6 @@ public class SVCollapser {
         Utils.nonNull(items);
         Utils.nonEmpty(items);
         final Map<String, Object> collapsedAttributes = new HashMap<>();
-        collapsedAttributes.put(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY, items.stream().map(SVCallRecord::getId).sorted().collect(Collectors.toList()));
         final Map<String, Set<Object>> attributes = items.stream().map(SVCallRecord::getAttributes)
                 .map(Map::entrySet)
                 .flatMap(Set::stream)
@@ -256,6 +259,7 @@ public class SVCollapser {
         for (final Map.Entry<String, Set<Object>> entry : attributes.entrySet()) {
             collapsedAttributes.put(entry.getKey(), collapseSingleVariantAttribute(entry.getKey(), entry.getValue()));
         }
+        collapsedAttributes.put(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY, items.stream().map(SVCallRecord::getId).sorted().collect(Collectors.toList()));
         return collapsedAttributes;
     }
 

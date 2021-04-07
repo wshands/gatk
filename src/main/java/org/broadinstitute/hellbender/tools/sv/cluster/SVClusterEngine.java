@@ -1,15 +1,15 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.Utils;
 
-import java.util.Collection;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.*;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -66,18 +66,17 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
                 || clusterTogetherWithParams(a, b, mixedParams);
     }
 
-    protected Set<String> getCopyNumberCarrierSamples(final SVCallRecord record) {
+    protected Set<Genotype> getCopyNumberCarrierGenotypes(final SVCallRecord record) {
         return record.getGenotypes().stream()
                 .filter(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT) && ((int) g.getExtendedAttribute(COPY_NUMBER_FORMAT)) != g.getPloidy())
-                .map(Genotype::getSampleName)
                 .collect(Collectors.toSet());
     }
 
     // TODO match copy numbers for multi-allelic variants
     protected boolean copyNumberSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
         if (hasDefinedCopyNumbers(a) && hasDefinedCopyNumbers(b)) {
-            final Set<String> carrierSamplesA = getCopyNumberCarrierSamples(a);
-            final Set<String> carrierSamplesB = getCopyNumberCarrierSamples(b);
+            final Set<String> carrierSamplesA = getCopyNumberCarrierGenotypes(a).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
+            final Set<String> carrierSamplesB = getCopyNumberCarrierGenotypes(b).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
             return hasSampleOverlap(carrierSamplesA, carrierSamplesB, minSampleOverlap);
         } else {
             return genotypeSampleOverlap(a, b, minSampleOverlap);
@@ -98,16 +97,31 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         return sampleOverlap >= minSampleOverlap;
     }
 
-    protected Set<String> getGenotypeCarrierSamples(final SVCallRecord record) {
+    protected Set<Genotype> getGenotypedCarrierGenotypes(final SVCallRecord record, final Allele allele) {
         return record.getGenotypes().stream()
-                .filter(g -> g.isAvailable() && !g.isNoCall() && !g.isHomVar())
-                .map(Genotype::getSampleName)
+                .filter(g -> g.getAlleles().stream().anyMatch(a -> a.equals(allele)))
                 .collect(Collectors.toSet());
     }
 
     protected boolean genotypeSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
-        final Set<String> carrierSamplesA = getGenotypeCarrierSamples(a);
-        final Set<String> carrierSamplesB = getGenotypeCarrierSamples(b);
+        final List<Allele> altAllelesA = a.getAlleles().stream().filter(allele -> !allele.isNoCall() && !allele.isReference()).collect(Collectors.toList());
+        final List<Allele> altAllelesB = b.getAlleles().stream().filter(allele -> !allele.isNoCall() && !allele.isReference()).collect(Collectors.toList());
+        Utils.validate(altAllelesA.size() <= 1 && altAllelesB.size() <= 1, "Genotype-based sample overlap not supported for multi-allelic sites");
+        final Set<String> carrierSamplesA;
+        final Set<String> carrierSamplesB;
+        if (altAllelesA.isEmpty()) {
+            carrierSamplesA = Collections.emptySet();
+        } else {
+            carrierSamplesA = getGenotypedCarrierGenotypes(a, altAllelesA.get(0)).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
+        }
+        if (altAllelesB.isEmpty()) {
+            carrierSamplesB = Collections.emptySet();
+        } else {
+            carrierSamplesB = getGenotypedCarrierGenotypes(b, altAllelesB.get(0)).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
+        }
+        if (a.getId().equals("test_small_depth_DEL_chr1_82") || b.getId().equals("test_small_depth_DEL_chr1_82")) {
+            int x = 0;
+        }
         return hasSampleOverlap(carrierSamplesA, carrierSamplesB, minSampleOverlap);
     }
 

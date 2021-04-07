@@ -7,6 +7,7 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants.COPY_NUMBER_FORMAT;
 
@@ -57,8 +58,8 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
         }
 
         // In the single-sample case, match copy number strictly if we're looking at the same sample
-        final Set<String> carriersA = getCopyNumberCarrierSamples(a);
-        final Set<String> carriersB = getCopyNumberCarrierSamples(b);
+        final Set<String> carriersA = getCopyNumberCarrierGenotypes(a).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
+        final Set<String> carriersB = getCopyNumberCarrierGenotypes(b).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
         if (carriersA.size() == 1 && carriersB.size() == 1) {
             final String sampleA = carriersA.iterator().next();
             final String sampleB = carriersB.iterator().next();
