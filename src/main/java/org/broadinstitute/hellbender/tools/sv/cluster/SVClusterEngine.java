@@ -23,6 +23,8 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     protected ClusteringParameters mixedParams;
     protected ClusteringParameters evidenceParams;
 
+    public static final int INSERTION_ASSUMED_LENGTH_FOR_OVERLAP = 50;
+
     protected static final ClusteringParameters DEFAULT_DEPTH_ONLY_PARAMS =
             new DepthClusteringParameters(0.8, 0, 0.5);
     protected static final ClusteringParameters DEFAULT_MIXED_PARAMS =
@@ -119,9 +121,6 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         } else {
             carrierSamplesB = getGenotypedCarrierGenotypes(b, altAllelesB.get(0)).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
         }
-        if (a.getId().equals("test_small_depth_DEL_chr1_82") || b.getId().equals("test_small_depth_DEL_chr1_82")) {
-            int x = 0;
-        }
         return hasSampleOverlap(carrierSamplesA, carrierSamplesB, minSampleOverlap);
     }
 
@@ -151,15 +150,8 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         // Reciprocal overlap
         final boolean isOverlap;
         if (a.isIntrachromosomal()) {
-            final SimpleInterval intervalA;
-            final SimpleInterval intervalB;
-            if (a.getType() == StructuralVariantType.INS) {
-                intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionA() + a.getLength() - 1);
-                intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionA() + a.getLength() - 1);
-            } else {
-                intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionB());
-                intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionB());
-            }
+            final SimpleInterval intervalA = new SimpleInterval(a.getContigA(), a.getPositionA(), a.getPositionA() + getLengthForOverlap(a) - 1);
+            final SimpleInterval intervalB = new SimpleInterval(b.getContigA(), b.getPositionA(), b.getPositionA() + getLengthForOverlap(b) - 1);
             isOverlap = IntervalUtils.isReciprocalOverlap(intervalA, intervalB, params.getReciprocalOverlap());
         } else {
             isOverlap = true;
@@ -178,6 +170,15 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         }
     }
 
+    private int getLengthForOverlap(final SVCallRecord record) {
+        Utils.validate(record.isIntrachromosomal(), "Record even must be intra-chromosomal");
+        if (record.getType() == StructuralVariantType.INS) {
+            return record.getLength() < 1 ? INSERTION_ASSUMED_LENGTH_FOR_OVERLAP : record.getLength();
+        } else {
+            return record.getLength();
+        }
+    }
+
     @Override
     protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
         final String contig = call.getContigA();
@@ -187,7 +188,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         final int maxPositionByOverlap;
         if (call.isIntrachromosomal()) {
             final double overlap = Math.min(isDepthOnly ? depthOnlyParams.getReciprocalOverlap() : evidenceParams.getReciprocalOverlap(), mixedParams.getReciprocalOverlap());
-            final int maxPosition = (int) (call.getPositionA() + (1.0 - overlap) * (call.getPositionB() - call.getPositionA()));
+            final int maxPosition = (int) (call.getPositionA() + (1.0 - overlap) * getLengthForOverlap(call));
             maxPositionByOverlap = Math.min(maxPosition, contigLength);
         } else {
             maxPositionByOverlap = call.getPositionA();
