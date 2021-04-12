@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import com.google.common.collect.Lists;
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.StructuralVariantType;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
@@ -156,10 +157,12 @@ public class SVClusterEngineTest {
         final SVCallRecord call1 = new SVCallRecord("call1", "chr1", start1, true,
                 "chr1", end1, false,
                 StructuralVariantType.DEL, end1 - start1 + 1, Lists.newArrayList("pesr"),
+                Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL, Allele.SV_SIMPLE_DUP),
                 SVTestUtils.threeGenotypes, Collections.emptyMap());
         final SVCallRecord call2 = new SVCallRecord("call2", "chr1", start2, true,
                 "chr1", end2, false,
                 StructuralVariantType.DEL, end2 - start2 + 1, Lists.newArrayList("depth"),
+                Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL, Allele.SV_SIMPLE_DUP),
                 SVTestUtils.threeGenotypes, Collections.emptyMap());
         Assert.assertEquals(engine.clusterTogether(call1, call2), result);
     }
@@ -170,12 +173,12 @@ public class SVClusterEngineTest {
             final SVCallRecord call1 = new SVCallRecord("call1", "chr1", 1000, true,
                     "chr1", 2001, false, type1,
                     1000, Lists.newArrayList("depth"),
-                    Collections.emptyList(), Collections.emptyMap());
+                    Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
             for (final StructuralVariantType type2 : StructuralVariantType.values()) {
                 final SVCallRecord call2 = new SVCallRecord("call2", "chr1", 1000, true,
                         "chr1", 2001, false, type2,
                         1000, Lists.newArrayList("depth"),
-                        Collections.emptyList(), Collections.emptyMap());
+                        Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
                 // Should only cluster together if same type
                 Assert.assertEquals(engine.clusterTogether(call1, call2), type1 == type2);
             }
@@ -190,13 +193,13 @@ public class SVClusterEngineTest {
                 final SVCallRecord call1 = new SVCallRecord("call1", "chr1", 1000, strand1A,
                         "chr1", 2001, strand1B, StructuralVariantType.BND,
                         1000, Lists.newArrayList("depth"),
-                        Collections.emptyList(), Collections.emptyMap());
+                        Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
                 for (final Boolean strand2A : bools) {
                     for (final Boolean strand2B : bools) {
                         final SVCallRecord call2 = new SVCallRecord("call2", "chr1", 1000, strand2A,
                                 "chr1", 2001, strand2B, StructuralVariantType.BND,
                                 1000, Lists.newArrayList("depth"),
-                                Collections.emptyList(), Collections.emptyMap());
+                                Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
                         // Should only cluster if strands match
                         Assert.assertEquals(engine.clusterTogether(call1, call2), strand1A == strand2A && strand1B == strand2B);
                     }
@@ -213,13 +216,13 @@ public class SVClusterEngineTest {
                 final SVCallRecord call1 = new SVCallRecord("call1", contig1A, 1000, true,
                         contig1B, 2001, false, StructuralVariantType.BND,
                         1000, Lists.newArrayList("depth"),
-                        Collections.emptyList(), Collections.emptyMap());
+                        Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
                 for (final String contig2A : contigs) {
                     for (final String contig2B : contigs) {
                         final SVCallRecord call2 = new SVCallRecord("call2", contig2A, 1000, true,
                                 contig2B, 2001, false, StructuralVariantType.BND,
                                 1000, Lists.newArrayList("depth"),
-                                Collections.emptyList(), Collections.emptyMap());
+                                Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
                         // Should only cluster if contigs match
                         Assert.assertEquals(engine.clusterTogether(call1, call2), contig1A.equals(contig2A) && contig1B.equals(contig2B));
                     }
@@ -238,11 +241,11 @@ public class SVClusterEngineTest {
         for (final List<String> algorithms1 : algorithmsList) {
             final SVCallRecord call1 = new SVCallRecord("call1", "chr1", 1000, true,
                     "chr1", 2001, false, StructuralVariantType.DEL,
-                    1000, algorithms1, Collections.emptyList(), Collections.emptyMap());
+                    1000, algorithms1, Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
             for (final List<String> algorithms2 : algorithmsList) {
                 final SVCallRecord call2 = new SVCallRecord("call2", "chr1", 1000, true,
                         "chr1", 2001, false, StructuralVariantType.DEL,
-                        1000, algorithms2, Collections.emptyList(), Collections.emptyMap());
+                        1000, algorithms2, Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
                 // All combinations should cluster
                 Assert.assertTrue(engine.clusterTogether(call1, call2));
             }
@@ -254,13 +257,13 @@ public class SVClusterEngineTest {
         final SVClusterEngine<SVCallRecord> testEngine = SVTestUtils.getNewDefaultSingleLinkageEngine();
         final SVCallRecord call1 = new SVCallRecord("call1", "chr1", 1000, true,
                 "chr1", 2001, false, StructuralVariantType.DEL,
-                1000, Collections.singletonList("depth"), Collections.emptyList(), Collections.emptyMap());
+                1000, Collections.singletonList("depth"), Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
         final SVCallRecord call2 = new SVCallRecord("call2", "chr1", 1100, true,
                 "chr1", 2101, false, StructuralVariantType.DEL,
-                1000, Collections.singletonList("depth"), Collections.emptyList(), Collections.emptyMap());
+                1000, Collections.singletonList("depth"), Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
         // Cluster with default parameters
         Assert.assertTrue(testEngine.clusterTogether(call1, call2));
-        final SVClusterEngine.ClusteringParameters exactMatchParameters = new SVClusterEngine.DepthClusteringParameters(1.0, 0);
+        final SVClusterEngine.ClusteringParameters exactMatchParameters = new SVClusterEngine.DepthClusteringParameters(1.0, 0, 1.0);
         testEngine.setDepthOnlyParams(exactMatchParameters);
         // Do not cluster requiring exact overlap
         Assert.assertFalse(testEngine.clusterTogether(call1, call2));
@@ -295,13 +298,16 @@ public class SVClusterEngineTest {
         }
         final SVCallRecord call1 = new SVCallRecord("call1", "chr1", positionA1, true,
                 "chr1", positionB1, false, StructuralVariantType.DEL,
-                positionB1 - positionA1 + 1, Collections.singletonList("depth"), Collections.emptyList(), Collections.emptyMap());
+                positionB1 - positionA1 + 1, Collections.singletonList("depth"),
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
         final SVCallRecord call2 = new SVCallRecord("call1", "chr1", positionA2, true,
                 "chr1", positionB2, false, StructuralVariantType.DEL,
-                positionB2 - positionA2 + 1, Collections.singletonList("depth"), Collections.emptyList(), Collections.emptyMap());
+                positionB2 - positionA2 + 1, Collections.singletonList("depth"),
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
         final SVCallRecord call3 = new SVCallRecord("call1", "chr1", positionA3, true,
                 "chr1", positionB3, false, StructuralVariantType.DEL,
-                positionB3 - positionA3 + 1, Collections.singletonList("depth"), Collections.emptyList(), Collections.emptyMap());
+                positionB3 - positionA3 + 1, Collections.singletonList("depth"),
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyMap());
         engine.add(call1);
         engine.add(call2);
         engine.add(call3);
@@ -320,8 +326,8 @@ public class SVClusterEngineTest {
         final List<SVCallRecord> output1 = temp1.getOutput(); //flushes all clusters
         Assert.assertTrue(temp1.isEmpty());
         Assert.assertEquals(output1.size(), 2);
-        SVTestUtils.assertEquals(SVTestUtils.call1, output1.get(0));
-        SVTestUtils.assertEquals(SVTestUtils.call3, output1.get(1));
+        SVTestUtils.assertEqualsExceptMembership(SVTestUtils.call1, output1.get(0));
+        SVTestUtils.assertEqualsExceptMembership(SVTestUtils.call3, output1.get(1));
 
         final SVClusterEngine<SVCallRecord> temp2 = SVTestUtils.getNewDefaultSingleLinkageEngine();
         temp2.add(SVTestUtils.call1);
@@ -333,7 +339,7 @@ public class SVClusterEngineTest {
         //median of two items ends up being the second item here
         Assert.assertEquals(output2.get(0).getPositionA(), SVTestUtils.overlapsCall1.getPositionA());
         Assert.assertEquals(output2.get(0).getPositionB(), SVTestUtils.overlapsCall1.getPositionB());
-        SVTestUtils.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
+        SVTestUtils.assertEqualsExceptMembership(output2.get(1), SVTestUtils.call4_chr10);
 
         //checking insensitivity to sample set overlap
         final SVClusterEngine<SVCallRecord> temp3 = SVTestUtils.getNewDefaultSingleLinkageEngine();

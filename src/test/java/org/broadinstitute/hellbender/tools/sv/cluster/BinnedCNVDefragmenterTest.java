@@ -20,10 +20,10 @@ public class BinnedCNVDefragmenterTest {
     @Test
     public void testCollapser() {
         final SVCallRecord call1FlattenedDefault = defaultDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
-        SVTestUtils.assertEquals(SVTestUtils.call1, call1FlattenedDefault);
+        SVTestUtils.assertEqualsExceptMembership(SVTestUtils.call1, call1FlattenedDefault);
 
         final SVCallRecord call1FlattenedSingleSample = singleSampleDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
-        SVTestUtils.assertEquals(call1FlattenedSingleSample, call1FlattenedDefault);
+        SVTestUtils.assertEqualsExceptMembership(call1FlattenedSingleSample, call1FlattenedDefault);
 
         final SVCallRecord sameBoundsThreeSamples = singleSampleDefragmenter.getCollapser().apply(Arrays.asList(SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch));
         Assert.assertEquals(sameBoundsThreeSamples.getPositionA(), SVTestUtils.call1.getPositionA());
@@ -85,8 +85,8 @@ public class BinnedCNVDefragmenterTest {
         temp1.add(SVTestUtils.call3);
         final List<SVCallRecord> output1 = temp1.getOutput(); //flushes all clusters
         Assert.assertEquals(output1.size(), 2);
-        SVTestUtils.assertEquals(SVTestUtils.call1, output1.get(0));
-        SVTestUtils.assertEquals(SVTestUtils.call3, output1.get(1));
+        SVTestUtils.assertEqualsExceptMembership(SVTestUtils.call1, output1.get(0));
+        SVTestUtils.assertEqualsExceptMembership(SVTestUtils.call3, output1.get(1));
 
         final CNVDefragmenter temp2 = new BinnedCNVDefragmenter(SVTestUtils.dict, paddingFraction, 0.8, SVTestUtils.targetIntervals);
         temp2.add(SVTestUtils.call1);
@@ -97,7 +97,7 @@ public class BinnedCNVDefragmenterTest {
         Assert.assertEquals(output2.size(), 2);
         Assert.assertEquals(output2.get(0).getPositionA(), SVTestUtils.call1.getPositionA());
         Assert.assertEquals(output2.get(0).getPositionB(), SVTestUtils.call2.getPositionB());
-        SVTestUtils.assertEquals(output2.get(1), SVTestUtils.call4_chr10);
+        SVTestUtils.assertEqualsExceptMembership(output2.get(1), SVTestUtils.call4_chr10);
 
         //cohort case, checking sample set overlap
         final CNVDefragmenter temp3 = new CNVDefragmenter(SVTestUtils.dict);

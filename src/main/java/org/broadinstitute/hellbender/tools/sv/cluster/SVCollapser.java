@@ -67,7 +67,7 @@ public class SVCollapser {
             alleles.add(refAllele);
         }
         alleles.addAll(altAlleles);
-        final List<Genotype> genotypes = collapseAllGenotypes(items, type, refAllele, altAlleles);
+        final List<Genotype> genotypes = collapseAllGenotypes(items, type, refAllele);
 
         final Map.Entry<Integer, Integer> coordinates = collapseInterval(mostPreciseCalls);
         final int start = coordinates.getKey();
@@ -108,7 +108,7 @@ public class SVCollapser {
     protected List<Allele> collapseAltAlleles(final Collection<SVCallRecord> items, final StructuralVariantType type) {
         final List<Allele> altAlleles = items.stream().map(SVCallRecord::getAlleles)
                 .flatMap(List::stream)
-                .filter(a -> !a.isNoCall() && !a.isReference())
+                .filter(a -> a != null && !a.isNoCall() && !a.isReference())
                 .distinct()
                 .collect(Collectors.toList());
         if (altAlleles.isEmpty()) {
@@ -147,22 +147,21 @@ public class SVCollapser {
 
     private List<Genotype> collapseAllGenotypes(final Collection<SVCallRecord> items,
                                                 final StructuralVariantType type,
-                                                final Allele refAllele,
-                                                final List<Allele> altAlleles) {
+                                                final Allele refAllele) {
         return items.stream()
                 .map(SVCallRecord::getGenotypes)
                 .flatMap(GenotypesContext::stream)
                 .collect(Collectors.groupingBy(Genotype::getSampleName))
                 .values()
                 .stream()
-                .map(g -> collapseSampleGenotypes(g, type, refAllele, altAlleles))
+                .map(g -> collapseSampleGenotypes(g, type, refAllele))
                 .collect(Collectors.toList());
     }
 
     private List<Allele> collapseSampleAlleles(final Collection<Genotype> genotypes,
                                                final StructuralVariantType type,
                                                final Allele refAllele,
-                                               final List<Allele> altAlleles) {
+                                               final List<Allele> sampleAltAlleles) {
         Utils.nonNull(genotypes);
         Utils.nonEmpty(genotypes);
         final int inferredPloidy = collapsePloidy(genotypes);
@@ -170,19 +169,18 @@ public class SVCollapser {
             return Collections.emptyList();
         }
         final Allele refOrNoCallAllele = refAllele == null ? Allele.NO_CALL : refAllele;
-        if (altAlleles.isEmpty()) {
+        if (sampleAltAlleles.isEmpty()) {
             return Collections.nCopies(inferredPloidy, refOrNoCallAllele);
         }
 
-        if (altAlleles.size() > 1) {
+        if (sampleAltAlleles.size() > 1) {
             if (type == StructuralVariantType.CNV) {
-                // TODO: this erases CNV genotypes if they exist, but we generally rely on the CN field
-                return Collections.nCopies(inferredPloidy, refOrNoCallAllele);
+                throw new UnsupportedOperationException("Collapsing CNV records with conflicting genotype alleles is not supported");
             } else {
                 throw new UnsupportedOperationException("Non-CNV multi-allelic sites not supported");
             }
         }
-        final Allele altAllele = altAlleles.get(0);
+        final Allele altAllele = sampleAltAlleles.get(0);
 
         final Map<List<Allele>, Integer> genotypeCounts = genotypes.stream().map(Genotype::getAlleles)
                 .collect(Collectors.groupingBy(l -> l, Collectors.collectingAndThen(Collectors.toList(), List::size)));
@@ -213,10 +211,14 @@ public class SVCollapser {
 
     protected Genotype collapseSampleGenotypes(final Collection<Genotype> genotypes,
                                                final StructuralVariantType type,
-                                               final Allele refAllele,
-                                               final List<Allele> altAlleles) {
+                                               final Allele refAllele) {
         final GenotypeBuilder builder = new GenotypeBuilder(genotypes.iterator().next());
-        builder.alleles(collapseSampleAlleles(genotypes, type, refAllele, altAlleles));
+        final List<Allele> sampleAltAlleles = genotypes.stream().map(Genotype::getAlleles)
+                .flatMap(List::stream)
+                .filter(a -> a != null && !a.isNoCall() && !a.isReference())
+                .distinct()
+                .collect(Collectors.toList());
+        builder.alleles(collapseSampleAlleles(genotypes, type, refAllele, sampleAltAlleles));
         builder.noAttributes();
         builder.attributes(collapseGenotypeAttributes(genotypes, type));
         return builder.make();
@@ -304,7 +306,7 @@ public class SVCollapser {
                 return lengths[midIndex];
             }
         } else {
-            return newEnd - newStart;
+            return newEnd - newStart + 1;
         }
     }
 
