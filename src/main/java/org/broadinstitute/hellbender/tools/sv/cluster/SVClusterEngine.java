@@ -8,6 +8,7 @@ import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.*;
 import java.util.function.BiPredicate;
@@ -70,7 +71,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
     protected Set<Genotype> getCopyNumberCarrierGenotypes(final SVCallRecord record) {
         return record.getGenotypes().stream()
-                .filter(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT) && ((int) g.getExtendedAttribute(COPY_NUMBER_FORMAT)) != g.getPloidy())
+                .filter(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT) && VariantContextGetters.getAttributeAsInt(g, COPY_NUMBER_FORMAT, 0) != g.getPloidy())
                 .collect(Collectors.toSet());
     }
 
@@ -175,7 +176,8 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         if (record.getType() == StructuralVariantType.INS) {
             return record.getLength() < 1 ? INSERTION_ASSUMED_LENGTH_FOR_OVERLAP : record.getLength();
         } else {
-            return record.getLength();
+            // TODO lengths less than 1 shouldn't be valid
+            return Math.max(record.getLength(), 1);
         }
     }
 

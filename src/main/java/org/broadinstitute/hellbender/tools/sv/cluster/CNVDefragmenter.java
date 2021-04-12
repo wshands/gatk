@@ -5,6 +5,7 @@ import htsjdk.variant.variantcontext.Genotype;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -67,9 +68,9 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
                 final Genotype genotypeA = a.getGenotypes().get(sampleA);
                 final Genotype genotypeB = a.getGenotypes().get(sampleB);
                 if (genotypeA.hasExtendedAttribute(COPY_NUMBER_FORMAT) && genotypeB.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
-                    final Object copyNumberA = genotypeA.getExtendedAttribute(COPY_NUMBER_FORMAT);
-                    final Object copyNumberB = genotypeB.getExtendedAttribute(COPY_NUMBER_FORMAT);
-                    if (!copyNumberA.equals(copyNumberB)) {
+                    final int copyNumberA = VariantContextGetters.getAttributeAsInt(genotypeA, COPY_NUMBER_FORMAT, 0);
+                    final int copyNumberB = VariantContextGetters.getAttributeAsInt(genotypeB, COPY_NUMBER_FORMAT, 0);
+                    if (copyNumberA != copyNumberB) {
                         return false;
                     }
                 } else {
