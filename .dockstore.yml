@@ -57,6 +57,7 @@ workflows:
        branches:
          - master
          - ah_var_store
+         - mmt_ngs_cohort_extract_wdl
    - name: funcotator
      subclass: WDL
      primaryDescriptorPath: /scripts/funcotator_wdl/funcotator.wdl
@@ -96,6 +97,7 @@ workflows:
        branches:
          - master
          - ah_var_store
+         - mmt_ngs_cohort_extract_wdl
    - name: NgsCohortExtract
      subclass: WDL
      primaryDescriptorPath: /scripts/variantstore/wdl/NgsCohortExtract.wdl
@@ -105,6 +107,7 @@ workflows:
        branches:
          - master
          - ah_var_store
+         - mmt_ngs_cohort_extract_wdl
    - name: run_happy
      subclass: WDL
      primaryDescriptorPath: /scripts/cnn_variant_wdl/run_happy.wdl
