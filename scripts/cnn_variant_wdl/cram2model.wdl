@@ -4,6 +4,7 @@ import "cnn_variant_common_tasks.wdl" as CNNTasks
 
 workflow Cram2TrainedModel {
     File input_cram
+    File input_cram_index
     File reference_fasta
     File reference_dict
     File reference_fasta_index
@@ -29,17 +30,6 @@ workflow Cram2TrainedModel {
     Int additional_disk = select_first([increase_disk_size, 20])
     Float ref_size = size(reference_fasta, "GB") + size(reference_fasta_index, "GB") + size(reference_dict, "GB")
 
-    call CNNTasks.CramToBam {
-        input:
-          reference_fasta = reference_fasta,
-          reference_dict = reference_dict,
-          reference_fasta_index = reference_fasta_index,
-          cram_file = input_cram,
-          output_prefix = output_prefix,
-          disk_space_gb = disk_space_gb,
-          preemptible_attempts = preemptible_attempts
-    }
-
     call CNNTasks.SplitIntervals {
         input:
             scatter_count = scatter_count,
@@ -52,13 +42,13 @@ workflow Cram2TrainedModel {
             preemptible_attempts = preemptible_attempts
     }
 
-    Float bam_size = size(CramToBam.output_bam, "GB")
+    Float bam_size = size(input_cram, "GB")
 
     scatter (calling_interval in SplitIntervals.interval_files) {
         call CNNTasks.RunHC4 {
             input:
-                input_bam = CramToBam.output_bam,
-                input_bam_index = CramToBam.output_bam_index,
+                input_bam = input_cram,
+                input_bam_index = input_cram_index,
                 reference_fasta = reference_fasta,
                 reference_dict = reference_dict,
                 reference_fasta_index = reference_fasta_index,
