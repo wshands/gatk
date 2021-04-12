@@ -87,7 +87,7 @@ workflows:
      filters:
        branches:
          - master
-   - name: ngs_filter_extract
+   - name: NgsFilterExtract
      subclass: WDL
      primaryDescriptorPath: /scripts/variantstore/wdl/NgsFilterExtract.wdl
      testParameterFiles:
@@ -96,7 +96,7 @@ workflows:
        branches:
          - master
          - ah_var_store
-   - name: ngs_cohort_extract
+   - name: NgsCohortExtract
      subclass: WDL
      primaryDescriptorPath: /scripts/variantstore/wdl/NgsCohortExtract.wdl
      testParameterFiles:
