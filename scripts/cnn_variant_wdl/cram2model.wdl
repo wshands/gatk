@@ -17,6 +17,7 @@ workflow Cram2TrainedModel {
     File calling_intervals
     Int scatter_count
     String extra_args
+    File? gatk_override_hc
 
     # Runtime parameters
     File? gatk_override
@@ -55,7 +56,7 @@ workflow Cram2TrainedModel {
                 output_prefix = output_prefix,
                 interval_list = calling_interval,
                 gatk_docker = gatk_docker,
-                gatk_override = gatk_override,
+                gatk_override = gatk_override_hc,
                 preemptible_attempts = preemptible_attempts,
                 extra_args = extra_args,
                 disk_space_gb = round(bam_size + ref_size + additional_disk)                                 
