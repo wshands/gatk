@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.sv;
 
+import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
@@ -13,6 +14,7 @@ import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -415,7 +417,10 @@ public final class SVCallRecordUtils {
         }
         final List<Allele> alleles = variant.getAlternateAlleles();
         Utils.validate(!alleles.isEmpty(), "Variant missing alt allele");
-        Utils.validate(alleles.size() == 1, "Multiallelic variants not supported");
+        if (alleles.size() == 2 && alleles.contains(GATKSVVCFConstants.DEL_ALLELE) && alleles.contains(GATKSVVCFConstants.DUP_ALLELE)) {
+            return StructuralVariantType.CNV;
+        }
+        Utils.validate(alleles.size() == 1, "Non-CNV multiallelic variants not supported");
         final Allele allele = alleles.get(0);
         Utils.validate(allele.isSymbolic(), "Expected symbolic alt allele");
         return StructuralVariantType.valueOf(allele.getDisplayString().replace("<", "").replace(">", ""));
@@ -429,53 +434,60 @@ public final class SVCallRecordUtils {
      */
     public static SVCallRecord createDepthOnlyFromGCNVWithOriginalGenotypes(final VariantContext variant, final double minQuality) {
         Utils.nonNull(variant);
-
         if (variant.getGenotypes().size() == 1) {
             //only cluster good variants
             final Genotype g = variant.getGenotypes().get(0);
             if (g.isHomRef() || (g.isNoCall() && !g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT))
-                    || Integer.valueOf((String) g.getExtendedAttribute(GermlineCNVSegmentVariantComposer.QS)) < minQuality
+                    || VariantContextGetters.getAttributeAsInt(g, GermlineCNVSegmentVariantComposer.QS, 0) < minQuality
                     || isNullCall(g)) {
                 return null;
             }
         }
 
-        final List<String> algorithms = Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM);
+        final SVCallRecord baseRecord;
+        if (variant.getReference().equals(Allele.REF_N)) { //old segments VCFs had ref Ns and genotypes that didn't reflect ploidy accurately
+            baseRecord = createVariantFromLegacyGCNV(variant);
+        } else {
+            baseRecord = create(variant, true);
+        }
+        final List<Genotype> nonRefGenotypes = baseRecord.getGenotypes().stream()
+                .filter(g -> !(g.isHomRef() || (g.isNoCall() && !g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT))))
+                .collect(Collectors.toList());
+        return copyCallWithNewGenotypes(baseRecord, GenotypesContext.copy(nonRefGenotypes));
+    }
 
+    private static SVCallRecord createVariantFromLegacyGCNV(final VariantContext variant) {
         boolean isDel = false;
         for (final Genotype g : variant.getGenotypes()) {
-            if (g.isHomRef() || (g.isNoCall() && !g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT))) {
-                continue;
-            }
-            if (variant.getReference().equals(Allele.REF_N)) {  //old segments VCFs had ref Ns and genotypes that didn't reflect ploidy accurately
-                if (g.getAlleles().stream().anyMatch(a -> a.equals(GATKSVVCFConstants.DEL_ALLELE))) {
-                    isDel = true;
-                } else if (g.getAlleles().stream().anyMatch(a -> a.equals(GATKSVVCFConstants.DUP_ALLELE))) {
-                    isDel = false;
-                } else if (g.getAlleles().stream().allMatch(a -> a.isNoCall())) {
-                    if (g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)) {
-                        isDel = (Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()) < g.getPloidy());
-                    } else {
-                        throw new IllegalStateException("Genotype for sample " + g.getSampleName() + " at " + variant.getContig() + ":" + variant.getStart() + " had no CN attribute and will be dropped.");
-                    }
+            if (g.getAlleles().stream().anyMatch(a -> a.equals(GATKSVVCFConstants.DEL_ALLELE))) {
+                isDel = true;
+            } else if (g.getAlleles().stream().anyMatch(a -> a.equals(GATKSVVCFConstants.DUP_ALLELE))) {
+                isDel = false;
+            } else if (g.getAlleles().stream().allMatch(a -> a.isNoCall())) {
+                if (g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)) {
+                    isDel = (Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()) < g.getPloidy());
                 } else {
-                    throw new IllegalArgumentException("Segment VCF schema expects <DEL>, <DUP>, and no-call allele, but found "
-                            + g.getAllele(0) + " at " + variant.getContig() + ":" + variant.getStart());
+                    throw new IllegalStateException("Genotype for sample " + g.getSampleName() + " at " + variant.getContig() + ":" + variant.getStart() + " had no CN attribute and will be dropped.");
                 }
-            } else {  //for spec-compliant VCFs (i.e. with non-N ref allele) we can just trust the ALT
-                isDel = (variant.getAlternateAlleles().contains(GATKSVVCFConstants.DEL_ALLELE)
-                        && !variant.getAlternateAlleles().contains(GATKSVVCFConstants.DUP_ALLELE));
+            } else {
+                throw new IllegalArgumentException("Segment VCF schema expects <DEL>, <DUP>, and no-call allele, but found "
+                        + g.getAllele(0) + " at " + variant.getContig() + ":" + variant.getStart());
             }
         }
-
         final boolean startStrand = isDel ? true : false;
         final boolean endStrand = isDel ? false : true;
         final StructuralVariantType type;
+        final List<Allele> alleles;
         if (!variant.getReference().equals(Allele.REF_N) && variant.getAlternateAlleles().contains(GATKSVVCFConstants.DUP_ALLELE)
                 && variant.getAlternateAlleles().contains(GATKSVVCFConstants.DEL_ALLELE)) {
             type = StructuralVariantType.CNV;
+            alleles = variant.getAlleles();
+        } else if (isDel) {
+            type = StructuralVariantType.DEL;
+            alleles = Lists.newArrayList(variant.getReference(), GATKSVVCFConstants.DEL_ALLELE);
         } else {
-            type = isDel ? StructuralVariantType.DEL : StructuralVariantType.DUP;
+            type = StructuralVariantType.DUP;
+            alleles = Lists.newArrayList(variant.getReference(), GATKSVVCFConstants.DUP_ALLELE);
         }
 
         final String id = variant.getID();
@@ -483,7 +495,8 @@ public final class SVCallRecordUtils {
         final int start = variant.getStart();
         final int end = variant.getEnd();
         final int length = end - start;
-        return new SVCallRecord(id, startContig, start, startStrand, startContig, end, endStrand, type, length, algorithms, variant.getAlleles(), variant.getGenotypes(), variant.getAttributes());
+        final List<String> algorithms = Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM);
+        return new SVCallRecord(id, startContig, start, startStrand, startContig, end, endStrand, type, length, algorithms, alleles, variant.getGenotypes(), variant.getAttributes());
     }
 
     /**
@@ -493,7 +506,7 @@ public final class SVCallRecordUtils {
      */
     private static boolean isNullCall(final Genotype g) {
         return g.hasExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT)
-                && Integer.parseInt(g.getExtendedAttribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT).toString()) == 0
+                && VariantContextGetters.getAttributeAsInt(g, GATKSVVCFConstants.COPY_NUMBER_FORMAT, 0) == 0
                 && g.isNoCall();
 
     }

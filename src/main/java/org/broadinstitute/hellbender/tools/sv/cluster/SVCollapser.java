@@ -120,7 +120,7 @@ public class SVCollapser {
 
             // CNVs
             if (altAlleles.size() == 2 && altAlleles.contains(Allele.SV_SIMPLE_DEL) && altAlleles.contains(Allele.SV_SIMPLE_DUP)) {
-                if (type == StructuralVariantType.CNV) {
+                if (type == StructuralVariantType.CNV || type == null) {
                     return altAlleles;
                 } else {
                     throw new IllegalArgumentException("Encountered multi-allelic with DEL/DUP but not of CNV SVTYPE");

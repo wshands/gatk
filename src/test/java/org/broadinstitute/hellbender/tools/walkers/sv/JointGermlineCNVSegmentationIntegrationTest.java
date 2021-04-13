@@ -158,7 +158,9 @@ public class JointGermlineCNVSegmentationIntegrationTest extends CommandLineProg
                 .addVCF(getToolTestDataDir() + "NA20533.fragmented.segments.vcf.gz")
                 .add(JointGermlineCNVSegmentation.MODEL_CALL_INTERVALS_LONG_NAME, getToolTestDataDir() + "intervals.chr13.interval_list")
                 .addInterval("13:52951204-115064572")
-                .add(StandardArgumentDefinitions.PEDIGREE_FILE_LONG_NAME, getToolTestDataDir() + "NA20533.ped");  //this sample actually appears Turner (X0), but doesn't matter for chr13
+                .add(StandardArgumentDefinitions.PEDIGREE_FILE_LONG_NAME, getToolTestDataDir() + "NA20533.ped")  //this sample actually appears Turner (X0), but doesn't matter for chr13 sample actually appears Turner (X0), but doesn't matter for chr13
+                .add(JointGermlineCNVSegmentation.MIN_SAMPLE_NUM_OVERLAP_LONG_NAME, 0.8)
+                .add(JointGermlineCNVSegmentation.DEFRAGMENTATION_PADDING_LONG_NAME, 0.5);
 
         runCommandLine(args, JointGermlineCNVSegmentation.class.getSimpleName());
 
@@ -174,7 +176,9 @@ public class JointGermlineCNVSegmentationIntegrationTest extends CommandLineProg
                 .addVCF(getToolTestDataDir() + "adjacentDifferentCN.vcf")
                 .add(JointGermlineCNVSegmentation.MODEL_CALL_INTERVALS_LONG_NAME, getToolTestDataDir() + "intervals.chr8snippet.interval_list")
                 .addInterval("8:190726-666104")
-                .add(StandardArgumentDefinitions.PEDIGREE_FILE_LONG_NAME, getToolTestDataDir() + "NA20520.ped");
+                .add(StandardArgumentDefinitions.PEDIGREE_FILE_LONG_NAME, getToolTestDataDir() + "NA20520.ped") //this sample actually appears Turner (X0), but doesn't matter for chr13 sample actually appears Turner (X0), but doesn't matter for chr13
+                .add(JointGermlineCNVSegmentation.MIN_SAMPLE_NUM_OVERLAP_LONG_NAME, 0.8)
+                .add(JointGermlineCNVSegmentation.DEFRAGMENTATION_PADDING_LONG_NAME, 0.5);
 
         runCommandLine(args2, JointGermlineCNVSegmentation.class.getSimpleName());
 

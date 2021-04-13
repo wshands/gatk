@@ -188,9 +188,9 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
         setIntervals(parser);
 
         if (callIntervals == null) {
-            defragmenter = new BinnedCNVDefragmenter(dictionary, minSampleSetOverlap, defragmentationPadding, callIntervals);
+            defragmenter = new BinnedCNVDefragmenter(dictionary, defragmentationPadding, minSampleSetOverlap, callIntervals);
         } else {
-            defragmenter = new CNVDefragmenter(dictionary, minSampleSetOverlap, defragmentationPadding);
+            defragmenter = new CNVDefragmenter(dictionary, defragmentationPadding, minSampleSetOverlap);
         }
         clusterEngine = new SVClusterEngine<>(dictionary, LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE,
                 true, (new SVCollapser(breakpointSummaryStrategy))::collapse);
