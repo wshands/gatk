@@ -574,7 +574,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         final List<Allele> finalAlleles = alleleCounts.asAlleleList(vc.getAlleles());
         return (pls != null && pls[0] < rgqThreshold)
                 || !genotypeHasConcreteAlt(finalAlleles)
-                || genotype.getAlleles().stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE))
+                || finalAlleles.stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE))
                 || (!genotype.hasPL() && !genotype.hasGQ())
                 || (genotype.hasDP() && genotype.getDP() == 0);
     }
@@ -797,7 +797,21 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @return  a called genotype (if possible)
      */
     private Genotype getCalledGenotype(final VariantContext variant) {
-        if (variant.getGenotype(0).isNoCall() || variant.getGenotype(0).isHom()) {  //might be homRef if posteriors and PLs don't agree
+        final boolean hasPLAndPosteriorMismatch;
+        final Genotype origG = variant.getGenotype(0);
+        final int[] pls = getGenotypePosteriorsOtherwiseLikelihoods(origG, posteriorsKey);
+        if (pls == null) {
+            throw new IllegalStateException("Cannot verify called genotype without likelihoods or posteriors.  Error at "
+                    + variant.getContig() + ":" + variant.getStart());
+        }
+        final int minLikelihoodIndex = MathUtils.minElementIndex(pls);
+        final GenotypeLikelihoodCalculator glCalc = GL_CALCS.getInstance(origG.getPloidy(), variant.getAlleles().size());
+        final GenotypeAlleleCounts alleleCounts = glCalc.genotypeAlleleCountsAt(minLikelihoodIndex);
+
+        final List<Allele> finalAlleles = alleleCounts.asAlleleList(variant.getAlleles());
+        hasPLAndPosteriorMismatch = !finalAlleles.containsAll(origG.getAlleles());
+
+        if (origG.isNoCall() || origG.isHom() || hasPLAndPosteriorMismatch) {  //might be homRef if posteriors and PLs don't agree
             final Genotype noCallGT = variant.getGenotype(0);
             final GenotypeBuilder builderToCallAlleles = new GenotypeBuilder(noCallGT);
             //TODO: update to support DRAGEN posteriors
