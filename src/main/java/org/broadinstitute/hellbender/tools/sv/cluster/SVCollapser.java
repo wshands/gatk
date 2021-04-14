@@ -35,15 +35,10 @@ public class SVCollapser {
 
     }
 
-    public static final BreakpointSummaryStrategy DEFAULT_STRATEGY = BreakpointSummaryStrategy.MEDIAN_START_MEDIAN_END;
     private final BreakpointSummaryStrategy breakpointSummaryStrategy;
 
     public SVCollapser(final BreakpointSummaryStrategy breakpointSummaryStrategy) {
         this.breakpointSummaryStrategy = breakpointSummaryStrategy;
-    }
-
-    public SVCollapser() {
-        this(DEFAULT_STRATEGY);
     }
 
     /**
