@@ -123,6 +123,8 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
     public static final String MIN_QUALITY_LONG_NAME = "minimum-qs-score";
     public static final String MIN_SAMPLE_NUM_OVERLAP_LONG_NAME = "min-sample-set-fraction-overlap";
     public static final String DEFRAGMENTATION_PADDING_LONG_NAME = "defragmentation-padding-fraction";
+    public static final String CLUSTERING_INTERVAL_OVERLAP_LONG_NAME = "clustering-interval-overlap";
+    public static final String CLUSTERING_BREAKEND_WINDOW_LONG_NAME = "clustering-breakend-window";
     public static final String MODEL_CALL_INTERVALS_LONG_NAME = "model-call-intervals";
     public static final String BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME = "breakpoint-summary-strategy";
 
@@ -135,9 +137,13 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
     @Argument(fullName = DEFRAGMENTATION_PADDING_LONG_NAME, doc = "Extend events by this fraction on each side when determining overlap to merge", optional = true)
     private double defragmentationPadding = CNVDefragmenter.getDefaultPaddingFraction();
 
-    @Argument(fullName = SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME,
+    @Argument(fullName = CLUSTERING_INTERVAL_OVERLAP_LONG_NAME,
             doc="Minimum interval reciprocal overlap for clustering", optional=true)
-    public double depthOverlapFraction = 0.8;
+    public double clusterIntervalOverlap = SVClusterEngine.DEFAULT_DEPTH_ONLY_PARAMS.getReciprocalOverlap();
+
+    @Argument(fullName = CLUSTERING_BREAKEND_WINDOW_LONG_NAME,
+            doc="Cluster events whose endpoints are within this distance of each other", optional=true)
+    public int clusterWindow = SVClusterEngine.DEFAULT_DEPTH_ONLY_PARAMS.getWindow();
 
     @Argument(fullName = MODEL_CALL_INTERVALS_LONG_NAME, doc = "gCNV model intervals created with the FilterIntervals tool.")
     private GATKPath modelCallIntervalList = null;
@@ -178,7 +184,8 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
         return true;
     }
 
-    private static final int DEPTH_BREAKEND_CLUSTERING_WINDOW = 0;
+    // Cannot require sample overlap when clustering across samples
+    private static final double CLUSTER_SAMPLE_OVERLAP_FRACTION = 0;
 
     @Override
     public void onTraversalStart() {
@@ -200,7 +207,7 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
         }
         clusterEngine = new SVClusterEngine<>(dictionary, LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE,
                 true, (new SVCollapser(breakpointSummaryStrategy))::collapse);
-        final SVClusterEngine.DepthClusteringParameters clusterArgs = new SVClusterEngine.DepthClusteringParameters(depthOverlapFraction, DEPTH_BREAKEND_CLUSTERING_WINDOW, minSampleSetOverlap);
+        final SVClusterEngine.DepthClusteringParameters clusterArgs = new SVClusterEngine.DepthClusteringParameters(clusterIntervalOverlap, clusterWindow, CLUSTER_SAMPLE_OVERLAP_FRACTION);
         clusterEngine.setDepthOnlyParams(clusterArgs);
 
         vcfWriter = getVCFWriter();

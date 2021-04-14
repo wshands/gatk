@@ -26,12 +26,12 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
     public static final int INSERTION_ASSUMED_LENGTH_FOR_OVERLAP = 50;
 
-    protected static final ClusteringParameters DEFAULT_DEPTH_ONLY_PARAMS =
-            new DepthClusteringParameters(0.8, 0, 0.5);
-    protected static final ClusteringParameters DEFAULT_MIXED_PARAMS =
-            new MixedClusteringParameters(0.8, 1000, 0.5);
-    protected static final ClusteringParameters DEFAULT_EVIDENCE_PARAMS =
-            new EvidenceClusteringParameters(0.5, 500, 0.5);
+    public static final ClusteringParameters DEFAULT_DEPTH_ONLY_PARAMS =
+            new DepthClusteringParameters(0.8, 0, 0);
+    public static final ClusteringParameters DEFAULT_MIXED_PARAMS =
+            new MixedClusteringParameters(0.8, 1000, 0);
+    public static final ClusteringParameters DEFAULT_EVIDENCE_PARAMS =
+            new EvidenceClusteringParameters(0.5, 500, 0);
 
     public SVClusterEngine(final SAMSequenceDictionary dictionary,
                            final CLUSTERING_TYPE clusteringType,

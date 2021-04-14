@@ -29,39 +29,39 @@ public class SVClusterEngineArgumentsCollection implements Serializable {
 
     @Argument(fullName = DEPTH_INTERVAL_OVERLAP_FRACTION_NAME,
             doc="Depth/Depth" + BASE_INTERVAL_OVERLAP_FRACTION_DOC, optional=true)
-    public double depthOverlapFraction = 0.8;
+    public double depthOverlapFraction = SVClusterEngine.DEFAULT_DEPTH_ONLY_PARAMS.getReciprocalOverlap();
 
     @Argument(fullName = MIXED_INTERVAL_OVERLAP_FRACTION_NAME,
             doc="PESR/Depth" + BASE_INTERVAL_OVERLAP_FRACTION_DOC, optional=true)
-    public double mixedOverlapFraction = 0.5;
+    public double mixedOverlapFraction = SVClusterEngine.DEFAULT_MIXED_PARAMS.getReciprocalOverlap();
 
     @Argument(fullName = PESR_INTERVAL_OVERLAP_FRACTION_NAME,
             doc="PESR/PESR" + BASE_INTERVAL_OVERLAP_FRACTION_DOC, optional=true)
-    public double pesrOverlapFraction = 0.5;
+    public double pesrOverlapFraction = SVClusterEngine.DEFAULT_EVIDENCE_PARAMS.getReciprocalOverlap();
 
     @Argument(fullName = DEPTH_BREAKEND_WINDOW_NAME,
             doc="Depth/Depth" + BASE_BREAKEND_WINDOW_DOC, optional=true)
-    public int depthBreakendWindow = 0;
+    public int depthBreakendWindow = SVClusterEngine.DEFAULT_DEPTH_ONLY_PARAMS.getWindow();
 
     @Argument(fullName = MIXED_BREAKEND_WINDOW_NAME,
             doc="Depth/PESR" + BASE_BREAKEND_WINDOW_DOC, optional=true)
-    public int mixedBreakendWindow = 1000;
+    public int mixedBreakendWindow = SVClusterEngine.DEFAULT_MIXED_PARAMS.getWindow();
 
     @Argument(fullName = PESR_BREAKEND_WINDOW_NAME,
             doc="PESR/PESR" + BASE_BREAKEND_WINDOW_DOC, optional=true)
-    public int pesrBreakendWindow = 500;
+    public int pesrBreakendWindow = SVClusterEngine.DEFAULT_EVIDENCE_PARAMS.getWindow();
 
     @Argument(fullName = DEPTH_SAMPLE_OVERLAP_FRACTION_NAME,
             doc="Depth/Depth" + BASE_SAMPLE_OVERLAP_FRACTION_DOC, optional=true)
-    public double depthSampleOverlapFraction = 0.8;
+    public double depthSampleOverlapFraction = SVClusterEngine.DEFAULT_DEPTH_ONLY_PARAMS.getSampleOverlap();
 
     @Argument(fullName = MIXED_SAMPLE_OVERLAP_FRACTION_NAME,
             doc="Depth/PESR" + BASE_SAMPLE_OVERLAP_FRACTION_DOC, optional=true)
-    public double mixedSampleOverlapFraction = 0.8;
+    public double mixedSampleOverlapFraction = SVClusterEngine.DEFAULT_MIXED_PARAMS.getSampleOverlap();
 
     @Argument(fullName = PESR_SAMPLE_OVERLAP_FRACTION_NAME,
             doc="PESR/PESR" + BASE_SAMPLE_OVERLAP_FRACTION_DOC, optional=true)
-    public double pesrSampleOverlapFraction = 0.8;
+    public double pesrSampleOverlapFraction = SVClusterEngine.DEFAULT_EVIDENCE_PARAMS.getSampleOverlap();
 
     public final SVClusterEngine.DepthClusteringParameters getDepthParameters() {
         return new SVClusterEngine.DepthClusteringParameters(depthOverlapFraction, depthBreakendWindow, depthSampleOverlapFraction);

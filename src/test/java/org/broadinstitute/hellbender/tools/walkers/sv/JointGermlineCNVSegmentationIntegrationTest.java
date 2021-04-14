@@ -203,7 +203,8 @@ public class JointGermlineCNVSegmentationIntegrationTest extends CommandLineProg
                 .add(StandardArgumentDefinitions.PEDIGREE_FILE_LONG_NAME, getToolTestDataDir() + "overlapping.ped")
                 .add(JointGermlineCNVSegmentation.MODEL_CALL_INTERVALS_LONG_NAME, getToolTestDataDir() + "intervals.chr22.interval_list")
                 .addInterval("22:22,538,114-23,538,437")
-                .add(SVClusterEngineArgumentsCollection.DEPTH_INTERVAL_OVERLAP_FRACTION_NAME, 0.8);
+                .add(JointGermlineCNVSegmentation.CLUSTERING_INTERVAL_OVERLAP_LONG_NAME, 0.8)
+                .add(JointGermlineCNVSegmentation.CLUSTERING_BREAKEND_WINDOW_LONG_NAME, 0);
 
         inputVcfs.forEach(vcf -> args.addVCF(vcf));
 
