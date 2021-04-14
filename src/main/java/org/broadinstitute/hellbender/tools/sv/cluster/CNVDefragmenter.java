@@ -66,7 +66,7 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
             final String sampleB = carriersB.iterator().next();
             if (sampleA.equals(sampleB)) {
                 final Genotype genotypeA = a.getGenotypes().get(sampleA);
-                final Genotype genotypeB = a.getGenotypes().get(sampleB);
+                final Genotype genotypeB = b.getGenotypes().get(sampleB);
                 if (genotypeA.hasExtendedAttribute(COPY_NUMBER_FORMAT) && genotypeB.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
                     final int copyNumberA = VariantContextGetters.getAttributeAsInt(genotypeA, COPY_NUMBER_FORMAT, 0);
                     final int copyNumberB = VariantContextGetters.getAttributeAsInt(genotypeB, COPY_NUMBER_FORMAT, 0);
