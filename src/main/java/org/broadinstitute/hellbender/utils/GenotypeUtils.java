@@ -14,6 +14,13 @@ public final class GenotypeUtils {
     }
 
     /**
+     * Returns true if the genotype is a diploid genotype with GQ.  Useful for reblocked GVCFs.
+     */
+    public static boolean isDiploidWithGQ(final Genotype g) {
+        return Utils.nonNull(g).hasGQ() && g.getPloidy() == 2;
+    }
+
+    /**
      * Returns a triple of ref/het/hom genotype "counts".
      *
      * The exact meaning of the count is dependent on the rounding behavior.
