@@ -907,8 +907,14 @@ public final class ReblockGVCF extends MultiVariantWalker {
             final int[] ad = g.getAD();
             if (ad.length >= nonRefInd && ad[nonRefInd] > 0) { //only initialize a builder if we have to
                 final GenotypeBuilder gb = new GenotypeBuilder(g);
+                final int nonRefAdCount = ad[nonRefInd];
                 ad[nonRefInd] = 0;
-                gb.AD(ad).DP((int) MathUtils.sum(ad));
+                gb.AD(ad);
+                if (g.hasDP()) {
+                    gb.DP(g.getDP() - nonRefAdCount);
+                } else {
+                    gb.DP((int) MathUtils.sum(ad));
+                }
                 genotypesArray.add(gb.make());
             } else {
                 genotypesArray.add(g);
@@ -996,15 +1002,15 @@ public final class ReblockGVCF extends MultiVariantWalker {
 
     /**
      * If the ref allele is trimmed after alt deletions are dropped, add a reference block to account for the space covered before trimming
-     * @param result    VC with full set of alleles that may need to be trimmed
+     * @param originalVC    VC with full set of alleles that may need to be trimmed
      * @param allelesToDrop alleles eligible to become the new non-ref likelihood
-     * @param newTrimmedAllelesVC   VC with called alleles that may have been trimmed
+     * @param newTrimmedAllelesVC   VC with called alleles that may have been trimmed, i.e. differ from originalVC alleles
      */
-    private void addRefBlockIfNecessary(final VariantContext result, final List<Allele> allelesToDrop, final VariantContext newTrimmedAllelesVC, final int refBlockDepth) {
+    private void addRefBlockIfNecessary(final VariantContext originalVC, final List<Allele> allelesToDrop, final VariantContext newTrimmedAllelesVC, final int refBlockDepth) {
         //if deletion needs trimming, fill in the gap with a ref block
-        final int oldLongestAlleleLength = result.getReference().length();
+        final int oldLongestAlleleLength = originalVC.getReference().length();
         final int newLongestAlleleLength = newTrimmedAllelesVC.getReference().length();
-        final Genotype genotype = result.getGenotype(0);
+        final Genotype genotype = originalVC.getGenotype(0);
         if (newLongestAlleleLength < oldLongestAlleleLength) {
             //need to add a ref block to make up for the allele trimming or there will be a hole in the GVCF
             final int[] originalLikelihoods = getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey);
@@ -1013,12 +1019,12 @@ public final class ReblockGVCF extends MultiVariantWalker {
                 try {
                     oldShortestAltAllele = allelesToDrop.stream().filter(a -> !a.equals(Allele.SPAN_DEL)).min(Allele::compareTo).orElseThrow(NoSuchElementException::new);
                 } catch (final Exception e) {
-                    throw new GATKException("No shortest ALT at " + result.getStart() + " across alleles: " + allelesToDrop);
+                    throw new GATKException("No shortest ALT at " + originalVC.getStart() + " across alleles: " + allelesToDrop);
                 }
 
                 //subset PLs to ref and longest dropped allele (longest may not be most likely, but we'll approximate so we don't have to make more than one ref block)
-                final int[] longestVersusRefPLIndices = AlleleSubsettingUtils.subsettedPLIndices(result.getGenotype(0).getPloidy(),
-                        result.getAlleles(), Arrays.asList(result.getReference(), oldShortestAltAllele));
+                final int[] longestVersusRefPLIndices = AlleleSubsettingUtils.subsettedPLIndices(originalVC.getGenotype(0).getPloidy(),
+                        originalVC.getAlleles(), Arrays.asList(originalVC.getReference(), oldShortestAltAllele));
                 final int[] newRefBlockLikelihoods = MathUtils.normalizePLs(Arrays.stream(longestVersusRefPLIndices)
                         .map(idx -> originalLikelihoods[idx]).toArray());
                 if (newRefBlockLikelihoods[0] != 0) {
@@ -1029,17 +1035,17 @@ public final class ReblockGVCF extends MultiVariantWalker {
 
                 //build the new reference block with updated likelihoods
                 final GenotypeBuilder refBlockGenotypeBuilder = new GenotypeBuilder();
-                final int refStart = Math.max(result.getEnd() - (oldLongestAlleleLength - newLongestAlleleLength), vcfOutputEnd) + 1;
-                final Allele newRef = Allele.create(ReferenceUtils.getRefBaseAtPosition(referenceReader, result.getContig(), refStart), true);
+                final int refStart = Math.max(originalVC.getEnd() - (oldLongestAlleleLength - newLongestAlleleLength), vcfOutputEnd) + 1;
+                final Allele newRef = Allele.create(ReferenceUtils.getRefBaseAtPosition(referenceReader, originalVC.getContig(), refStart), true);
                 refBlockGenotypeBuilder.PL(newRefBlockLikelihoods)
                         .GQ(MathUtils.secondSmallestMinusSmallest(newRefBlockLikelihoods, 0))
                         .alleles(Arrays.asList(newRef, newRef)).DP(refBlockDepth);
 
                 //add the new block to the buffer if it isn't covered by positions already output
-                if (refStart > vcfOutputEnd && result.getEnd() > vcfOutputEnd) {
+                if (refStart > vcfOutputEnd && originalVC.getEnd() > vcfOutputEnd) {
                     final VariantContextBuilder trimBlockBuilder = new VariantContextBuilder();
-                    trimBlockBuilder.chr(currentContig).start(Math.max(refStart, vcfOutputEnd + 1)).stop(result.getEnd()).
-                            alleles(Arrays.asList(newRef, Allele.NON_REF_ALLELE)).attribute(VCFConstants.END_KEY, result.getEnd())
+                    trimBlockBuilder.chr(currentContig).start(Math.max(refStart, vcfOutputEnd + 1)).stop(originalVC.getEnd()).
+                            alleles(Arrays.asList(newRef, Allele.NON_REF_ALLELE)).attribute(VCFConstants.END_KEY, originalVC.getEnd())
                             .genotypes(refBlockGenotypeBuilder.make());
                     updateHomRefBlockBuffer(trimBlockBuilder.make());
                 }
@@ -1049,7 +1055,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
 
     /**
      * Modifies ref block builder to change start position and update ref allele accordingly in VC and genotypes
-     * @param builder   a builder for a reference block
+     * @param builder   a builder for a reference block, contains only NON_REF, no other ALTs
      * @param newStart  the new position for the reference block
      */
     private void moveBuilderStart(final VariantContextBuilder builder, final int newStart) {

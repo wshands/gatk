@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.variantutils;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.*;
@@ -338,5 +339,36 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(variantKeys.containsAll(expectedHetKeys));
         Assert.assertTrue(variantKeys.containsAll(expectedHomRefKeys));
         Assert.assertTrue(variants.size() == 22);
+    }
+
+    @Test
+    //here genotype call disagrees with PLs and subsetting can be wrong and lead to no confidence hom-ref if we rely on GT
+    public void testPosteriorDisagreementNeedingSubset() {
+        final File funkyDragenVariant = new File(getToolTestDataDir() + "HG002.snippet.g.vcf");
+        final File output = createTempFile("reblockedgvcf", ".vcf");
+
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("V", funkyDragenVariant)
+                .addReference(hg38Reference)
+                .addOutput(output);
+        runCommandLine(args);
+
+        final Pair<VCFHeader, List<VariantContext>> outVCs = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+        Assert.assertEquals(outVCs.getRight().size(), 2);  //one variant and one ref block from trimmed deletion
+        final VariantContext testResult = outVCs.getRight().get(0);
+        final Genotype g = testResult.getGenotype(0);
+        Assert.assertFalse(testResult.hasAttribute(VCFConstants.END_KEY));
+        Assert.assertTrue(g.isHetNonRef());
+        Assert.assertEquals(testResult.getAlternateAlleles().size(), 3);
+        Assert.assertTrue(testResult.getAlternateAlleles().contains(Allele.NON_REF_ALLELE));
+        Assert.assertEquals(testResult.getReference().getBaseString().length(), 1);  //alleles are properly trimmed
+
+        final VariantContext newRefBlock = outVCs.getRight().get(1);
+        Assert.assertTrue(newRefBlock.hasAttribute(VCFConstants.END_KEY));
+        Assert.assertEquals(newRefBlock.getAttributeAsInt(VCFConstants.END_KEY, 0), 103392934);
+        final Genotype refG = newRefBlock.getGenotype(0);
+        Assert.assertTrue(refG.isHomRef());
+        Assert.assertEquals(newRefBlock.getAlternateAlleles().size(), 1);
+        Assert.assertTrue(newRefBlock.getAlternateAlleles().contains(Allele.NON_REF_ALLELE));
     }
 }
