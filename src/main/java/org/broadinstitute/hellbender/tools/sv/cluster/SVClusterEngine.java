@@ -163,18 +163,18 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         } else {
             isOverlap = true;
         }
+        if (params.isOverlapAndProximity() && !isOverlap) {
+            return false;
+        } else if (!params.isOverlapAndProximity() && isOverlap) {
+            return true;
+        }
 
         // Breakend proximity
         final SimpleInterval intervalA1 = a.getPositionAInterval().expandWithinContig(params.getWindow(), dictionary);
         final SimpleInterval intervalA2 = a.getPositionBInterval().expandWithinContig(params.getWindow(), dictionary);
         final SimpleInterval intervalB1 = b.getPositionAInterval();
         final SimpleInterval intervalB2 = b.getPositionBInterval();
-        final boolean isProximity = intervalA1.overlaps(intervalB1) && intervalA2.overlaps(intervalB2);
-        if (params.isOverlapAndProximity()) {
-            return isOverlap && isProximity;
-        } else {
-            return isOverlap || isProximity;
-        }
+        return intervalA1.overlaps(intervalB1) && intervalA2.overlaps(intervalB2);
     }
 
     private int getLengthForOverlap(final SVCallRecord record) {
