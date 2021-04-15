@@ -207,7 +207,7 @@ task TrainModel {
 
         gatk --java-options "-Xmx${command_mem}m" \
         CNNVariantTrain \
-        -input-tensor-dir "./tensors/" \
+        -input-tensor-dir "./root/tensors/" \
         -model-name ${output_prefix} \
         -image-dir "./" \
         -tensor-type ${tensor_type} \
