@@ -1,21 +1,23 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
-import java.util.Set;
+import java.util.HashSet;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants.COPY_NUMBER_FORMAT;
 
 public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
 
-    protected static final double DEFAULT_SAMPLE_OVERLAP = 0.8;
-    protected static final double DEFAULT_PADDING_FRACTION = 0.25;
+    public static final double DEFAULT_SAMPLE_OVERLAP = 0.8;
+    public static final double DEFAULT_PADDING_FRACTION = 0.25;
 
     protected final double minSampleOverlap;
     protected final double paddingFraction;
@@ -29,10 +31,6 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
         this.paddingFraction = paddingFraction;
     }
 
-    public CNVDefragmenter(final SAMSequenceDictionary dictionary) {
-        this(dictionary, DEFAULT_PADDING_FRACTION, DEFAULT_SAMPLE_OVERLAP);
-    }
-
     /**
      * Determine if two variants should cluster based on their padded intervals and genotyped samples
      * @param a
@@ -40,14 +38,15 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
      * @return true if the two variants should be in the same cluster
      */
     @Override
-    protected boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
-        // Only do clustering on depth-only variants
+    boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
+        // Only do clustering on depth-only CNVs
         if (!a.isDepthOnly() || !b.isDepthOnly()) return false;
-        Utils.validate(a.getContigA().equals(a.getContigB()), "Variant A is depth-only but interchromosomal");
-        Utils.validate(b.getContigA().equals(b.getContigB()), "Variant B is depth-only but interchromosomal");
+        if (!a.isCNV() || !b.isCNV()) return false;
+        Utils.validate(a.getContigA().equals(a.getContigB()), "Variant A is a CNV but interchromosomal");
+        Utils.validate(b.getContigA().equals(b.getContigB()), "Variant B is a CNV but interchromosomal");
 
         // Types match
-        if (!a.getType().equals(b.getType())) return false;
+        if (a.getType() != b.getType()) return false;
 
         // Interval overlap
         if (!getPaddedRecordInterval(a.getContigA(), a.getPositionA(), a.getPositionB())
@@ -59,28 +58,35 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
         }
 
         // In the single-sample case, match copy number strictly if we're looking at the same sample
-        final Set<String> carriersA = getCopyNumberCarrierGenotypes(a).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
-        final Set<String> carriersB = getCopyNumberCarrierGenotypes(b).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
-        if (carriersA.size() == 1 && carriersB.size() == 1) {
-            final String sampleA = carriersA.iterator().next();
-            final String sampleB = carriersB.iterator().next();
-            if (sampleA.equals(sampleB)) {
-                final Genotype genotypeA = a.getGenotypes().get(sampleA);
-                final Genotype genotypeB = b.getGenotypes().get(sampleB);
-                if (genotypeA.hasExtendedAttribute(COPY_NUMBER_FORMAT) && genotypeB.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
-                    final int copyNumberA = VariantContextGetters.getAttributeAsInt(genotypeA, COPY_NUMBER_FORMAT, 0);
-                    final int copyNumberB = VariantContextGetters.getAttributeAsInt(genotypeB, COPY_NUMBER_FORMAT, 0);
-                    if (copyNumberA != copyNumberB) {
-                        return false;
-                    }
-                } else {
-                    if (!genotypeA.getAlleles().equals(genotypeB.getAlleles())) {
-                        return false;
-                    }
+        // TODO repeated check for CN attributes in hasSampleOverlap and getBestAvailableCarrierSamples
+        final List<String> carriersA = getBestAvailableCarrierSamples(a);
+        final List<String> carriersB = getBestAvailableCarrierSamples(b);
+        if (carriersA.size() == 1 && carriersA.equals(carriersB)) {
+            final Genotype genotypeA = a.getGenotypes().get(carriersA.get(0));
+            final Genotype genotypeB = b.getGenotypes().get(carriersB.get(0));
+            if (genotypeA.hasExtendedAttribute(COPY_NUMBER_FORMAT) && genotypeB.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
+                final int copyNumberA = VariantContextGetters.getAttributeAsInt(genotypeA, COPY_NUMBER_FORMAT, 0);
+                final int copyNumberB = VariantContextGetters.getAttributeAsInt(genotypeB, COPY_NUMBER_FORMAT, 0);
+                if (copyNumberA != copyNumberB) {
+                    return false;
+                }
+            } else {
+                final List<Allele> sortedAllelesA = genotypeA.getAlleles().stream().sorted().collect(Collectors.toList());
+                final List<Allele> sortedAllelesB = genotypeB.getAlleles().stream().sorted().collect(Collectors.toList());
+                if (!sortedAllelesA.equals(sortedAllelesB)) {
+                    return false;
                 }
             }
         }
         return true;
+    }
+
+    private List<String> getBestAvailableCarrierSamples(final SVCallRecord record) {
+        if (hasDefinedCopyNumbers(record.getGenotypes())) {
+            return getCopyNumberCarrierGenotypes(record).stream().map(Genotype::getSampleName).collect(Collectors.toList());
+        } else {
+            return getGenotypedCarrierGenotypes(record, new HashSet<>(record.getAltAlleles())).stream().map(Genotype::getSampleName).collect(Collectors.toList());
+        }
     }
 
     /**
@@ -90,9 +96,8 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
     @Override
     protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
         final int contigLength = dictionary.getSequence(call.getContigA()).getSequenceLength();
-        final int maxEventSize = (int) Math.ceil(contigLength - call.getPositionB());
-        return Math.min((int) Math.ceil(call.getPositionB() + paddingFraction * (call.getLength() + maxEventSize)),
-                dictionary.getSequence(call.getContigA()).getSequenceLength());
+        final int maxTheoreticalStart = (int) Math.floor((call.getPositionB() + paddingFraction * (call.getLength() + contigLength)) / (1.0 + paddingFraction));
+        return Math.min(maxTheoreticalStart, dictionary.getSequence(call.getContigA()).getSequenceLength());
     }
 
     /**
@@ -104,17 +109,5 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
     protected SimpleInterval getPaddedRecordInterval(final String contig, final int start, final int end) {
         return new SimpleInterval(contig, start, end)
                 .expandWithinContig((int) (paddingFraction * (end - start + 1)), dictionary);
-    }
-
-    public static double getDefaultPaddingFraction() {
-        return DEFAULT_PADDING_FRACTION;
-    }
-
-    public static double getDefaultSampleOverlap() {
-        return DEFAULT_SAMPLE_OVERLAP;
-    }
-
-    public double getPaddingFraction() {
-        return paddingFraction;
     }
 }

@@ -41,7 +41,8 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         nextClusterId = 0;
     }
 
-    abstract protected boolean clusterTogether(final T a, final T b);
+    @VisibleForTesting
+    abstract boolean clusterTogether(final T a, final T b);
     abstract protected int getMaxClusterableStartingPosition(final T item);
 
     public final List<T> getOutput() {

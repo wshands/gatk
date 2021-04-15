@@ -132,10 +132,10 @@ public class JointGermlineCNVSegmentation extends MultiVariantWalkerGroupedOnSta
     private int minQS = 20;
 
     @Argument(fullName = MIN_SAMPLE_NUM_OVERLAP_LONG_NAME, doc = "Minimum fraction of common samples for two variants to cluster together", optional = true)
-    private double minSampleSetOverlap = CNVDefragmenter.getDefaultSampleOverlap();
+    private double minSampleSetOverlap = SVClusterEngine.DEFAULT_DEPTH_ONLY_PARAMS.getSampleOverlap();
 
     @Argument(fullName = DEFRAGMENTATION_PADDING_LONG_NAME, doc = "Extend events by this fraction on each side when determining overlap to merge", optional = true)
-    private double defragmentationPadding = CNVDefragmenter.getDefaultPaddingFraction();
+    private double defragmentationPadding = CNVDefragmenter.DEFAULT_PADDING_FRACTION;
 
     @Argument(fullName = CLUSTERING_INTERVAL_OVERLAP_LONG_NAME,
             doc="Minimum interval reciprocal overlap for clustering", optional=true)

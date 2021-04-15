@@ -45,12 +45,12 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     @Override
-    protected boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
+    boolean clusterTogether(final SVCallRecord a, final SVCallRecord b) {
         if (a.getType() != b.getType()) {
             if (!enableCNV) {
                 // CNV clustering disabled, so no type mixing
                 return false;
-            } else if (!(isCnvType(a.getType()) && isCnvType(b.getType()))) {
+            } else if (!(a.isCNV() && b.isCNV())) {
                 // CNV clustering enabled, but at least one was not a CNV type
                 return false;
             }
@@ -77,7 +77,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
     // TODO match copy numbers for multi-allelic variants
     protected boolean copyNumberSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
-        if (hasDefinedCopyNumbers(a) && hasDefinedCopyNumbers(b)) {
+        if (hasDefinedCopyNumbers(a.getGenotypes()) && hasDefinedCopyNumbers(b.getGenotypes())) {
             final Set<String> carrierSamplesA = getCopyNumberCarrierGenotypes(a).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
             final Set<String> carrierSamplesB = getCopyNumberCarrierGenotypes(b).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
             return hasSampleOverlap(carrierSamplesA, carrierSamplesB, minSampleOverlap);
@@ -86,8 +86,8 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         }
     }
 
-    protected boolean hasDefinedCopyNumbers(final SVCallRecord record) {
-        return record.getGenotypes().stream().allMatch(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT));
+    protected boolean hasDefinedCopyNumbers(final Collection<Genotype> genotypes) {
+        return genotypes.stream().allMatch(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT));
     }
 
     private boolean hasSampleOverlap(final Set<String> samplesA, final Set<String> samplesB, final double minSampleOverlap) {
@@ -100,15 +100,21 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         return sampleOverlap >= minSampleOverlap;
     }
 
-    protected Set<Genotype> getGenotypedCarrierGenotypes(final SVCallRecord record, final Allele allele) {
+    protected List<Genotype> getGenotypedCarrierGenotypes(final SVCallRecord record, final Allele allele) {
         return record.getGenotypes().stream()
                 .filter(g -> g.getAlleles().stream().anyMatch(a -> a.equals(allele)))
-                .collect(Collectors.toSet());
+                .collect(Collectors.toList());
+    }
+
+    protected List<Genotype> getGenotypedCarrierGenotypes(final SVCallRecord record, final Set<Allele> alleles) {
+        return record.getGenotypes().stream()
+                .filter(g -> g.getAlleles().stream().anyMatch(alleles::contains))
+                .collect(Collectors.toList());
     }
 
     protected boolean genotypeSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
-        final List<Allele> altAllelesA = a.getAlleles().stream().filter(allele -> !allele.isNoCall() && !allele.isReference()).collect(Collectors.toList());
-        final List<Allele> altAllelesB = b.getAlleles().stream().filter(allele -> !allele.isNoCall() && !allele.isReference()).collect(Collectors.toList());
+        final List<Allele> altAllelesA = a.getAltAlleles();
+        final List<Allele> altAllelesB = b.getAltAlleles();
         Utils.validate(altAllelesA.size() <= 1 && altAllelesB.size() <= 1, "Genotype-based sample overlap not supported for multi-allelic sites");
         final Set<String> carrierSamplesA;
         final Set<String> carrierSamplesB;
@@ -127,7 +133,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
     protected boolean hasSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
         if (minSampleOverlap > 0) {
-            if (isCnvType(a.getType()) && isCnvType(b.getType())) {
+            if (a.isCNV() && b.isCNV()) {
                 return copyNumberSampleOverlap(a, b, minSampleOverlap);
             } else {
                 return genotypeSampleOverlap(a, b, minSampleOverlap);
@@ -160,9 +166,9 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
         // Breakend proximity
         final SimpleInterval intervalA1 = a.getPositionAInterval().expandWithinContig(params.getWindow(), dictionary);
-        final SimpleInterval intervalB1 = b.getPositionAInterval().expandWithinContig(params.getWindow(), dictionary);
         final SimpleInterval intervalA2 = a.getPositionBInterval().expandWithinContig(params.getWindow(), dictionary);
-        final SimpleInterval intervalB2 = b.getPositionBInterval().expandWithinContig(params.getWindow(), dictionary);
+        final SimpleInterval intervalB1 = b.getPositionAInterval();
+        final SimpleInterval intervalB2 = b.getPositionBInterval();
         final boolean isProximity = intervalA1.overlaps(intervalB1) && intervalA2.overlaps(intervalB2);
         if (params.isOverlapAndProximity()) {
             return isOverlap && isProximity;
@@ -183,25 +189,29 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
     @Override
     protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
+        return Math.max(
+                getMaxClusterableStartingPositionWithParams(call, call.isDepthOnly() ? depthOnlyParams : evidenceParams),
+                getMaxClusterableStartingPositionWithParams(call, mixedParams)
+        );
+    }
+
+    private int getMaxClusterableStartingPositionWithParams(final SVCallRecord call, final ClusteringParameters params) {
         final String contig = call.getContigA();
-        final boolean isDepthOnly = call.isDepthOnly();
         final int contigLength = dictionary.getSequence(contig).getSequenceLength();
         // Reciprocal overlap window
         final int maxPositionByOverlap;
         if (call.isIntrachromosomal()) {
-            final double overlap = Math.min(isDepthOnly ? depthOnlyParams.getReciprocalOverlap() : evidenceParams.getReciprocalOverlap(), mixedParams.getReciprocalOverlap());
-            final int maxPosition = (int) (call.getPositionA() + (1.0 - overlap) * getLengthForOverlap(call));
+            final int maxPosition = (int) (call.getPositionA() + (1.0 - params.getReciprocalOverlap()) * getLengthForOverlap(call));
             maxPositionByOverlap = Math.min(maxPosition, contigLength);
         } else {
             maxPositionByOverlap = call.getPositionA();
         }
 
         // Breakend proximity window
-        final int window = Math.max(isDepthOnly ? depthOnlyParams.getWindow() : evidenceParams.getWindow(), mixedParams.getWindow());
-        final int maxPositionByWindow = Math.min(call.getPositionA() + window, contigLength);
+        final int maxPositionByWindow = Math.min(call.getPositionA() + params.getWindow(), contigLength);
 
-        if (isDepthOnly) {
-            return Math.max(maxPositionByOverlap, maxPositionByWindow);
+        if (params.isOverlapAndProximity()) {
+            return Math.min(maxPositionByOverlap, maxPositionByWindow);
         } else {
             return Math.max(maxPositionByOverlap, maxPositionByWindow);
         }

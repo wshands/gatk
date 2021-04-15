@@ -27,10 +27,6 @@ public class BinnedCNVDefragmenter extends CNVDefragmenter {
         parser = new GenomeLocParser(this.dictionary);
     }
 
-    public BinnedCNVDefragmenter(final SAMSequenceDictionary dictionary, final List<GenomeLoc> coverageIntervals) {
-        this(dictionary, DEFAULT_PADDING_FRACTION, DEFAULT_SAMPLE_OVERLAP, coverageIntervals);
-    }
-
     /**
      * This is difficult to determine for arbitrary bin sizes.
      */

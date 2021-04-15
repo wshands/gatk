@@ -82,7 +82,11 @@ public class SVCallRecord implements SVLocatable {
     }
 
     public boolean isDepthOnly() {
-        return getAlgorithms().size() == 1 && getAlgorithms().get(0).equals(GATKSVVCFConstants.DEPTH_ALGORITHM);
+        return algorithms.size() == 1 && algorithms.get(0).equals(GATKSVVCFConstants.DEPTH_ALGORITHM);
+    }
+
+    public boolean isCNV() {
+        return type == StructuralVariantType.DEL || type == StructuralVariantType.DUP || type == StructuralVariantType.CNV;
     }
 
     public Map<String, Object> getAttributes() {
@@ -137,6 +141,10 @@ public class SVCallRecord implements SVLocatable {
 
     public List<Allele> getAlleles() {
         return alleles;
+    }
+
+    public List<Allele> getAltAlleles() {
+        return alleles.stream().filter(allele -> !allele.isNoCall() && !allele.isReference()).collect(Collectors.toList());
     }
 
     public Set<String> getAllSamples() {

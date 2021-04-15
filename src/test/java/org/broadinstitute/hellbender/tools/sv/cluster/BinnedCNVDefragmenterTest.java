@@ -12,27 +12,27 @@ import java.util.List;
 
 public class BinnedCNVDefragmenterTest {
 
-    private static final double paddingFraction = 0.25;
+    private static final double paddingFraction = 0.5;
     private static final double sampleOverlap = 0.9;
     private static final CNVDefragmenter defaultDefragmenter = new CNVDefragmenter(SVTestUtils.dict, paddingFraction, sampleOverlap);
-    private static final CNVDefragmenter singleSampleDefragmenter = new BinnedCNVDefragmenter(SVTestUtils.dict, paddingFraction, 0, SVTestUtils.targetIntervals);
+    private static final BinnedCNVDefragmenter binnedDefragmenter = new BinnedCNVDefragmenter(SVTestUtils.dict, paddingFraction, 0, SVTestUtils.targetIntervals);
 
     @Test
     public void testCollapser() {
         final SVCallRecord call1FlattenedDefault = defaultDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
         SVTestUtils.assertEqualsExceptMembership(SVTestUtils.call1, call1FlattenedDefault);
 
-        final SVCallRecord call1FlattenedSingleSample = singleSampleDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
+        final SVCallRecord call1FlattenedSingleSample = binnedDefragmenter.getCollapser().apply(Collections.singletonList(SVTestUtils.call1));
         SVTestUtils.assertEqualsExceptMembership(call1FlattenedSingleSample, call1FlattenedDefault);
 
-        final SVCallRecord sameBoundsThreeSamples = singleSampleDefragmenter.getCollapser().apply(Arrays.asList(SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch));
+        final SVCallRecord sameBoundsThreeSamples = binnedDefragmenter.getCollapser().apply(Arrays.asList(SVTestUtils.call1, SVTestUtils.sameBoundsSampleMismatch));
         Assert.assertEquals(sameBoundsThreeSamples.getPositionA(), SVTestUtils.call1.getPositionA());
         Assert.assertEquals(sameBoundsThreeSamples.getPositionB(), SVTestUtils.call1.getPositionB());
-        Assert.assertTrue(sameBoundsThreeSamples.getGenotypes().get(0).sameGenotype(SVTestUtils.sample1));
-        Assert.assertTrue(sameBoundsThreeSamples.getGenotypes().get(1).sameGenotype(SVTestUtils.sample2));
-        Assert.assertTrue(sameBoundsThreeSamples.getGenotypes().get(2).sameGenotype(SVTestUtils.sample3));
+        Assert.assertTrue(sameBoundsThreeSamples.getGenotypes().get(SVTestUtils.sample1.getSampleName()).sameGenotype(SVTestUtils.sample1));
+        Assert.assertTrue(sameBoundsThreeSamples.getGenotypes().get(SVTestUtils.sample2.getSampleName()).sameGenotype(SVTestUtils.sample2));
+        Assert.assertTrue(sameBoundsThreeSamples.getGenotypes().get(SVTestUtils.sample3.getSampleName()).sameGenotype(SVTestUtils.sample3));
 
-        final SVCallRecord overlapping = singleSampleDefragmenter.getCollapser().apply(Arrays.asList(SVTestUtils.call1, SVTestUtils.call2));
+        final SVCallRecord overlapping = binnedDefragmenter.getCollapser().apply(Arrays.asList(SVTestUtils.call1, SVTestUtils.call2));
         Assert.assertEquals(overlapping.getPositionA(), SVTestUtils.call1.getPositionA());
         Assert.assertEquals(overlapping.getPositionB(), SVTestUtils.call2.getPositionB());
     }
@@ -67,13 +67,13 @@ public class BinnedCNVDefragmenterTest {
     @Test(dataProvider = "clusterTogetherInputsSingleSample")
     public void testClusterTogetherSingleSample(final SVCallRecord call1, final SVCallRecord call2,
                                                 final boolean expectedResult, final String name) {
-        Assert.assertEquals(singleSampleDefragmenter.clusterTogether(call1, call2), expectedResult, name);
+        Assert.assertEquals(binnedDefragmenter.clusterTogether(call1, call2), expectedResult, name);
     }
 
     @Test
     public void testGetMaxClusterableStartingPosition() {
         Assert.assertEquals(defaultDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall), SVTestUtils.chr1Length);
-        Assert.assertTrue(singleSampleDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall) == SVTestUtils.chr1Length);  //will be less than chr1length if target intervals are smaller than chr1
+        Assert.assertTrue(binnedDefragmenter.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall) == SVTestUtils.chr1Length);  //will be less than chr1length if target intervals are smaller than chr1
     }
 
     @Test
@@ -100,7 +100,7 @@ public class BinnedCNVDefragmenterTest {
         SVTestUtils.assertEqualsExceptMembership(output2.get(1), SVTestUtils.call4_chr10);
 
         //cohort case, checking sample set overlap
-        final CNVDefragmenter temp3 = new CNVDefragmenter(SVTestUtils.dict);
+        final CNVDefragmenter temp3 = new CNVDefragmenter(SVTestUtils.dict, CNVDefragmenter.DEFAULT_PADDING_FRACTION, CNVDefragmenter.DEFAULT_SAMPLE_OVERLAP);
         temp3.add(SVTestUtils.call1);
         temp3.add(SVTestUtils.sameBoundsSampleMismatch);
         final List<SVCallRecord> output3 = temp3.getOutput();

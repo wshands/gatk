@@ -61,50 +61,50 @@ public class SVClusterEngineTest {
         Assert.assertTrue(engine.getMaxClusterableStartingPosition(SVTestUtils.rightEdgeCall) <= SVTestUtils.chr1Length);
     }
 
-    @DataProvider(name = "recordPairs")
+    @DataProvider(name = "maxPositionIntervals")
     public Object[][] recordPairs() {
         return new Object[][]{
-                {SVTestUtils.call1, SVTestUtils.call1b, "depth-depth"},
-                {SVTestUtils.call1, SVTestUtils.depthAndStuff2, "mixed"},
-                {SVTestUtils.depthAndStuff, SVTestUtils.depthAndStuff2, "mixed"}
+                {100, 200},
+                {50000, 500000},
+                {1, 1},
+                {1, 2}
         };
     }
 
-    @Test(dataProvider= "recordPairs")
-    public void testGetMaxClusterableStartingPositionPairs(final SVCallRecord call1, final SVCallRecord call2, final String name) {
-        //before we check calculations, make sure these actually cluster
-        Assert.assertTrue(engine.clusterTogether(call1, call2), name);
-
-        //max start for combined interval should be greater than the leftmost bound, and less than the nearest event end
-        final int call1Position = engine.getMaxClusterableStartingPosition(call1);
-        final int call2Position = engine.getMaxClusterableStartingPosition(call2);
-        final int maxPosBoth = Math.max(call1Position, call2Position);
-        Assert.assertTrue(maxPosBoth > call1.getPositionA(), name);
-        Assert.assertTrue(maxPosBoth < call1.getPositionB(), name);
-        Assert.assertTrue(maxPosBoth > call2.getPositionA(), name);
-        Assert.assertTrue(maxPosBoth < call2.getPositionB(), name);
-
-        //quantitative checks
-        final int exactMaxPos1 = getMaxExactClusterablePosition(call1);
-        final int exactMaxPos2 = getMaxExactClusterablePosition(call2);
-        Assert.assertTrue(maxPosBoth >= exactMaxPos1, name);
-        Assert.assertTrue(maxPosBoth >= exactMaxPos2, name);
-        Assert.assertTrue(maxPosBoth >= Math.max(exactMaxPos1, exactMaxPos2), name);
+    @Test(dataProvider= "maxPositionIntervals")
+    private void testGetMaxClusterableStartingPosition(final int start, final int end) {
+        testGetMaxClusterableStartingPositionWithAlgorithm(start, end, GATKSVVCFConstants.DEPTH_ALGORITHM);
+        testGetMaxClusterableStartingPositionWithAlgorithm(start, end, "pesr");
     }
 
-    final int getMaxExactClusterablePosition(final SVCallRecord record) {
-        int pos = record.getPositionA() + 1;
-        while (pos <= record.getPositionB()) {
-            final SVCallRecord testRecord = new SVCallRecord("", record.getContigA(), pos, record.getStrandA(),
-                    record.getContigB(), pos + record.getLength(), record.getStrandB(), record.getType(),
-                    record.getLength(), record.getAlgorithms(), record.getAlleles(), record.getGenotypes());
-            if (engine.clusterTogether(record, testRecord)) {
-                pos++;
-            } else {
-                return pos - 1;
-            }
-        }
-        throw new TestException("Max clusterable position not found");
+    private void testGetMaxClusterableStartingPositionWithAlgorithm(final int start, final int end, final String algorithm) {
+        final SVCallRecord call1 = new SVCallRecord("call1", "chr1", start, true, "chr1", end, false, StructuralVariantType.DEL,
+                end - start + 1, Collections.singletonList(algorithm),
+                Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL),
+                Collections.emptyList(), Collections.emptyMap());
+        final int maxClusterableStart = engine.getMaxClusterableStartingPosition(call1);
+
+        final int call2Start = maxClusterableStart;
+        final SVCallRecord call2Depth = new SVCallRecord("call2", "chr1", call2Start, true, "chr1", call2Start + call1.getLength() - 1, false, StructuralVariantType.DEL,
+                call1.getLength(), Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
+                Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL),
+                Collections.emptyList(), Collections.emptyMap());
+        final SVCallRecord call2Pesr = new SVCallRecord("call2", "chr1", call2Start, true, "chr1", call2Start + call1.getLength() - 1, false, StructuralVariantType.DEL,
+                call1.getLength(), Collections.singletonList("pesr"),
+                Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL),
+                Collections.emptyList(), Collections.emptyMap());
+        Assert.assertTrue(engine.clusterTogether(call1, call2Depth) || engine.clusterTogether(call1, call2Pesr));
+
+        final int call3Start = maxClusterableStart + 1;
+        final SVCallRecord call3Depth = new SVCallRecord("call2", "chr1", call3Start, true, "chr1", call3Start + call1.getLength() - 1, false, StructuralVariantType.DEL,
+                call1.getLength(), Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
+                Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL),
+                Collections.emptyList(), Collections.emptyMap());
+        final SVCallRecord call3Pesr = new SVCallRecord("call2", "chr1", call3Start, true, "chr1", call3Start + call1.getLength() - 1, false, StructuralVariantType.DEL,
+                call1.getLength(), Collections.singletonList("pesr"),
+                Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL),
+                Collections.emptyList(), Collections.emptyMap());
+        Assert.assertFalse(engine.clusterTogether(call1, call3Depth) || engine.clusterTogether(call1, call3Pesr));
     }
 
     @Test

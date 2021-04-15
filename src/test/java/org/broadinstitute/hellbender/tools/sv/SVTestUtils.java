@@ -91,21 +91,14 @@ public class SVTestUtils {
                     glParser.createGenomeLoc("chr10", start, start + length - 1)))
             ;
 
+    public final static Genotype sample1 = new GenotypeBuilder("sample1", Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL))
+            .attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 1).make();
 
+    public final static Genotype sample1_CN0 = new GenotypeBuilder("sample1", Lists.newArrayList(Allele.SV_SIMPLE_DEL, Allele.SV_SIMPLE_DEL))
+            .attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 0).make();
 
-    public final static GenotypeBuilder gb1 = new GenotypeBuilder("sample1", Collections.singletonList(Allele.create("<"+ GATKSVVCFConstants.SYMB_ALT_STRING_DEL +">", false)));
-    public final static GenotypeBuilder gb2 = new GenotypeBuilder("sample1", Collections.singletonList(Allele.create("<"+ GATKSVVCFConstants.SYMB_ALT_STRING_DEL +">", false)));
-
-    public final static Genotype sample1 = gb1.attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 1).make();
-
-    public final static Genotype sample1_CN0 = gb2.attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 0).make();
-
-    public final static Map<String, Object> sample2AttributeMap = Collections.singletonMap(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 3);
-
-    public final static Map<String, Object> sample3AttributeMap = Collections.singletonMap(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 0);
-
-    public final static Genotype sample2 = GenotypeBuilder.create("sample2",
-            Collections.singletonList(Allele.create("<"+GATKSVVCFConstants.SYMB_ALT_STRING_DUP +">", false)), sample2AttributeMap);
+    public final static Genotype sample2 = GenotypeBuilder.create("sample2", Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DUP),
+            Collections.singletonMap(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 3));
 
     public final static SVCallRecord rightEdgeCall = new SVCallRecord("rightEdgeCall", "chr1", chr1Length - 99, true,
             "chr1", chr1Length, true,
@@ -178,7 +171,8 @@ public class SVTestUtils {
             Arrays.asList(sample1_CN0));
 
     public final static Genotype sample3 = GenotypeBuilder.create("sample3",
-            Collections.singletonList(Allele.create("<"+GATKSVVCFConstants.SYMB_ALT_STRING_DEL +">", false)), sample3AttributeMap);
+            Lists.newArrayList(Allele.SV_SIMPLE_DEL, Allele.SV_SIMPLE_DEL),
+            Collections.singletonMap(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 0));
 
     public final static SVCallRecord sameBoundsSampleMismatch = new SVCallRecord("sameBoundsSampleMismatch", "chr1", start, true,
             "chr1", start + length -1, true,

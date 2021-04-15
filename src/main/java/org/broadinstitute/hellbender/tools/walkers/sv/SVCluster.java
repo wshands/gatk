@@ -133,7 +133,7 @@ public final class SVCluster extends MultiVariantWalker {
             doc = "Padding as a fraction of variant length (CNV defragmentation only)",
             optional = true
     )
-    private double defragPaddingFraction = CNVDefragmenter.getDefaultPaddingFraction();
+    private double defragPaddingFraction = CNVDefragmenter.DEFAULT_PADDING_FRACTION;
 
     @Argument(fullName = ALGORITHM_LONG_NAME,
             doc = "Clustering algorithm",
@@ -145,7 +145,7 @@ public final class SVCluster extends MultiVariantWalker {
             doc = "Extend events by this fraction on each side when determining overlap to merge",
             optional = true
     )
-    private double defragmentationPadding = CNVDefragmenter.getDefaultPaddingFraction();
+    private double defragmentationPadding = CNVDefragmenter.DEFAULT_PADDING_FRACTION;
 
     @ArgumentCollection
     private final SVClusterEngineArgumentsCollection clusterParameters = new SVClusterEngineArgumentsCollection();
