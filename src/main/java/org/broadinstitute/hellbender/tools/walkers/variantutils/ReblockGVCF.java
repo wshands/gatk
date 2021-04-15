@@ -157,8 +157,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
     @Argument(fullName=KEEP_ALL_ALTS_ARG_NAME, doc="Keep all ALT alleles and full PL array for most accurate GQs")
     protected boolean keepAllAlts = false;
 
-    @Advanced
-    @Argument(fullName=POSTERIORS_KEY_LONG_NAME, doc="INFO field key corresponding to the posterior genotype probabilities", optional = true)
+    //TODO: this will be an argument when posteriors handling is fully implemented in AlleleSubsettingUtils
     protected String posteriorsKey = null;
 
     /**
@@ -170,9 +169,9 @@ public final class ReblockGVCF extends MultiVariantWalker {
     // the genotyping engine
     private HaplotypeCallerGenotypingEngine genotypingEngine;
     // the annotation engine
-    private VariantAnnotatorEngine annotationEngine;
+    private static VariantAnnotatorEngine annotationEngine;
     // the INFO field annotation key names to remove
-    private final List<String> infoFieldAnnotationKeyNamesToRemove = Arrays.asList(GVCFWriter.GVCF_BLOCK, GATKVCFConstants.HAPLOTYPE_SCORE_KEY,
+    private static final List<String> infoFieldAnnotationKeyNamesToRemove = Arrays.asList(GVCFWriter.GVCF_BLOCK, GATKVCFConstants.HAPLOTYPE_SCORE_KEY,
             GATKVCFConstants.INBREEDING_COEFFICIENT_KEY, GATKVCFConstants.MLE_ALLELE_COUNT_KEY,
             GATKVCFConstants.MLE_ALLELE_FREQUENCY_KEY, GATKVCFConstants.EXCESS_HET_KEY, GATKVCFConstants.AS_INBREEDING_COEFFICIENT_KEY,
             GATKVCFConstants.DOWNSAMPLED_KEY);
@@ -242,7 +241,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
         vcfWriter.writeHeader(new VCFHeader(headerLines, getSamplesForVariants()));  //don't get samples from header -- multi-variant inputHeader doens't have sample names
 
         if (genotypeArgs.samplePloidy != PLOIDY_TWO) {
-            throw new UserException.BadInput("The -ploidy parameter is ignored in " + getClass().getSimpleName() + " tool as this tool maintains input ploidy for each genotype");
+            logger.warn("The -ploidy parameter is ignored in " + getClass().getSimpleName() + " tool as this tool maintains input ploidy for each genotype");
         }
 
          referenceReader = ReferenceUtils.createReferenceReader(referenceArguments.getReferenceSpecifier());
@@ -276,19 +275,11 @@ public final class ReblockGVCF extends MultiVariantWalker {
             vcfOutputEnd = 0;
         }
         final VariantContext newVC;
-        try {
-            newVC = regenotypeVC(variant);
-        } catch (final Exception e) {
-            throw new GATKException("Exception thrown at " + variant.getContig() + ":" + variant.getStart() + " " + variant.toString(), e);
-        }
+        newVC = regenotypeVC(variant);
         if (newVC != null) {
-            try {
-                vcfWriter.add(newVC);
-                if (newVC.getEnd() > vcfOutputEnd) {
-                    vcfOutputEnd = newVC.getEnd();
-                }
-            } catch (Exception e) {
-                throw new GATKException("Exception thrown at " + newVC.getContig() + ":" + newVC.getStart() + " " + newVC.toString(), e);
+            vcfWriter.add(newVC);
+            if (newVC.getEnd() > vcfOutputEnd) {
+                vcfOutputEnd = newVC.getEnd();
             }
         }
     }
@@ -331,18 +322,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
                 return null;
             }
             //make sure result has annotations so we don't have to keep originalVC around
-            final Map<String, Object> newAnnotations;
-            if (regenotyped.getNAlleles() != originalVC.getNAlleles()) {
-                final Permutation<Allele> allelePermutation = new IndexedAlleleList<>(originalVC.getAlleles()).
-                        permutation(new IndexedAlleleList<>(regenotyped.getAlleles()));
-                final int[] relevantIndices = IntStream.range(0, regenotyped.getAlleles().size())
-                        .map(n -> allelePermutation.fromIndex(n)).toArray();
-                newAnnotations = new LinkedHashMap<>();
-                composeUpdatedAnnotations(originalVC, newAnnotations, relevantIndices, regenotyped);
-            } else {
-                newAnnotations = originalVC.getAttributes();
-            }
-            result = new VariantContextBuilder(regenotyped).attributes(newAnnotations).make();
+            result = new VariantContextBuilder(regenotyped).attributes(subsetAnnotationsIfNecessary(annotationEngine, doQualApprox, posteriorsKey, originalVC, regenotyped)).make();
         }
 
 
@@ -373,6 +353,32 @@ public final class ReblockGVCF extends MultiVariantWalker {
     }
 
     /**
+     *
+     * @param doQualApprox
+     * @param posteriorsKey
+     * @param originalVC
+     * @param regenotyped   should have a strict subset of alleles in originalVC, untrimmed
+     * @return
+     */
+    @VisibleForTesting
+    static Map<String, Object> subsetAnnotationsIfNecessary(final VariantAnnotatorEngine annotationEngine,
+                                                            final boolean doQualApprox, final String posteriorsKey,
+                                                            final VariantContext originalVC, final VariantContext regenotyped) {
+        final Map<String, Object> newAnnotations;
+        if (regenotyped.getNAlleles() != originalVC.getNAlleles()) {
+            final Permutation<Allele> allelePermutation = new IndexedAlleleList<>(originalVC.getAlleles()).
+                    permutation(new IndexedAlleleList<>(regenotyped.getAlleles()));
+            final int[] relevantIndices = IntStream.range(0, regenotyped.getAlleles().size())
+                    .map(n -> allelePermutation.fromIndex(n)).toArray();
+            newAnnotations = new LinkedHashMap<>();
+            composeUpdatedAnnotations(annotationEngine, doQualApprox, posteriorsKey, originalVC, newAnnotations, relevantIndices, regenotyped);
+        } else {
+            newAnnotations = originalVC.getAttributes();
+        }
+        return newAnnotations;
+    }
+
+    /**
      * Write and remove ref blocks that end before the variant
      * Trim ref block if the variant occurs in the middle of a block
      * @param variantContextToOutput can overlap existing ref blocks in buffer, but should never start before vcfOutputEnd
@@ -382,7 +388,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
             return;
         }
         Utils.validate(variantContextToOutput.getStart() <= variantContextToOutput.getEnd(),
-                "Input variant context at position " + currentContig + ":" + variantContextToOutput.getStart() + " has negative length: start=" + variantContextToOutput.getStart() + " end=" + variantContextToOutput.getEnd());
+                () -> "Input variant context at position " + currentContig + ":" + variantContextToOutput.getStart() + " has negative length: start=" + variantContextToOutput.getStart() + " end=" + variantContextToOutput.getEnd());
         if (variantContextToOutput.getGenotype(0).isHomRef() && variantContextToOutput.getStart() < vcfOutputEnd) {
             throw new IllegalStateException("Reference positions added to buffer should not overlap positions already output to VCF. "
                     + variantContextToOutput.getStart() + " overlaps position " + currentContig + ":" + vcfOutputEnd + " already emitted.");
@@ -481,23 +487,24 @@ public final class ReblockGVCF extends MultiVariantWalker {
      */
     private boolean isMonomorphicCallWithAlts(final VariantContext result) {
         final Genotype genotype = result.getGenotype(0);
-        return (hasGenotypeValuesArray(genotype)
-                && (genotype.isHomRef() || isNoCalledHomRef(genotype) || (genotype.hasPL() && MathUtils.minElementIndex(genotype.getPL()) == 0))
+        return (hasGenotypeValuesArray(posteriorsKey, genotype)
+                && (genotype.isHomRef() || isNoCalledHomRef(posteriorsKey, genotype) || (genotype.hasPL() && MathUtils.minElementIndex(genotype.getPL()) == 0))
                 && result.getAlternateAlleles().stream().anyMatch(this::isConcreteAlt));
     }
 
     /**
      *
+     * @param posteriorsKey
      * @param genotype  a genotype that may or may not have likelihood/probability data
      * @return true if we can quantify genotype call
      */
-    private boolean hasGenotypeValuesArray(final Genotype genotype) {
+    private static boolean hasGenotypeValuesArray(String posteriorsKey, final Genotype genotype) {
         return genotype.hasPL() || (posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey));
     }
 
-    private boolean isNoCalledHomRef(final Genotype genotype) {
+    private static boolean isNoCalledHomRef(String posteriorsKey, final Genotype genotype) {
         return genotype.isNoCall()
-                && hasGenotypeValuesArray(genotype)
+                && hasGenotypeValuesArray(posteriorsKey, genotype)
                 && getGenotypePosteriorsOtherwiseLikelihoods(genotype, posteriorsKey)[0] == 0;
     }
 
@@ -575,8 +582,8 @@ public final class ReblockGVCF extends MultiVariantWalker {
         return (pls != null && pls[0] < rgqThreshold)
                 || !genotypeHasConcreteAlt(finalAlleles)
                 || finalAlleles.stream().anyMatch(a -> a.equals(Allele.NON_REF_ALLELE))
-                || (!genotype.hasPL() && !genotype.hasGQ())
-                || (genotype.hasDP() && genotype.getDP() == 0);
+                || (!genotype.hasPL() && !genotype.hasGQ());
+                //|| (genotype.hasDP() && genotype.getDP() == 0);
     }
 
     /**
@@ -753,31 +760,33 @@ public final class ReblockGVCF extends MultiVariantWalker {
         final ArrayList<Genotype> genotypesArray = removeNonRefADs(updatedAllelesGenotype, updatedAllelesVC.getAlleleIndex(Allele.NON_REF_ALLELE));
         builder.genotypes(genotypesArray);
 
-        composeUpdatedAnnotations(variant, attrMap, relevantIndices, updatedAllelesVC);
+        composeUpdatedAnnotations(annotationEngine, doQualApprox, posteriorsKey, variant, attrMap, relevantIndices, updatedAllelesVC);
 
         return builder.attributes(attrMap).unfiltered().make();
     }
 
     /**
      * Update annotations if alleles were subset and add annotations specific to ReblockGVCF, like QUALapprox and RAW_GT_COUNT
+     * @param annotationEngine
+     * @param doQualApprox
+     * @param posteriorsKey
      * @param variant   variant context with full annotation data
      * @param attrMap   annotation map to modify with new annotations
      * @param relevantIndices   indexes of alleles in updatedAllelesVC with respect to variant
      * @param updatedAllelesVC  variant context with final set of alleles
      */
-    private void composeUpdatedAnnotations(final VariantContext variant, final Map<String, Object> attrMap,
-                                           final int[] relevantIndices, final VariantContext updatedAllelesVC) {
+    private static void composeUpdatedAnnotations(VariantAnnotatorEngine annotationEngine, boolean doQualApprox, String posteriorsKey, final VariantContext variant, final Map<String, Object> attrMap,
+                                                  final int[] relevantIndices, final VariantContext updatedAllelesVC) {
         updateMQAnnotations(variant, attrMap);
 
         final boolean allelesNeedSubsetting = relevantIndices.length < variant.getNAlleles();
-        copyInfoAnnotations(variant, attrMap, allelesNeedSubsetting, relevantIndices);
+        copyInfoAnnotations(annotationEngine, infoFieldAnnotationKeyNamesToRemove, variant, attrMap, allelesNeedSubsetting, relevantIndices);
 
         //generate qual annotations after we potentially drop alleles
         final Genotype updatedAllelesGenotype = updatedAllelesVC.getGenotype(0);
         if (doQualApprox) {
-            //TODO: update to support DRAGEN posteriors
-            if (updatedAllelesGenotype.hasPL()) {
-                addQualAnnotations(attrMap, updatedAllelesVC);
+            if (hasGenotypeValuesArray(posteriorsKey, updatedAllelesGenotype)) {
+                addQualAnnotations(annotationEngine, posteriorsKey, attrMap, updatedAllelesVC);
             }
         } else {  //manually copy annotations that might be from reblocking and aren't part of AnnotationEngine
             if (variant.hasAttribute(GATKVCFConstants.AS_VARIANT_DEPTH_KEY)) {
@@ -849,10 +858,11 @@ public final class ReblockGVCF extends MultiVariantWalker {
 
     /**
      * Add the "raw" annotations necessary for calculating QD and AS_QD
+     * @param posteriorsKey
      * @param attrMap   has qual-related annotations added to it, but also potentially supplies DP value
      * @param updatedAllelesVC  variant context without uncalled alts
      */
-    private void addQualAnnotations(final Map<String, Object> attrMap, final VariantContext updatedAllelesVC) {
+    private static void addQualAnnotations(final VariantAnnotatorEngine annotationEngine, final String posteriorsKey, final Map<String, Object> attrMap, final VariantContext updatedAllelesVC) {
         final Genotype updatedAllelesGenotype = updatedAllelesVC.getGenotype(0);
         attrMap.put(GATKVCFConstants.RAW_QUAL_APPROX_KEY, updatedAllelesGenotype.getPL()[0]);
         int varDP = QualByDepth.getDepth(updatedAllelesVC.getGenotypes(), null);
@@ -927,13 +937,16 @@ public final class ReblockGVCF extends MultiVariantWalker {
 
     /**
      * Add the original annotations to the map for the new VC, subsetting AS annotations as necessary
+     * Note that it is expected that both variant contexts contain a NON_REF allele
+     * @param annotationEngine
+     * @param infoFieldAnnotationKeyNamesToRemove
      * @param originalVC    VC with full set of alleles and INFO annotations
      * @param newVCAttrMap   map of new annotations, to be modified
      * @param allelesNeedSubsetting do we have to subset allele-specific annotations?
      * @param relevantIndices   indexes for called alleles within the full alleles set from original VC
      */
-    private void copyInfoAnnotations(final VariantContext originalVC, final Map<String, Object> newVCAttrMap,
-                                     final boolean allelesNeedSubsetting, final int[] relevantIndices) {
+    private static void copyInfoAnnotations(VariantAnnotatorEngine annotationEngine, List<String> infoFieldAnnotationKeyNamesToRemove, final VariantContext originalVC, final Map<String, Object> newVCAttrMap,
+                                            final boolean allelesNeedSubsetting, final int[] relevantIndices) {
         //copy over info annotations
         final Map<String, Object> origMap = originalVC.getAttributes();
         for(final InfoFieldAnnotation annotation : annotationEngine.getInfoAnnotations()) {
@@ -977,7 +990,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @param originalVC    VariantContext that may contain deprecated mapping quality annotations
      * @param newVCAttrMap   modified to add mapping quality raw annotations
      */
-    private void updateMQAnnotations(final VariantContext originalVC, final Map<String, Object> newVCAttrMap) {
+    private static void updateMQAnnotations(final VariantContext originalVC, final Map<String, Object> newVCAttrMap) {
         //all VCs should get new RAW_MAPPING_QUALITY_WITH_DEPTH_KEY, but preserve deprecated keys if present
         if (!originalVC.hasAttribute(GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY)) {
             //we're going to approximate depth for MQ calculation with the site-level DP (should be informative and uninformative reads),
@@ -988,7 +1001,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
                             originalVC.getAttributeAsDouble(VCFConstants.RMS_MAPPING_QUALITY_KEY, 60.0) *
                             originalVC.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));
             newVCAttrMap.put(GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY,
-                    String.format("%d,%d", rawMqValue, originalVC.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0)));
+                    rawMqValue + "," + originalVC.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));
 
             //NOTE: this annotation is deprecated, but keep it here so we don't have to reprocess older GVCFs
             if (originalVC.hasAttribute(GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_DEPRECATED)) {
@@ -1078,7 +1091,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
      * @param posteriorsKey may be null
      * @return may be null
      */
-    private int[] getGenotypePosteriorsOtherwiseLikelihoods(final Genotype genotype, final String posteriorsKey) {
+    private static int[] getGenotypePosteriorsOtherwiseLikelihoods(final Genotype genotype, final String posteriorsKey) {
         if ((posteriorsKey != null && genotype.hasExtendedAttribute(posteriorsKey))) {
             final double[] posteriors = VariantContextGetters.getAttributeAsDoubleArray(genotype, posteriorsKey, () -> null, 0);
             return Arrays.stream(posteriors).mapToInt(x -> (int)Math.round(x)).toArray();

@@ -89,7 +89,8 @@ public abstract class GVCFBlock implements Locatable {
      * @return
      */
     public boolean isContiguous(final VariantContext vc) {
-        return (vc.getStart() >= getStart()) && (vc.getStart() <= getEnd() + 1) && startingVC.getContig().equals(vc.getContig());
+        //return (vc.getStart() >= getStart()) && (vc.getStart() <= getEnd() + 1) && startingVC.getContig().equals(vc.getContig());
+        return vc.overlaps(this) || vc.withinDistanceOf(this, 1);
     }
 
     public VariantContext getStartingVC() {

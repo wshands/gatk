@@ -34,7 +34,7 @@ public class ReblockGVCFIntegrationTest extends CommandLineProgramTest {
     public void testJustOneSample() throws Exception {
         final IntegrationTestSpec spec = new IntegrationTestSpec(
                 "-L chr20:69771 -O %s -R " + hg38_reference_20_21 +
-                        " -V " + getToolTestDataDir() + "gvcfForReblocking.g.vcf -rgq-threshold 20" +
+                        " -V " + getToolTestDataDir() + "gvcfForReblocking.g.vcf -rgq-threshold 19" +
                         " --" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE + " false",
                 Arrays.asList(getToolTestDataDir() + "testJustOneSample.expected.g.vcf"));
         spec.executeTest("testJustOneSample", this);

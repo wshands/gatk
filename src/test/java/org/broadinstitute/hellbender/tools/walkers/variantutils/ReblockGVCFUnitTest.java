@@ -13,6 +13,12 @@ import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.walkers.annotator.Coverage;
+import org.broadinstitute.hellbender.tools.walkers.annotator.RMSMappingQuality;
+import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
+import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.AS_FisherStrand;
+import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.AS_RMSMappingQuality;
+import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.AS_ReadPosRankSumTest;
 import org.broadinstitute.hellbender.utils.reference.ReferenceUtils;
 import htsjdk.variant.vcf.VCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -30,6 +36,8 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
     private final static Allele DELETION = Allele.create("A", false);
     private final static Allele SHORT_REF = Allele.create("A", true);
     private final static Allele LONG_SNP = Allele.create("TCTA", false);
+    private final static Allele SHORT_SNP = Allele.create("T", false);
+    private final static int EXAMPLE_DP = 18;
 
     @Test
     public void testCleanUpHighQualityVariant() {
@@ -283,6 +291,40 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         Assert.assertTrue(outVCs.get(2).isVariant());
     }
 
+    @Test
+    public void testAnnotationSubsetting() {
+        final VariantAnnotatorEngine annotationEngine = new VariantAnnotatorEngine(Arrays.asList(new Coverage(), new AS_RMSMappingQuality(),
+                new RMSMappingQuality(), new AS_ReadPosRankSumTest(), new AS_FisherStrand()), null, Collections.emptyList(), false, false);
+
+        final Genotype g0 = VariantContextTestUtils.makeG("sample1", LONG_REF, LONG_SNP, 41, 0, 37, 200, 100, 200, 400, 600, 800, 1200, 5000, 5000, 5000, 5000, 5000);
+        final Genotype g = addAD(g0,13,17,0,0,1);
+
+        final VariantContext originalVCbase = makeDeletionVC("", Arrays.asList(LONG_REF, LONG_SNP, DELETION, Allele.NON_REF_ALLELE), LONG_REF.length(), g);
+        final VariantContextBuilder originalBuilder = new VariantContextBuilder(originalVCbase);
+        final Map<String, Object> origAttributes = new LinkedHashMap<>();
+        origAttributes.put(VCFConstants.DEPTH_KEY, 93);
+        origAttributes.put(GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_DEPRECATED, "329810.0");
+        origAttributes.put(GATKVCFConstants.AS_RAW_READ_POS_RANK_SUM_KEY, "|-2.1,1|NaN|NaN");
+        origAttributes.put(GATKVCFConstants.AS_SB_TABLE_KEY, "17,18|8,5|0,0|0,1");
+        origAttributes.put(GATKVCFConstants.AS_RAW_RMS_MAPPING_QUALITY_KEY, "123769.00|46800.00|0.00|0.00");
+        originalBuilder.attributes(origAttributes);
+        final VariantContext originalVC = originalBuilder.make();
+        final Genotype newG = VariantContextTestUtils.makeG("sample1", LONG_REF, LONG_SNP, 41, 0, 37, 200, 100, 200, 400, 600, 800, 1200);
+        final VariantContext regenotypedVC = makeDeletionVC("", Arrays.asList(LONG_REF, LONG_SNP, Allele.NON_REF_ALLELE), LONG_REF.length(), newG);
+
+        final Map<String, Object> subsetAnnotations = ReblockGVCF.subsetAnnotationsIfNecessary(annotationEngine, true, null, originalVC, regenotypedVC);
+        Assert.assertTrue(subsetAnnotations.containsKey(VCFConstants.DEPTH_KEY));
+        Assert.assertEquals(subsetAnnotations.get(VCFConstants.DEPTH_KEY), 93);
+
+        Assert.assertEquals(subsetAnnotations.get(GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY), "329810,93");
+        Assert.assertEquals(subsetAnnotations.get(GATKVCFConstants.RAW_RMS_MAPPING_QUALITY_DEPRECATED), 329810.0);
+        Assert.assertEquals(subsetAnnotations.get(GATKVCFConstants.MAPPING_QUALITY_DEPTH_DEPRECATED), 93);
+
+        Assert.assertEquals(subsetAnnotations.get(GATKVCFConstants.AS_RAW_READ_POS_RANK_SUM_KEY), "|-2.1,1|NaN");
+        Assert.assertEquals(subsetAnnotations.get(GATKVCFConstants.AS_SB_TABLE_KEY), "17,18|8,5|0,0");
+        Assert.assertEquals(subsetAnnotations.get(GATKVCFConstants.AS_RAW_RMS_MAPPING_QUALITY_KEY), "123769.00|46800.00|0.00");
+    }
+
     private GVCFWriter setUpWriter(final File outputFile, final File dictionary) throws IOException {
         final VariantContextWriterBuilder builder = new VariantContextWriterBuilder();
         builder.setOutputPath(outputFile.toPath());
@@ -312,7 +354,14 @@ public class ReblockGVCFUnitTest extends CommandLineProgramTest {
         final int start = 10;
         final int stop = start+refLength-1;
         return new VariantContextBuilder(source, "1", start, stop, alleles)
-                .genotypes(Arrays.asList(genotypes)).unfiltered().log10PError(-3.0).attribute(VCFConstants.DEPTH_KEY, 18).make();
+                .genotypes(Arrays.asList(genotypes)).unfiltered().log10PError(-3.0).attribute(VCFConstants.DEPTH_KEY, EXAMPLE_DP).make();
+    }
+
+    private VariantContext makeSNPVC(final String source, final List<Allele> alleles, final int refLength, final Genotype... genotypes) {
+        final int start = 10;
+        final int stop = start;
+        return new VariantContextBuilder(source, "1", start, stop, alleles)
+                .genotypes(Arrays.asList(genotypes)).unfiltered().make();
     }
 
     private Genotype addAD(final Genotype g, final int... ads) {

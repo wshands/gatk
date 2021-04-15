@@ -92,7 +92,7 @@ public final class AlleleSubsettingUtils {
                 final Map<String, Object> attributes = new HashMap<>(g.getExtendedAttributes());
                 gb.PL(newLikelihoods).log10PError(newLog10GQ);
                 attributes.remove(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY);
-                //TODO: make this more rigorous, e.g. remove other G-length attributes
+                //TODO: remove other G-length attributes, although that may require header parsing
                 attributes.remove("GP");
                 attributes.remove("PG");
                 gb.noAttributes().attributes(attributes);
@@ -368,7 +368,7 @@ public final class AlleleSubsettingUtils {
      * SUM_{samples whose likeliest genotype contains this alt allele} log(likelihood alt / likelihood hom ref)
      */
     @VisibleForTesting
-    static double[] calculateLikelihoodSums(final VariantContext vc, final int defaultPloidy, final boolean useHomRefData) {
+    static double[] calculateLikelihoodSums(final VariantContext vc, final int defaultPloidy, final boolean allHomRefData) {
         final double[] likelihoodSums = new double[vc.getNAlleles()];
         for ( final Genotype genotype : vc.getGenotypes().iterateInSampleNameOrder() ) {
             final GenotypeLikelihoods gls = genotype.getLikelihoods();
@@ -376,7 +376,7 @@ public final class AlleleSubsettingUtils {
                 continue;
             }
             final double[] glsVector = gls.getAsVector();
-            final int indexOfMostLikelyVariantGenotype = MathUtils.maxElementIndex(glsVector, useHomRefData ? 0 : 1, glsVector.length - 1);
+            final int indexOfMostLikelyVariantGenotype = MathUtils.maxElementIndex(glsVector, allHomRefData ? 1 : 0, glsVector.length - 1);
             final double GLDiffBetweenRefAndBestVariantGenotype = Math.abs(glsVector[indexOfMostLikelyVariantGenotype] - glsVector[PL_INDEX_OF_HOM_REF]);
             final int ploidy = genotype.getPloidy() > 0 ? genotype.getPloidy() : defaultPloidy;
 
