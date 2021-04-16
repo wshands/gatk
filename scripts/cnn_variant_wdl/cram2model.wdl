@@ -185,6 +185,12 @@ task TrainModel {
     String tensor_type
     Int epochs
 
+    String conv_layers = "[128, 96, 64, 48]"
+    String fc_layers = "[32]"
+    Int training_steps = 10
+    Int validation_steps = 2
+
+
     # Runtime parameters
     String gatk_docker
     File? gatk_override
@@ -212,7 +218,11 @@ task TrainModel {
         -model-name ${output_prefix} \
         -image-dir "./" \
         -tensor-type ${tensor_type} \
-        -epochs ${epochs}
+        -epochs ${epochs} \
+        -conv-layers ${conv_layers} \
+        -fc-layers ${fc_layers} \
+        -training-steps ${training_steps} \
+        -validation_steps ${validation_steps}
     }
 
     output {
