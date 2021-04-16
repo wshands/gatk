@@ -14,9 +14,9 @@ public final class GenotypeUtils {
     }
 
     /**
-     * Returns true if the genotype is a diploid genotype with GQ.  Useful for reblocked GVCFs.
+     * Returns true if the genotype is a diploid genotype with likelihoods.
      */
-    public static boolean isDiploidWithLikelihoodsOrCalleDWithGQ(final Genotype g) {
+    public static boolean isDiploidWithLikelihoodsOrCalledWithGQ(final Genotype g) {
         return (Utils.nonNull(g).hasLikelihoods() || (g.isCalled() && g.hasGQ())) && g.getPloidy() == 2;
     }
 
@@ -49,8 +49,23 @@ public final class GenotypeUtils {
         double genotypesWithNoRefsCount = 0;  //e.g. 1/1, 1/2, 2/2, etc.
 
         for (final Genotype g : genotypes) {
-            if (! isDiploidWithLikelihoodsOrCalleDWithGQ(g)){
+            if (!roundContributionFromEachGenotype && !isDiploidWithLikelihoods(g)){
                 continue;
+            }
+            if (!isDiploidWithLikelihoodsOrCalledWithGQ(g)) {
+                continue;
+            }
+
+            if (!g.hasLikelihoods() && g.isHomRef()) {
+                if (roundContributionFromEachGenotype) {
+                    genotypeWithTwoRefsCount += 1;
+                    continue;
+                } else {
+                    genotypeWithTwoRefsCount += 1 - QualityUtils.qualToProb(g.getGQ());
+                    genotypesWithOneRefCount += QualityUtils.qualToProb(g.getGQ());
+                    //assume last likelihood is negligible
+                    continue;
+                }
             }
 
             // Genotype::getLikelihoods returns a new array, so modification in-place is safe
