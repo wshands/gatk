@@ -49,7 +49,7 @@ public final class GenotypeUtils {
         double genotypesWithNoRefsCount = 0;  //e.g. 1/1, 1/2, 2/2, etc.
 
         for (final Genotype g : genotypes) {
-            if (! isDiploidWithLikelihoods(g)){
+            if (! isDiploidWithLikelihoodsOrCalleDWithGQ(g)){
                 continue;
             }
 
