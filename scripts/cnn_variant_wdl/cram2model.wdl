@@ -12,6 +12,7 @@ workflow Cram2TrainedModel {
     File truth_vcf_index
     File truth_bed
     String output_prefix
+    String train_output_prefix
     String tensor_type
     Int epochs
     File calling_intervals
@@ -104,7 +105,7 @@ workflow Cram2TrainedModel {
     call TrainModel {
         input:
             tar_tensors = WriteTensors.tensors,
-            output_prefix = output_prefix,
+            output_prefix = train_output_prefix,
             tensor_type = tensor_type,
             gatk_docker = gatk_docker,
             gatk_override = gatk_override,
