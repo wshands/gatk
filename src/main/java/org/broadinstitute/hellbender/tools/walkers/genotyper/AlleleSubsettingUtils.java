@@ -281,6 +281,8 @@ public final class AlleleSubsettingUtils {
      *
      * In the case of ties, the alleles will be chosen from lowest index to highest index.
      *
+     * For all hom-ref genotypes, calculate the most likely alt alleles
+     *
      * @param vc target variant context.
      * @param numAltAllelesToKeep number of alt alleles to keep.
      * @return the list of alleles to keep, including the reference and {@link Allele#NON_REF_ALLELE} if present
@@ -288,45 +290,10 @@ public final class AlleleSubsettingUtils {
      */
     public static List<Allele> calculateMostLikelyAlleles(final VariantContext vc, final int defaultPloidy,
                                                           final int numAltAllelesToKeep) {
-        return calculateMostLikelyAlleles(vc, defaultPloidy, numAltAllelesToKeep, false);
-    }
-
-    /**
-     * Returns the new set of alleles to use based on a likelihood score: alleles' scores are the sum of their counts in
-     * sample genotypes, weighted by the confidence in the genotype calls.
-     *
-     * In the case of ties, the alleles will be chosen from lowest index to highest index.
-     *
-     * @param vc target variant context.
-     * @param numAltAllelesToKeep number of alt alleles to keep.
-     * @return the list of alleles to keep, including the reference and {@link Allele#NON_REF_ALLELE} if present
-     *
-     */
-    public static List<Allele> calculateMostLikelyAllelesForMonomorphicSite(final VariantContext vc, final int defaultPloidy,
-                                                                            final int numAltAllelesToKeep) {
-        return calculateMostLikelyAlleles(vc, defaultPloidy, numAltAllelesToKeep, true);
-    }
-
-    /**
-     * Returns the new set of alleles to use based on a likelihood score: alleles' scores are the sum of their counts in
-     * sample genotypes, weighted by the confidence in the genotype calls.
-     *
-     * In the case of ties, the alleles will be chosen from lowest index to highest index.
-     *
-     * @param vc target variant context.
-     * @param numAltAllelesToKeep number of alt alleles to keep.
-     * @param allHomRefData do likelihood calculations for a monomorphic site
-     * @return the list of alleles to keep, including the reference and {@link Allele#NON_REF_ALLELE} if present
-     *
-     */
-    private static List<Allele> calculateMostLikelyAlleles(final VariantContext vc, final int defaultPloidy,
-                                                          final int numAltAllelesToKeep, final boolean allHomRefData) {
         Utils.nonNull(vc, "vc is null");
         Utils.validateArg(defaultPloidy > 0, () -> "default ploidy must be > 0 but defaultPloidy=" + defaultPloidy);
         Utils.validateArg(numAltAllelesToKeep > 0, () -> "numAltAllelesToKeep must be > 0, but numAltAllelesToKeep=" + numAltAllelesToKeep);
-        if (allHomRefData) {
-            Utils.validate(vc.getGenotypes().stream().allMatch(g -> g.hasPL() && g.getPL()[0] == 0), "Site contains variant genotypes, but method was called for monomorphic site.");
-        }
+        final boolean allHomRefData = vc.getGenotypes().stream().allMatch(g -> g.hasPL() && g.getPL()[0] == 0);
 
         final boolean hasSymbolicNonRef = vc.hasAllele(Allele.NON_REF_ALLELE);
         final int numberOfAllelesThatArentProperAlts = hasSymbolicNonRef ? 2 : 1; 
