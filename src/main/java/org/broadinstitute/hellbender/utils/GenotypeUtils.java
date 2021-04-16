@@ -16,8 +16,8 @@ public final class GenotypeUtils {
     /**
      * Returns true if the genotype is a diploid genotype with GQ.  Useful for reblocked GVCFs.
      */
-    public static boolean isDiploidWithGQ(final Genotype g) {
-        return Utils.nonNull(g).hasGQ() && g.getPloidy() == 2;
+    public static boolean isDiploidWithLikelihoodsOrCalleDWithGQ(final Genotype g) {
+        return (Utils.nonNull(g).hasLikelihoods() || (g.isCalled() && g.hasGQ())) && g.getPloidy() == 2;
     }
 
     /**
