@@ -66,8 +66,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
                                final SampleList samples,
                                final boolean doAlleleSpecificCalcs) {
         this.configuration = Utils.nonNull(configuration, "the configuration cannot be null");
-        Utils.nonNull(samples, "the sample list cannot be null");
-        Utils.nonEmpty(samples.asListOfSamples(), "the sample list cannot be empty");
+        Utils.validate(!samples.asListOfSamples().isEmpty(), "the sample list cannot be null or empty");
         this.samples = samples;
         this.doAlleleSpecificCalcs = doAlleleSpecificCalcs;
         logger = LogManager.getLogger(getClass());

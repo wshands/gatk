@@ -107,12 +107,14 @@ public final class ReblockGVCF extends MultiVariantWalker {
     public static final String ALLOW_MISSING_LONG_NAME = "allow-missing-hom-ref-data";
     public static final String POSTERIORS_KEY_LONG_NAME = "genotype-posteriors-key";
 
-    private final class VariantContextBuilderComparator implements Comparator<VariantContextBuilder> {
+    /*private final class VariantContextBuilderComparator implements Comparator<VariantContextBuilder> {
         @Override
         public int compare(final VariantContextBuilder builder1, final VariantContextBuilder builder2) {
             return (int)(builder1.getStart() - builder2.getStart());
         }
-    }
+    }*/
+    private static final Comparator<? super VariantContextBuilder> VCB_COMPARATOR = Comparator.comparingLong(VariantContextBuilder::getStart);
+
     private static final GenotypeLikelihoodCalculators GL_CALCS = new GenotypeLikelihoodCalculators();
 
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
@@ -180,7 +182,6 @@ public final class ReblockGVCF extends MultiVariantWalker {
     private String currentContig;
     private VariantContextWriter vcfWriter;
     private CachingIndexedFastaSequenceFile referenceReader;
-    private final VariantContextBuilderComparator refBufferComparator = new VariantContextBuilderComparator();
 
     @Override
     public boolean useVariantAnnotations() { return true;}
@@ -414,7 +415,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
                 }
                 if (blockStart < variantStart) { //right trim
                     if (blockStart > variantStart - 1) {
-                        throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; current builder: " + builder.getStart() + " to " + builder.getStop());
+                        throw new GATKException.ShouldNeverReachHereException("ref block start overlaps variant start; current builder: " + builder.getStart() + " to " + builder.getStop());
                     }
                     builder.attribute(VCFConstants.END_KEY, variantStart - 1);
                     builder.stop(variantStart - 1);
@@ -423,13 +424,13 @@ public final class ReblockGVCF extends MultiVariantWalker {
                         completedBlocks.add(builder);
                     } else {
                         if (blockEnd < variantEnd + 1) {
-                            throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; current builder: " + builder.getStart() + " to " + builder.getStop());
+                            throw new GATKException.ShouldNeverReachHereException("ref block end overlaps variant end; current builder: " + builder.getStart() + " to " + builder.getStop());
                         }
                         moveBuilderStart(builder, variantEnd + 1);
                     }
                 }
                 if (builder.getStart() > builder.getStop()) {
-                    throw new GATKException.ShouldNeverReachHereException("ref blocks screwed up; current builder: " + builder.getStart() + " to " + builder.getStop());
+                    throw new GATKException.ShouldNeverReachHereException("builder start follows stop; current builder: " + builder.getStart() + " to " + builder.getStop());
                 }
             }
             //only flush ref blocks if we're outputting a variant, otherwise ref blocks can be out of order
@@ -447,7 +448,7 @@ public final class ReblockGVCF extends MultiVariantWalker {
             homRefBlockBuffer.add(newHomRefBlock);
         }
         homRefBlockBuffer.addAll(tailBuffer);
-        homRefBlockBuffer.sort(refBufferComparator);  //this may seem lazy, but it's more robust to assumptions about overlap being violated
+        homRefBlockBuffer.sort(VCB_COMPARATOR);  //this may seem lazy, but it's more robust to assumptions about overlap being violated
         bufferEnd = Math.max(bufferEnd, variantContextToOutput.getEnd());
     }
 
