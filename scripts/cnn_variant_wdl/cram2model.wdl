@@ -185,8 +185,8 @@ task TrainModel {
     String tensor_type
     Int epochs
 
-    String conv_layers = "[128, 96, 64, 48]"
-    String fc_layers = "[32]"
+    Array[Int] conv_layers = [128, 96, 64, 48]
+    Array[Int] fc_layers = [32]
     Int training_steps = 10
     Int validation_steps = 2
 
@@ -219,8 +219,8 @@ task TrainModel {
         -image-dir "./" \
         -tensor-type ${tensor_type} \
         -epochs ${epochs} \
-        -conv-layers ${conv_layers} \
-        -fc-layers ${fc_layers} \
+        -conv-layers ${sep=' -conv-layers ' conv_layers} \
+        -fc-layers ${sep=' -fc-layers ' fc_layers} \
         -training-steps ${training_steps} \
         -validation-steps ${validation_steps}
     }
