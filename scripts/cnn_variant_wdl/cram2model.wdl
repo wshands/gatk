@@ -222,7 +222,7 @@ task TrainModel {
         -conv-layers ${conv_layers} \
         -fc-layers ${fc_layers} \
         -training-steps ${training_steps} \
-        -validation_steps ${validation_steps}
+        -validation-steps ${validation_steps}
     }
 
     output {
