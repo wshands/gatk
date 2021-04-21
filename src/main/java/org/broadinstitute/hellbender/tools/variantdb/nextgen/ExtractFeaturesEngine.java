@@ -252,9 +252,9 @@ public class ExtractFeaturesEngine {
         }
         builder.attribute(GATKVCFConstants.EXCESS_HET_KEY, String.format("%.3f", excessHetApprox));
 
-        if (rec.getDistinctAlleles() > CommonCode.EXCESS_ALLELES_THRESHOLD) {
-            builder.filter(GATKVCFConstants.EXCESS_ALLELES);
-        }
+//        if (rec.getDistinctAlleles() > CommonCode.EXCESS_ALLELES_THRESHOLD) {
+//            builder.filter(GATKVCFConstants.EXCESS_ALLELES);
+//        }
 
         if (rec.getHqGenotypeSamples() < 1) {
             builder.filter(GATKVCFConstants.NO_HQ_GENOTYPES);
