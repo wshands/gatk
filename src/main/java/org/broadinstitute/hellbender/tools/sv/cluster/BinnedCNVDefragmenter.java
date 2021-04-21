@@ -1,7 +1,6 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.utils.*;
 
@@ -44,22 +43,17 @@ public class BinnedCNVDefragmenter extends CNVDefragmenter {
 
         //first interval that is equal to or "greater than" the call start, such that the start of the bin should match the call start, with a little wiggle room
         final Map.Entry<GenomeLoc, Integer> startBin = genomicToBinMap.ceilingEntry(callStart);
-        if (startBin == null) {
-            throw new UserException.BadInput("Call start " + callStart + " for  call at " + contig + ":" + start + "-" + end + " not found in model call intervals.");
-        }
+        Utils.validate(startBin != null, "Call start " + callStart + " for  call at " + contig + ":" + start + "-" + end + " not found in model call intervals.");
         final int callStartIndex = startBin.getValue();
 
         //last interval that is equal to or "less than" the call start, such that the end of the bin should match the call end
         final Map.Entry<GenomeLoc, Integer> endBin = genomicToBinMap.floorEntry(callEnd);
-        if (endBin == null) {
-            throw new UserException.BadInput("Call end " + callEnd + " for call at " + contig + ":" + start + "-" + end + " not found in model call intervals.");
-        }
+        Utils.validate(endBin != null, "Call end " + callEnd + " for call at " + contig + ":" + start + "-" + end + " not found in model call intervals.");
         final int callEndIndex = endBin.getValue();
         final int callBinLength = callEndIndex - callStartIndex + 1;
-        if (callBinLength <= 0) {
-            throw new UserException.BadInput("Copy number call at " + contig + ":" + start + "-"
-                    + end + " does not align with supplied model calling intervals. Use the filtered intervals input from GermlineCNVCaller for this cohort/model.");
-        }
+        Utils.validate(callBinLength > 0, "Copy number call at " + contig + ":" + start + "-"
+                + end + " does not align with supplied model calling intervals. Use the filtered intervals input " +
+                "from GermlineCNVCaller for this cohort/model.");
 
         final int paddedStartIndex = Math.max(callStartIndex - (int)Math.round(callBinLength * paddingFraction), 0);
         final int paddedCallStart;

@@ -259,16 +259,12 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     }
 
     private final Cluster getCluster(final int id) {
-        if (!idToClusterMap.containsKey(id)) {
-            throw new IllegalArgumentException("Specified cluster ID " + id + " does not exist.");
-        }
+        Utils.validateArg(idToItemMap.containsKey(id), "Cluster ID " + id + " does not exist.");
         return idToClusterMap.get(id);
     }
 
     private final T getItem(final int id) {
-        if (!idToItemMap.containsKey(id)) {
-            throw new IllegalArgumentException("Specified item ID " + id + " does not exist.");
-        }
+        Utils.validateArg(idToItemMap.containsKey(id), "Item ID " + id + " does not exist.");
         return idToItemMap.get(id);
     }
 

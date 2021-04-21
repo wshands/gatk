@@ -85,7 +85,7 @@ public class JointGermlineCNVSegmentationTest extends CommandLineProgramTest {
                 {"NA00000", "X", null, 2},
                 {"NA00000", "Y", null, 0},
                 {"NA00000", "1", null, 2},
-                {"sample1", "X", SVTestUtils.sample1, 1}, //sample1 isn't in ped, so use GT ploidy
+                {"sample1", "X", SVTestUtils.sample1Ploidy1, 1}, //sample1 isn't in ped, so use GT ploidy
                 {"sample1", "1", SVTestUtils.sample1, 2}, //sample1 isn't in ped, but contig is autosome
         };
     }

@@ -514,4 +514,9 @@ public final class SVCallRecordUtils {
     public static boolean isAltGenotype(final Genotype g) {
         return g.getAlleles().stream().anyMatch(a -> !a.isNoCall() && !a.isReference());
     }
+
+    // TODO this is sort of hacky but the Allele compareTo() method doesn't give consistent ordering
+    public static List<Allele> sortAlleles(final Collection<Allele> alleles) {
+        return alleles.stream().sorted(Comparator.comparing(Allele::getDisplayString)).collect(Collectors.toList());
+    }
 }

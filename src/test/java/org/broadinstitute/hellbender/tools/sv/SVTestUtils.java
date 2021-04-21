@@ -95,6 +95,10 @@ public class SVTestUtils {
             Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL))
             .attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 1).make();
 
+    public final static Genotype sample1Ploidy1 = new GenotypeBuilder("sample1",
+            Lists.newArrayList(Allele.SV_SIMPLE_DEL))
+            .attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 1).make();
+
     public final static Genotype sample1_CN0 = new GenotypeBuilder("sample1",
             Lists.newArrayList(Allele.SV_SIMPLE_DEL, Allele.SV_SIMPLE_DEL))
             .attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, 0).make();
@@ -207,7 +211,6 @@ public class SVTestUtils {
             Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
             Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL, Allele.SV_SIMPLE_DUP),
             Arrays.asList(sample1, sample2));
-
 
     public static void assertEqualsExceptMembership(final SVCallRecord one, final SVCallRecord two) {
         if (one == two) return;

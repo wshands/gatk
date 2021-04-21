@@ -1,10 +1,12 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.primitives.Doubles;
 import htsjdk.variant.variantcontext.*;
 import org.apache.commons.math3.stat.descriptive.moment.Mean;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.*;
@@ -36,6 +38,7 @@ public class SVCollapser {
     }
 
     private final BreakpointSummaryStrategy breakpointSummaryStrategy;
+    private static final AlleleCollectionCollapserComparator ALLELE_COMPARATOR = new AlleleCollectionCollapserComparator();
 
     public SVCollapser(final BreakpointSummaryStrategy breakpointSummaryStrategy) {
         this.breakpointSummaryStrategy = breakpointSummaryStrategy;
@@ -73,6 +76,8 @@ public class SVCollapser {
     }
 
     protected int collapsePloidy(final Collection<Genotype> sampleGenotypes) {
+        Utils.nonNull(sampleGenotypes);
+        Utils.nonEmpty(sampleGenotypes);
         return sampleGenotypes.stream().mapToInt(Genotype::getPloidy).max().getAsInt();
     }
 
@@ -93,7 +98,8 @@ public class SVCollapser {
         }
     }
 
-    private static final String getSymbolicAlleleBaseSymbol(final Allele allele) {
+    @VisibleForTesting
+    protected static final String getSymbolicAlleleBaseSymbol(final Allele allele) {
         return allele.getDisplayString()
                 .replace("<", "")
                 .replace(">", "")
@@ -101,6 +107,7 @@ public class SVCollapser {
     }
 
     protected List<Allele> collapseAltAlleles(final Collection<SVCallRecord> items, final StructuralVariantType type) {
+        Utils.nonNull(items);
         final List<Allele> altAlleles = items.stream().map(SVCallRecord::getAlleles)
                 .flatMap(List::stream)
                 .filter(a -> a != null && !a.isNoCall() && !a.isReference())
@@ -112,13 +119,13 @@ public class SVCollapser {
             return Collections.singletonList(altAlleles.get(0));
         } else {
             // Multiple non-ref alleles need collapsing
-
-            // CNVs
+            // TODO does not search for subtypes e.g. <DUP:TANDEM>
             if (altAlleles.size() == 2 && altAlleles.contains(Allele.SV_SIMPLE_DEL) && altAlleles.contains(Allele.SV_SIMPLE_DUP)) {
+                // CNVs
                 if (type == StructuralVariantType.CNV || type == null) {
                     return altAlleles;
                 } else {
-                    throw new IllegalArgumentException("Encountered multi-allelic with DEL/DUP but not of CNV SVTYPE");
+                    throw new IllegalArgumentException("Encountered multi-allelic with DEL/DUP for non-CNV");
                 }
             }
 
@@ -127,7 +134,7 @@ public class SVCollapser {
                     .map(SVCollapser::getSymbolicAlleleBaseSymbol)
                     .distinct()
                     .collect(Collectors.toList());
-            Utils.validate(uniqueAlleleBaseSymbols.size() == 1, "Encountered multiple symbolic allele base symbols");
+            Utils.validate(uniqueAlleleBaseSymbols.size() == 1, "Encountered multiple symbolic allele base symbols for non-CNV");
 
             // Look for subtyped alts
             final List<Allele> subtypedAlleles = altAlleles.stream().filter(a -> a.getDisplayString().contains(":")).collect(Collectors.toList());
@@ -153,8 +160,8 @@ public class SVCollapser {
                 .collect(Collectors.toList());
     }
 
-    private List<Allele> collapseSampleAlleles(final Collection<Genotype> genotypes,
-                                               final StructuralVariantType type,
+    @VisibleForTesting
+    protected List<Allele> collapseSampleAlleles(final Collection<Genotype> genotypes,
                                                final Allele refAllele,
                                                final List<Allele> sampleAltAlleles) {
         Utils.nonNull(genotypes);
@@ -168,39 +175,29 @@ public class SVCollapser {
             return Collections.nCopies(inferredPloidy, refOrNoCallAllele);
         }
 
-        if (sampleAltAlleles.size() > 1) {
-            if (type == StructuralVariantType.CNV) {
-                throw new UnsupportedOperationException("Collapsing CNV records with conflicting genotype alleles is not supported");
-            } else {
-                throw new UnsupportedOperationException("Non-CNV multi-allelic sites not supported");
-            }
-        }
-        final Allele altAllele = sampleAltAlleles.get(0);
-
         final Map<List<Allele>, Integer> genotypeCounts = genotypes.stream().map(Genotype::getAlleles)
                 .collect(Collectors.groupingBy(l -> l, Collectors.collectingAndThen(Collectors.toList(), List::size)));
-        List<Allele> bestGenotypeAlleles = null;
-        int bestVariantFrequency = 0;
-        int bestAltCount = 0;
-        for (final Map.Entry<List<Allele>, Integer> entry : genotypeCounts.entrySet()) {
-            final List<Allele> alleles = entry.getKey();
-            final int altCount = (int) entry.getKey().stream().filter(a -> !a.isNoCall() && !a.isReference()).count();
-            final int variantFrequency = entry.getValue();
-            if (altCount > 0 && (bestGenotypeAlleles == null || variantFrequency > bestVariantFrequency)) {
-                bestGenotypeAlleles = alleles;
-                bestVariantFrequency = entry.getValue();
-                bestAltCount = altCount;
+        List<Allele> bestGenotypeAltAlleles = null;
+        int bestGenotypeFrequency = 0;
+        // Sort keys somehow, for stability
+        final List<List<Allele>> sortedAlleleLists = genotypeCounts.keySet().stream().sorted(ALLELE_COMPARATOR).collect(Collectors.toList());
+        // TODO : break ties
+        for (final List<Allele> alleles : sortedAlleleLists) {
+            final List<Allele> altAlleles = alleles.stream().filter(a -> a != null && !a.isNoCall() && !a.isReference()).collect(Collectors.toList());
+            final int genotypeFrequency = genotypeCounts.get(alleles);
+            if (altAlleles.size() > 0 && (bestGenotypeAltAlleles == null || genotypeFrequency > bestGenotypeFrequency)) {
+                bestGenotypeAltAlleles = altAlleles;
+                bestGenotypeFrequency = genotypeFrequency;
             }
         }
 
         final List<Allele> alleles = new ArrayList<>(inferredPloidy);
-        final int numCollapsedRefAlleles = inferredPloidy - bestAltCount;
+        final int numCollapsedRefAlleles = inferredPloidy - bestGenotypeAltAlleles.size();
+        Utils.validate(numCollapsedRefAlleles >= 0, "Ploidy is less than number of alt alleles");
         for (int i = 0; i < numCollapsedRefAlleles; i++) {
             alleles.add(refAllele);
         }
-        for (int i = 0; i < bestAltCount; i++) {
-            alleles.add(altAllele);
-        }
+        alleles.addAll(bestGenotypeAltAlleles);
         return alleles;
     }
 
@@ -213,7 +210,7 @@ public class SVCollapser {
                 .filter(a -> a != null && !a.isNoCall() && !a.isReference())
                 .distinct()
                 .collect(Collectors.toList());
-        builder.alleles(collapseSampleAlleles(genotypes, type, refAllele, sampleAltAlleles));
+        builder.alleles(collapseSampleAlleles(genotypes, refAllele, sampleAltAlleles));
         builder.noAttributes();
         builder.attributes(collapseGenotypeAttributes(genotypes, type));
         return builder.make();
@@ -254,16 +251,14 @@ public class SVCollapser {
                 .flatMap(Set::stream)
                 .collect(Collectors.groupingBy(Map.Entry::getKey, Collectors.mapping(Map.Entry::getValue, Collectors.toSet())));
         for (final Map.Entry<String, Set<Object>> entry : attributes.entrySet()) {
-            collapsedAttributes.put(entry.getKey(), collapseSingleVariantAttribute(entry.getKey(), entry.getValue()));
+            collapsedAttributes.put(entry.getKey(), collapseSingleVariantAttribute(entry.getValue()));
         }
         collapsedAttributes.put(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY, items.stream().map(SVCallRecord::getId).sorted().collect(Collectors.toList()));
         return collapsedAttributes;
     }
 
-    protected Object collapseSingleVariantAttribute(final String key, final Set<Object> values) {
-        if (values.isEmpty()) {
-            return null;
-        } else if (values.size() == 1) {
+    protected Object collapseSingleVariantAttribute(final Set<Object> values) {
+        if (values.size() == 1) {
             return values.iterator().next();
         } else {
             return null;
@@ -306,7 +301,9 @@ public class SVCollapser {
     }
 
     protected String collapseIds(final Collection<SVCallRecord> records) {
-        return records.iterator().next().getId();
+        Utils.nonNull(records);
+        Utils.nonEmpty(records);
+        return records.stream().map(SVCallRecord::getId).sorted().collect(Collectors.toList()).get(0);
     }
 
     protected Collection<SVCallRecord> getMostPreciseCalls(final Collection<SVCallRecord> items) {
@@ -322,9 +319,17 @@ public class SVCollapser {
      * @return (key, value) entry of (start, end)
      */
     protected Map.Entry<Integer,Integer> collapseInterval(final Collection<SVCallRecord> items) {
+        Utils.nonNull(items);
+        Utils.nonEmpty(items);
         final SVCallRecord exampleCall = items.iterator().next();
         if (breakpointSummaryStrategy == null) {
             return new AbstractMap.SimpleImmutableEntry<>(exampleCall.getPositionA(), exampleCall.getPositionB());
+        }
+        if (items.size() > 1) {
+            final List<String> contigsA = items.stream().map(SVCallRecord::getContigA).distinct().collect(Collectors.toList());
+            Utils.validate(contigsA.size() == 1, "Cannot collapse intervals with multiple position A contigs");
+            final List<String> contigsB = items.stream().map(SVCallRecord::getContigB).distinct().collect(Collectors.toList());
+            Utils.validate(contigsB.size() == 1, "Cannot collapse intervals with multiple position B contigs");
         }
         final List<Integer> startPositions = items.stream().map(SVCallRecord::getPositionA).sorted().collect(Collectors.toList());
         final List<Integer> endPositions = items.stream().map(SVCallRecord::getPositionB).sorted().collect(Collectors.toList());
@@ -373,7 +378,8 @@ public class SVCollapser {
         if (types.stream().allMatch(SVClusterEngine::isCnvType)) {
             return StructuralVariantType.CNV;
         }
-        throw new IllegalArgumentException("Incompatible SV types found in cluster");
+        final List<String> typeStrings = types.stream().map(StructuralVariantType::name).collect(Collectors.toList());
+        throw new IllegalArgumentException("Incompatible SV types found in cluster: " + String.join(", ", typeStrings));
     }
 
     protected List<String> collapseAlgorithms(final Collection<SVCallRecord> records) {
@@ -381,6 +387,34 @@ public class SVCollapser {
                 .map(SVCallRecord::getAlgorithms)
                 .flatMap(Collection::stream)
                 .distinct()
+                .sorted()
                 .collect(Collectors.toList());
+    }
+
+    public static final class AlleleCollectionCollapserComparator implements Comparator<Collection<Allele>> {
+        @Override
+        public int compare(final Collection<Allele> o1, final Collection<Allele> o2) {
+            if (o1 == o2) {
+                return 0;
+            }
+            Utils.nonNull(o1);
+            Utils.nonNull(o2);
+            final List<Allele> sorted1 = SVCallRecordUtils.sortAlleles(o1);
+            final List<Allele> sorted2 = SVCallRecordUtils.sortAlleles(o2);
+            // Resort to display strings
+            for (int i = 0; i < sorted1.size() && i < sorted2.size(); i++) {
+                final int comp = sorted1.get(i).getDisplayString().compareTo(sorted2.get(i).getDisplayString());
+                if (comp != 0) {
+                    return comp;
+                }
+            }
+            if (o1.size() < o2.size()) {
+                return -1;
+            } else if (o1.size() > o2.size()) {
+                return 1;
+            } else {
+                return 0;
+            }
+        }
     }
 }

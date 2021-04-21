@@ -165,9 +165,6 @@ public class SVClusterEngineTest {
                 StructuralVariantType.DEL, end2 - start2 + 1, Lists.newArrayList(GATKSVVCFConstants.DEPTH_ALGORITHM),
                 Lists.newArrayList(Allele.REF_N, Allele.SV_SIMPLE_DEL, Allele.SV_SIMPLE_DUP),
                 SVTestUtils.threeGenotypes, Collections.emptyMap());
-        if (start1 == 100000) {
-            int x = 0;
-        }
         Assert.assertEquals(engine.clusterTogether(call1, call2), result);
     }
 

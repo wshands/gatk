@@ -4,6 +4,7 @@ import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
+import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
@@ -73,8 +74,8 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
                     return false;
                 }
             } else {
-                final List<Allele> sortedAllelesA = genotypeA.getAlleles().stream().sorted().collect(Collectors.toList());
-                final List<Allele> sortedAllelesB = genotypeB.getAlleles().stream().sorted().collect(Collectors.toList());
+                final List<Allele> sortedAllelesA = SVCallRecordUtils.sortAlleles(genotypeA.getAlleles());
+                final List<Allele> sortedAllelesB = SVCallRecordUtils.sortAlleles(genotypeB.getAlleles());
                 if (!sortedAllelesA.equals(sortedAllelesB)) {
                     return false;
                 }
