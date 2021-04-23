@@ -352,8 +352,8 @@ task CreateImportTsvs {
         export GOOGLE_APPLICATION_CREDENTIALS=~{service_account_json}
         gcloud auth activate-service-account --key-file='~{service_account_json}'
 
-        gsutil cp ~{input_vcf} .
-        gsutil cp ~{input_vcf_index} .
+        # gsutil cp ~{input_vcf} .
+        # gsutil cp ~{input_vcf_index} .
       fi
 
       # check for existence of the correct lockfile
