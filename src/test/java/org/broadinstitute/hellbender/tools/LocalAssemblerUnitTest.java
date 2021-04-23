@@ -1,10 +1,12 @@
 package org.broadinstitute.hellbender.tools;
 
 import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.SAMLineParser;
 import htsjdk.samtools.util.SequenceUtil;
 import org.broadinstitute.hellbender.tools.LocalAssembler.*;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.utils.read.SAMRecordToGATKReadAdapter;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -12,7 +14,12 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public class LocalAssemblerUnitTest {
-    private static final byte QMIN = LocalAssembler.QMIN;
+    private static final byte QMIN = LocalAssembler.QMIN_DEFAULT;
+    private static final int MIN_THIN_OBS = LocalAssembler.MIN_THIN_OBS_DEFAULT;
+    private static final int MIN_GAPFILL_COUNT = LocalAssembler.MIN_GAPFILL_COUNT_DEFAULT;
+    private static final int TOO_MANY_TRAVERSALS = LocalAssembler.TOO_MANY_TRAVERSALS_DEFAULT;
+    private static final int TOO_MANY_SCAFFOLDS = LocalAssembler.TOO_MANY_SCAFFOLDS_DEFAULT;
+    private static final int MIN_SV_SIZE = LocalAssembler.MIN_SV_SIZE_DEFAULT;
     private static final int KMER_SET_CAPACITY = 200;
 
     private static final String[] SEQS_FOR_DOGBONE_GRAPH = new String[] {
@@ -27,7 +34,7 @@ public class LocalAssemblerUnitTest {
     // (i.e., 5 contigs, with a branch at each end of a longer contig)
     public static List<ContigImpl> makeDogbone( final KmerSet<KmerAdjacency> kmers ) {
         for ( final String seq : SEQS_FOR_DOGBONE_GRAPH ) {
-            KmerAdjacency.kmerize(seq, LocalAssembler.MIN_THIN_OBS, kmers);
+            KmerAdjacency.kmerize(seq, MIN_THIN_OBS, kmers);
         }
         final List<ContigImpl> contigs = LocalAssembler.buildContigs(kmers);
         LocalAssembler.connectContigs(contigs);
@@ -39,7 +46,7 @@ public class LocalAssemblerUnitTest {
 
     // produces a graph that cycles back on itself
     public static List<ContigImpl> makeLariat( final KmerSet<KmerAdjacency> kmers ) {
-        KmerAdjacency.kmerize(SEQ_FOR_LARIAT, LocalAssembler.MIN_THIN_OBS, kmers);
+        KmerAdjacency.kmerize(SEQ_FOR_LARIAT, MIN_THIN_OBS, kmers);
         final List<ContigImpl> contigs = LocalAssembler.buildContigs(kmers);
         LocalAssembler.connectContigs(contigs);
         return contigs;
@@ -180,20 +187,21 @@ public class LocalAssemblerUnitTest {
     public void testPaths() {
         final KmerSet<KmerAdjacency> kmers = new KmerSet<>(KMER_SET_CAPACITY);
         makeDogbone(kmers);
+        final PathBuilder pathBuilder = new PathBuilder(kmers);
         final byte[] path1Calls = SEQS_FOR_DOGBONE_GRAPH[0].getBytes();
-        final Path path1 = new Path(path1Calls, kmers);
+        final Path path1 = new Path(path1Calls, pathBuilder);
         Assert.assertEquals(path1.getParts().size(), 3);
         Assert.assertTrue(pathsEquivalent(path1, path1.rc().rc()));
 
         // exercise our rudimentary error correction by changing one call in the middle of a contig
         path1Calls[path1Calls.length / 2] = (byte)(path1Calls[path1Calls.length / 2] == 'A' ? 'C' : 'A');
-        Assert.assertTrue(pathsEquivalent(path1, new Path(path1Calls, kmers)));
+        Assert.assertTrue(pathsEquivalent(path1, new Path(path1Calls, pathBuilder)));
 
         // path of RC sequence ought to be equivalent to RC of path
         SequenceUtil.reverseComplement(path1Calls);
-        Assert.assertTrue(pathsEquivalent(path1.rc(), new Path(path1Calls, kmers)));
+        Assert.assertTrue(pathsEquivalent(path1.rc(), new Path(path1Calls, pathBuilder)));
 
-        final Path path2 = new Path(SEQS_FOR_DOGBONE_GRAPH[1].getBytes(), kmers);
+        final Path path2 = new Path(SEQS_FOR_DOGBONE_GRAPH[1].getBytes(), pathBuilder);
         Assert.assertEquals(path2.getParts().size(), 3);
         Assert.assertFalse(pathsEquivalent(path1, path2));
     }
@@ -233,7 +241,7 @@ public class LocalAssemblerUnitTest {
         Assert.assertEquals(contigs.size(), 5);
 
         // tear the ears off the dog bone -- the gap-fill kmerization left them at 0 max-observations
-        LocalAssembler.removeThinContigs(contigs, kmers);
+        LocalAssembler.removeThinContigs(contigs, MIN_THIN_OBS, kmers);
         Assert.assertEquals(contigs.size(), 1);
     }
 
@@ -249,7 +257,7 @@ public class LocalAssemblerUnitTest {
             if ( kmer.getNObservations() > 0 ) {
                 kmer.observe(null, null, -kmer.getNObservations());
             } else {
-                kmer.observe(null, null, LocalAssembler.MIN_THIN_OBS);
+                kmer.observe(null, null, MIN_THIN_OBS);
             }
             kmer.clearContig();
         }
@@ -258,7 +266,7 @@ public class LocalAssemblerUnitTest {
         // observations (because it's a cut point)
         List<ContigImpl> contigs2 = LocalAssembler.buildContigs(kmers);
         LocalAssembler.connectContigs(contigs2);
-        LocalAssembler.removeThinContigs(contigs2, kmers);
+        LocalAssembler.removeThinContigs(contigs2, MIN_THIN_OBS, kmers);
         Assert.assertEquals(contigs2.size(), 5);
     }
 
@@ -271,9 +279,9 @@ public class LocalAssemblerUnitTest {
             // find the central contig
             if ( contig.getPredecessors().size() > 1 && contig.getSuccessors().size() > 1 ) {
                 final KmerAdjacency prevKmer = contig.getPredecessors().get(0).getLastKmer();
-                prevKmer.observe(null, null, LocalAssembler.MIN_THIN_OBS);
+                prevKmer.observe(null, null, MIN_THIN_OBS);
                 final KmerAdjacency nextKmer = contig.getSuccessors().get(0).getFirstKmer();
-                nextKmer.observe(null, null, LocalAssembler.MIN_THIN_OBS);
+                nextKmer.observe(null, null, MIN_THIN_OBS);
                 break;
             }
         }
@@ -282,31 +290,11 @@ public class LocalAssemblerUnitTest {
         }
         final List<ContigImpl> contigs2 = LocalAssembler.buildContigs(kmers);
         LocalAssembler.connectContigs(contigs2);
-        LocalAssembler.removeThinContigs(contigs2, kmers);
+        LocalAssembler.removeThinContigs(contigs2, MIN_THIN_OBS, kmers);
         Assert.assertEquals(contigs2.size(), 3);
         LocalAssembler.weldPipes(contigs2);
         Assert.assertEquals(contigs2.size(), 1);
         Assert.assertEquals(contigs2.get(0).getSequence().length(), SEQS_FOR_DOGBONE_GRAPH[0].length());
-    }
-
-    // test marking components
-    @Test
-    public void testMarkComponents() {
-        final KmerSet<KmerAdjacency> kmers = new KmerSet<>(KMER_SET_CAPACITY);
-        final List<ContigImpl> contigs = makeDogbone(kmers);
-        Assert.assertEquals(LocalAssembler.markComponents(contigs), 1);
-
-        // find and remove the central contig
-        final Iterator<ContigImpl> itr = contigs.iterator();
-        while ( itr.hasNext() ) {
-            final Contig contig = itr.next();
-            if ( contig.getPredecessors().size() > 1 && contig.getSuccessors().size() > 1 ) {
-                itr.remove();
-                LocalAssembler.unlinkContig(contig, kmers);
-                break;
-            }
-        }
-        Assert.assertEquals(LocalAssembler.markComponents(contigs), 4);
     }
 
     @Test
@@ -323,9 +311,9 @@ public class LocalAssemblerUnitTest {
         Assert.assertTrue(contigInList(longer, longer.getPredecessors()));
 
         LocalAssembler.markCycles(contigs);
-        Assert.assertTrue(longer.isCyclic());
+        Assert.assertTrue(longer.isCycleMember());
         final Contig shorter = longer == c1 ? c2 : c1;
-        Assert.assertFalse(shorter.isCyclic());
+        Assert.assertFalse(shorter.isCycleMember());
     }
 
     private boolean contigInList( final Contig target, final List<Contig> contigs ) {
@@ -344,8 +332,8 @@ public class LocalAssemblerUnitTest {
         final GATKRead read =
                 ArtificialReadUtils.createArtificialRead(calls, quals, calls.length + "M");
         final KmerSet<KmerAdjacency> kmers = new KmerSet<>(KMER_SET_CAPACITY);
-        final List<GATKRead> reads = new ArrayList<>(LocalAssembler.MIN_GAPFILL_COUNT);
-        for ( int iii = 0; iii != LocalAssembler.MIN_GAPFILL_COUNT; ++iii ) {
+        final List<GATKRead> reads = new ArrayList<>(MIN_GAPFILL_COUNT);
+        for ( int iii = 0; iii != MIN_GAPFILL_COUNT; ++iii ) {
             reads.add(read);
             KmerAdjacency.kmerize(calls, quals, QMIN, kmers);
         }
@@ -355,10 +343,10 @@ public class LocalAssemblerUnitTest {
 
         // broken lariat
         Assert.assertEquals(contigs.size(), 3);
-        Assert.assertFalse(contigs.get(0).isCyclic() || contigs.get(1).isCyclic());
+        Assert.assertFalse(contigs.get(0).isCycleMember() || contigs.get(1).isCycleMember());
 
         // can we find and fill a gap?
-        Assert.assertTrue(LocalAssembler.fillGaps(kmers, reads));
+        Assert.assertTrue(LocalAssembler.fillGaps(kmers, MIN_GAPFILL_COUNT, reads));
 
         final List<ContigImpl> contigs2 = LocalAssembler.buildContigs(kmers);
         LocalAssembler.connectContigs(contigs2);
@@ -366,7 +354,7 @@ public class LocalAssemblerUnitTest {
 
         // lariat healed by gap fill
         Assert.assertEquals(contigs2.size(), 2);
-        Assert.assertTrue(contigs2.get(0).isCyclic() || contigs2.get(1).isCyclic());
+        Assert.assertTrue(contigs2.get(0).isCycleMember() || contigs2.get(1).isCycleMember());
     }
 
     @Test
@@ -383,10 +371,9 @@ public class LocalAssemblerUnitTest {
         reads.add(read1);
         reads.add(read2);
         final KmerSet<KmerAdjacency> kmers = new KmerSet<>(KMER_SET_CAPACITY);
-        LocalAssembler.kmerizeReads(reads, kmers);
+        LocalAssembler.kmerizeReads(reads, QMIN, kmers);
         final List<ContigImpl> contigs = LocalAssembler.buildContigs(kmers);
         LocalAssembler.connectContigs(contigs);
-        LocalAssembler.markComponents(contigs);
         final List<Path> readPaths = LocalAssembler.pathReads(kmers, reads);
         Assert.assertEquals(readPaths.size(), 2);
         Assert.assertEquals(readPaths.get(0).getParts().size(), 3);
@@ -411,7 +398,7 @@ public class LocalAssemblerUnitTest {
         Assert.assertEquals(list1.get(1).getRC(), list2.get(1));
 
         final Set<Traversal> allTraversals =
-                    LocalAssembler.traverseAllPaths(contigs, readPaths, contigTransitsMap);
+                    LocalAssembler.traverseAllPaths(contigs, readPaths, TOO_MANY_TRAVERSALS, contigTransitsMap);
         Assert.assertEquals(allTraversals.size(), 2);
         final Iterator<Traversal> travItr = allTraversals.iterator();
         final String trav1Seq = travItr.next().getSequence();
@@ -453,22 +440,22 @@ public class LocalAssemblerUnitTest {
         reads.add(read4);
 
         final KmerSet<KmerAdjacency> kmers = new KmerSet<>(KMER_SET_CAPACITY);
-        LocalAssembler.kmerizeReads(reads, kmers);
+        LocalAssembler.kmerizeReads(reads, QMIN, kmers);
         final List<ContigImpl> contigs = LocalAssembler.buildContigs(kmers);
         Assert.assertEquals(contigs.size(), 5); // same dogbone as before
         LocalAssembler.connectContigs(contigs);
-        Assert.assertEquals(LocalAssembler.markComponents(contigs), 1);
         final List<Path> readPaths = LocalAssembler.pathReads(kmers, reads);
         final Map<Contig,List<TransitPairCount>> contigTransitsMap =
                 LocalAssembler.collectTransitPairCounts(contigs, readPaths);
         Assert.assertEquals(contigTransitsMap.size(), 0);
-        final List<Traversal> allTraversals =
-                new ArrayList<>(LocalAssembler.traverseAllPaths(contigs, readPaths, contigTransitsMap));
+        final List<Traversal> allTraversals = new ArrayList<>(
+                LocalAssembler.traverseAllPaths(contigs, readPaths, TOO_MANY_TRAVERSALS, contigTransitsMap));
 
         // this should reconstruct the original dogbone sequences, but also another pair
         // with the phasing of the initial and final SNP swapped (since we have no transits
         // to establish phasing)
-        final Collection<Traversal> scaffolds = LocalAssembler.createScaffolds(allTraversals);
+        final Collection<Traversal> scaffolds =
+                LocalAssembler.createScaffolds(allTraversals, TOO_MANY_SCAFFOLDS, MIN_SV_SIZE);
         Assert.assertEquals(scaffolds.size(), 4);
         List<String> scaffoldSeqs =
             scaffolds.stream().map(Traversal::getSequence).collect(Collectors.toList());
@@ -508,25 +495,77 @@ public class LocalAssemblerUnitTest {
         reads.add(read2);
 
         final KmerSet<KmerAdjacency> kmers = new KmerSet<>(KMER_SET_CAPACITY);
-        LocalAssembler.kmerizeReads(reads, kmers);
+        LocalAssembler.kmerizeReads(reads, QMIN, kmers);
         final List<ContigImpl> contigs = LocalAssembler.buildContigs(kmers);
         Assert.assertEquals(contigs.size(), 5); // same dogbone as before
         LocalAssembler.connectContigs(contigs);
         LocalAssembler.markCycles(contigs);
-        Assert.assertEquals(LocalAssembler.markComponents(contigs), 1);
         final List<Path> readPaths = LocalAssembler.pathReads(kmers, reads);
         final Map<Contig,List<TransitPairCount>> contigTransitsMap =
                 LocalAssembler.collectTransitPairCounts(contigs, readPaths);
         // the polyA contig, the one just upstream, and their RCs make 4
         Assert.assertEquals(contigTransitsMap.size(), 4);
-        final List<Traversal> traversals =
-                new ArrayList<>(LocalAssembler.traverseAllPaths(contigs, readPaths, contigTransitsMap));
+        final List<Traversal> traversals = new ArrayList<>(
+                LocalAssembler.traverseAllPaths(contigs, readPaths, TOO_MANY_TRAVERSALS, contigTransitsMap));
         Assert.assertEquals(traversals.size(), 2);
 
         // this should reconstruct the original dogbone sequences, but also another pair
         // with the phasing of the initial and final SNP swapped (since we have no transits
         // to establish phasing)
-        final Collection<Traversal> scaffolds = LocalAssembler.createScaffolds(traversals);
+        final Collection<Traversal> scaffolds =
+                LocalAssembler.createScaffolds(traversals, TOO_MANY_SCAFFOLDS, MIN_SV_SIZE);
         Assert.assertEquals(scaffolds.size(), 2);
+    }
+
+    @Test
+    public void testTrimOverruns() {
+        final SAMFileHeader header =
+                ArtificialReadUtils.createArtificialSamHeader(1, 1, 100000000);
+        final SAMLineParser samLineParser = new SAMLineParser(header);
+
+        // two reads that start and end at the same place with a removable soft clip appropriately placed on each
+        final GATKRead read1 = new SAMRecordToGATKReadAdapter(
+                samLineParser.parseLine("read1\t163\t1\t5113820\t49\t111M40S\t=\t5113820\t111\t"+
+                        "ACAGAGACAGGAAGAAGTACGCGTGGGGGGCCCAGTCTGGATATGCTGAGTGGGCGGTGCCCCACTCCAAGTGTAGTGCACAGAGAAGGGCTGGAGTTACAGGCCTCCTTGAGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTGTATTGC\t"+
+                        "???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????"));
+        final GATKRead mate1 = new SAMRecordToGATKReadAdapter(
+                samLineParser.parseLine("mate1\t83\t1\t5113820\t49\t40S111M\t=\t5113820\t-111\t"+
+                        "GTTGGTGTGACTGGAGTTCAGACGTGTGCTCTTCCGATCTACAGAGACAGGAAGAAGTACGCGTGGGGGGCCCAGTCTGGATATGCTGAGTGGGCGGTGCCCCACTCCAAGTGTAGTGCACAGAGAAGGGCTGGAGTTACAGGCCTCCTTG\t"+
+                        "???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????"));
+        LocalAssembler.trimOverruns(read1, mate1);
+
+        // expected results trim soft clip from each read
+        Assert.assertEquals(read1.getCigar().toString(), "111M40H"); // changed 111M40S to 111M40H
+        Assert.assertEquals(read1.getBasesNoCopy().length, 111); // hard-clipped the calls and quals
+        Assert.assertEquals(read1.getBaseQualitiesNoCopy().length, 111);
+        Assert.assertEquals(mate1.getCigar().toString(), "40H111M"); // changed 40S111M to 40H111M
+        Assert.assertEquals(mate1.getBasesNoCopy().length, 111); // hard-clipped the calls and quals
+        Assert.assertEquals(mate1.getBaseQualitiesNoCopy().length, 111);
+    }
+
+
+    @Test
+    public void testNoTrimOverruns() {
+        final SAMFileHeader header =
+                ArtificialReadUtils.createArtificialSamHeader(1, 1, 100000000);
+        final SAMLineParser samLineParser = new SAMLineParser(header);
+        // can't trim this read pair:  cigar is 4S56M91S and the 4S suggests this might be chimeric
+        final GATKRead read1 = new SAMRecordToGATKReadAdapter(
+            samLineParser.parseLine("read1\t99\t1\t5114132\t0\t4S56M91S\t=\t5114132\t56\t"+
+                "GAGCTGGGGGTTGAGTGTGGAGGAGCTGGGAGTGGTGGGGGAGCTGGGGGTTGAGTGTGGAGGAGCTGGGAGTGGTGGGGGGGCTGGGGGTTGAGTGTGGAGGTGCTGGGAGCGGTGGGGGGGCTGGGGGTTGAGTGTGGAGGTCGGGGGA\t"+
+                "??????????????????????????????????????????????????????????????+5?????????????????+?5???????5???+??????++5&55???5$+??+5?5+555???5??55?+5555??+??########"));
+        final GATKRead mate1 = new SAMRecordToGATKReadAdapter(
+            samLineParser.parseLine("mate1\t147\t1\t5114132\t0\t95S56M\t=\t5114132\t-56\t"+
+                "GTAGGGTGTGGGGGGTGGGGTGGGGGTGGGGGGGCGGGGGGGGTCGGGGGGGGGGTGGGGGTTGGGTGGGGGGGCGACGGGGTTGGGGGGGGGGCTGGGGGTTGAGGGTGGAGGAGCTGGGAGTGGGGGGGGAGCTGGGGGTTGAGTGTGG\t"+
+                "###############################################################################?55++5'5?'555'5++???55++555'&+?'5??55++??555+?5'????????????????????????"));
+        LocalAssembler.trimOverruns(read1, mate1);
+
+        // expected results are all unchanged from original
+        Assert.assertEquals(read1.getCigar().toString(), "4S56M91S");
+        Assert.assertEquals(read1.getBasesNoCopy().length, 151);
+        Assert.assertEquals(read1.getBaseQualitiesNoCopy().length, 151);
+        Assert.assertEquals(mate1.getCigar().toString(), "95S56M");
+        Assert.assertEquals(mate1.getBasesNoCopy().length, 151);
+        Assert.assertEquals(mate1.getBaseQualitiesNoCopy().length, 151);
     }
 }

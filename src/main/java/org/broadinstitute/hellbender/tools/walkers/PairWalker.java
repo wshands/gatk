@@ -22,8 +22,11 @@ import java.util.Iterator;
 import java.util.List;
 
 @CommandLineProgramProperties(
-        summary = "A walker that presents read pairs as pairs.",
-        oneLineSummary = "A walker that presents read pairs as pairs",
+        summary = "A walker that presents read pairs as pairs.  Run PrintDistantMates, and use "+
+                "its output as input to the PairWalker along with the original inputs to ensure "+
+                "seeing all pairs as pairs.  This is unnecessary if you only care about pairs "+
+                "where both reads lie within your intervals.",
+        oneLineSummary = "A walker that presents read pairs as pairs.",
         programGroup = ReadDataManipulationProgramGroup.class
 )
 @DocumentedFeature
@@ -128,6 +131,8 @@ public abstract class PairWalker extends ReadWalker {
 
     /**
      * Unpaired reads, secondary and supplemental alignments, and other detritus comes through here.
+     * Also, if you haven't used PrintDistantMates, you'll get all of pairs for which we didn't
+     * find the mate at the end of the traversal via this method.
      */
     public abstract void applyUnpaired( final GATKRead read );
 

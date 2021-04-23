@@ -1,7 +1,7 @@
 package org.broadinstitute.hellbender.tools;
 
-import htsjdk.samtools.Cigar;
-import htsjdk.samtools.TextCigarCodec;
+import htsjdk.samtools.SAMRecord;
+import htsjdk.samtools.SAMTag;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
@@ -12,18 +12,19 @@ import org.broadinstitute.hellbender.engine.ReadWalker;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @CommandLineProgramProperties(
-        summary = "Prints reads that have distant mates using the mate's alignment information.  Yes, this is weird, but it helps in processing pairs together (see PairWalker).",
-        oneLineSummary = "Print reads with distant mates using the mate's alignment.",
+        summary = "Unmaps reads that have distant mates.  "+
+                "This ensures that a PairWalker will always see both mates, "+
+                "even when one of them is mapped far away, when given the output "+
+                "of this tool along with the original inputs.",
+        oneLineSummary = "Unmaps reads with distant mates.",
         programGroup = ReadDataManipulationProgramGroup.class
 )
 @DocumentedFeature
@@ -32,11 +33,9 @@ public class PrintDistantMates extends ReadWalker {
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="Write output to this file")
     public GATKPath output;
+    public static String DISTANT_MATE_TAG = "DM";
 
     private SAMFileGATKReadWriter outputWriter;
-    private Map<String, GATKRead> pendingReads;
-    private static final String MATE_CIGAR_TAG = "MC";
-    private static final String ORIGINAL_CIGAR = "OC";
 
     @Override public List<ReadFilter> getDefaultReadFilters() {
         final List<ReadFilter> readFilters = new ArrayList<>(super.getDefaultReadFilters());
@@ -53,27 +52,14 @@ public class PrintDistantMates extends ReadWalker {
     @Override
     public void onTraversalStart() {
         outputWriter = createSAMWriter(output, false);
-        pendingReads = new HashMap<>(20000000);
     }
 
     @Override
     public void apply( final GATKRead read,
                        final ReferenceContext referenceContext,
                        final FeatureContext featureContext ) {
-        final String mateCigarString = read.getAttributeAsString(MATE_CIGAR_TAG);
-        if ( mateCigarString != null ) {
-            final Cigar mateCigar = TextCigarCodec.decode(mateCigarString);
-            outputWriter.addRead(doDistantMateAlterations(read, mateCigar));
-        } else {
-            pendingReads.compute(read.getName(), (name, mate) -> {
-                if ( mate == null ) {
-                    return read;
-                }
-                outputWriter.addRead(doDistantMateAlterations(read, mate.getCigar()));
-                outputWriter.addRead(doDistantMateAlterations(mate, read.getCigar()));
-                return null;
-            });
-        }
+        final GATKRead copy = doDistantMateAlterations(read);
+        outputWriter.addRead(copy);
     }
 
     @Override
@@ -83,45 +69,47 @@ public class PrintDistantMates extends ReadWalker {
         }
     }
 
-    public static GATKRead doDistantMateAlterations( final GATKRead read, final Cigar mateCigar ) {
-        final GATKRead copy = read.copy();
-        copy.setPosition(read.getMateContig(), read.getMateStart());
-        copy.setMatePosition(read.getContig(), read.getStart());
-        final int mateReadLength = mateCigar.getReadLength();
-        final int readLength = read.getLength();
-        if ( mateReadLength == readLength ) {
-            copy.setCigar(mateCigar);
-        } else {
-            final int mateAlignLength = mateCigar.getReferenceLength();
-            copy.setCigar(bogusCigar(mateAlignLength, readLength));
-        }
-        copy.setAttribute(ORIGINAL_CIGAR, read.getCigar().toString());
-        return copy;
+    public static boolean isDistantMate( final GATKRead read ) {
+        return read.hasAttribute(DISTANT_MATE_TAG);
     }
 
-    public static boolean isDistantMate( final GATKRead read ) {
-        return read.hasAttribute(ORIGINAL_CIGAR);
+    public static GATKRead doDistantMateAlterations( final GATKRead read ) {
+        final GATKRead copy = read.copy();
+        final Integer nmValue = read.getAttributeAsInteger(SAMTag.NM.name());
+        final String oaValue = read.getContig() + "," + read.getStart() + "," +
+                (read.isReverseStrand() ? "-," : "+,") + read.getCigar() + "," +
+                read.getMappingQuality() + "," + (nmValue == null ? "" : nmValue) + ";";
+        copy.clearAttribute(SAMTag.NM.name());
+        copy.setAttribute(SAMTag.OA.name(), oaValue);
+        copy.setAttribute(DISTANT_MATE_TAG, "");
+        copy.setPosition(read.getMateContig(), read.getMateStart());
+        copy.setCigar(SAMRecord.NO_ALIGNMENT_CIGAR);
+        copy.setMappingQuality(0);
+        copy.setIsUnmapped();
+        return copy;
     }
 
     public static GATKRead undoDistantMateAlterations( final GATKRead read ) {
-        final String originalCigar = read.getAttributeAsString(ORIGINAL_CIGAR);
-        if ( originalCigar == null ) return read;
+        final String oaValue = read.getAttributeAsString(SAMTag.OA.name());
+        if ( oaValue == null ) {
+            return read;
+        }
         final GATKRead copy = read.copy();
-        copy.setPosition(read.getMateContig(), read.getMateStart());
-        copy.setMatePosition(read.getContig(), read.getStart());
-        copy.setCigar(originalCigar);
-        copy.clearAttribute(ORIGINAL_CIGAR);
+        copy.clearAttribute(DISTANT_MATE_TAG);
+        copy.clearAttribute(SAMTag.OA.name());
+        try {
+            final String[] tokens = oaValue.split(",");
+            copy.setPosition(tokens[0], Integer.parseInt(tokens[1]));
+            copy.setIsReverseStrand("-".equals(tokens[2]));
+            copy.setCigar(tokens[3]);
+            copy.setMappingQuality(Integer.parseInt(tokens[4]));
+            if ( tokens[5].length() > 1 ) {
+                final String nmValue = tokens[5].substring(0, tokens[5].length() - 1);
+                copy.setAttribute(SAMTag.NM.name(), Integer.parseInt(nmValue));
+            }
+        } catch ( final Exception exc ) {
+            throw new UserException("can't recover alignment from OA tag: " + oaValue, exc);
+        }
         return copy;
-    }
-
-    private static String bogusCigar( final int alignLength, final int readLength ) {
-        final int lengthDiff = alignLength - readLength;
-        if ( lengthDiff == 0 ) {
-            return readLength +"M";
-        }
-        if ( lengthDiff > 0 ) {
-            return "1M" + lengthDiff + "D" + (readLength - 1) + "M";
-        }
-        return "1M" + -lengthDiff + "I" + (alignLength - 1) + "M";
     }
 }

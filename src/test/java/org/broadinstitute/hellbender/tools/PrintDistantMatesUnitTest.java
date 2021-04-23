@@ -18,10 +18,9 @@ public class PrintDistantMatesUnitTest {
                 1501, 3501, true, false);
         final GATKRead leftRead = readPair.get(0);
         final GATKRead rightRead = readPair.get(1);
-        final GATKRead leftDistantMate =
-                PrintDistantMates.doDistantMateAlterations(leftRead, rightRead.getCigar());
-        Assert.assertEquals(leftDistantMate.getContig(), rightRead.getContig());
-        Assert.assertEquals(leftDistantMate.getStart(), rightRead.getStart());
+        final GATKRead leftDistantMate = PrintDistantMates.doDistantMateAlterations(leftRead);
+        Assert.assertEquals(leftDistantMate.getAssignedContig(), rightRead.getContig());
+        Assert.assertEquals(leftDistantMate.getAssignedStart(), rightRead.getStart());
         Assert.assertTrue(PrintDistantMates.isDistantMate(leftDistantMate));
         Assert.assertEquals(leftRead, PrintDistantMates.undoDistantMateAlterations(leftDistantMate));
     }

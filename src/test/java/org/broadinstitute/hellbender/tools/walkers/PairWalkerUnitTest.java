@@ -121,9 +121,9 @@ public class PairWalkerUnitTest {
         final GATKRead leftRead = distantPair.get(0);
         final GATKRead rightRead = distantPair.get(1);
         final GATKRead leftDistantMate =
-                PrintDistantMates.doDistantMateAlterations(leftRead, rightRead.getCigar());
+                PrintDistantMates.doDistantMateAlterations(leftRead);
         final GATKRead rightDistantMate =
-                PrintDistantMates.doDistantMateAlterations(rightRead, leftRead.getCigar());
+                PrintDistantMates.doDistantMateAlterations(rightRead);
         return Arrays.asList(leftRead, rightDistantMate, rightRead, leftDistantMate);
     }
 
