@@ -790,31 +790,6 @@ public class LocalAssembler extends PairWalker {
         return traversalSet;
     }
 
-    private static int findMaxOverlap( final List<Contig> prefixes, final List<Contig> suffixes ) {
-        final int nPrefixes = prefixes.size();
-        final Contig firstSuffix = suffixes.get(0);
-        if ( !firstSuffix.isCycleMember() ) {
-            return prefixes.get(nPrefixes - 1) == firstSuffix ? 1 : 0;
-        }
-        final int nSuffixes = suffixes.size();
-        for ( int prefixIdx = Math.max(0, nPrefixes - nSuffixes); prefixIdx != nPrefixes; ++prefixIdx ) {
-            if ( prefixes.get(prefixIdx) == firstSuffix ) {
-                int suffixIdx = 1;
-                boolean match = true;
-                for ( int prefixIdx2 = prefixIdx + 1; prefixIdx2 != nPrefixes; ++prefixIdx2 ) {
-                    if ( prefixes.get(prefixIdx2) != suffixes.get(suffixIdx++) ) {
-                        match = false;
-                        break;
-                    }
-                }
-                if ( match ) {
-                    return nPrefixes - prefixIdx;
-                }
-            }
-        }
-        return 0;
-    }
-
     private static void traverse( final Contig contig,
                                   final Contig predecessor,
                                   final List<Contig> contigsList,
@@ -1106,6 +1081,7 @@ public class LocalAssembler extends PairWalker {
                 prevTraversal = curTraversal;
             }
         }
+        // remove duplicates where we have both strands surviving
         final Iterator<Traversal> traversalIterator2 = sortedTraversals.iterator();
         while ( traversalIterator2.hasNext() ) {
             final Traversal traversal = traversalIterator2.next();
@@ -2426,6 +2402,7 @@ public class LocalAssembler extends PairWalker {
                 minMaxObservations = Math.min(minMaxObservations, contig.getMaxObservations());
             }
             this.minMaxObservations = minMaxObservations;
+            this.hashCode = 0;
         }
 
         // RC constructor
@@ -2434,6 +2411,7 @@ public class LocalAssembler extends PairWalker {
             this.contigs = thoseContigs instanceof ContigListRC ?
                             ((ContigListRC)thoseContigs).rc() : new ContigListRC(thoseContigs);
             this.minMaxObservations = traversal.minMaxObservations;
+            this.hashCode = 0;
         }
 
         public List<Contig> getContigs() { return Collections.unmodifiableList(contigs); }
