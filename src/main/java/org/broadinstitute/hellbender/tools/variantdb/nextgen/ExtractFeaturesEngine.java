@@ -65,7 +65,7 @@ public class ExtractFeaturesEngine {
     private final int hqGenotypeGQThreshold;
     private final int hqGenotypeDepthThreshold;
     private final double hqGenotypeABThreshold;
-    private final List<Map<String, String>> queryLabels;
+    private final List<String> queryLabels;
 
 //    /** Set of sample names seen in the variant data from BigQuery. */
 //    private final Set<String> sampleNames = new HashSet<>();
@@ -88,7 +88,7 @@ public class ExtractFeaturesEngine {
                                final int hqGenotypeGQThreshold,
                                final int hqGenotypeDepthThreshold,
                                final double hqGenotypeABThreshold,
-                               final List<Map<String, String>> queryLabels
+                               final List<String> queryLabels
                                ) {
 
         this.localSortMaxRecordsInRam = localSortMaxRecordsInRam;
@@ -139,8 +139,9 @@ public class ExtractFeaturesEngine {
         Map<String, String> labelForQuery = new HashMap<String, String>();
         labelForQuery.put("Variant Store", "Extract Features from "+projectID);
         // add additional key value pair labels
-        for (Map labelMap: queryLabels) {
-            labelForQuery.putAll(labelMap);
+        for (String labelMapString: queryLabels) {
+            String[] labelStrings = labelMapString.split("=");
+            labelForQuery.put(labelStrings[0], labelStrings[1]);
         }
 
         final StorageAPIAvroReader storageAPIAvroReader = BigQueryUtils.executeQueryWithStorageAPI(

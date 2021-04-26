@@ -14,6 +14,7 @@ import org.broadinstitute.hellbender.tools.variantdb.SchemaUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.bigquery.TableReference;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
@@ -65,6 +66,13 @@ public class ExtractFeatures extends ExtractTool {
         optional = true)
     protected double hqGenotypeABThreshold = 0.2;
 
+    @Argument(
+        fullName = "query-labels",
+        doc = "Key-value pairs to be added to the extraction BQ query. Ex: --query-labels '{ \"label1\": 1, \"label2\": \"value2\" }'",
+        optional = true)
+
+    protected List<String> queryLabels = new ArrayList<>();
+
     @Override
     public boolean requiresIntervals() {
         return false;
@@ -110,7 +118,8 @@ public class ExtractFeatures extends ExtractTool {
             sampleList.size(),
             hqGenotypeGQThreshold,
             hqGenotypeDepthThreshold,
-            hqGenotypeABThreshold);
+            hqGenotypeABThreshold,
+            queryLabels);
 
         vcfWriter.writeHeader(header);
 }
