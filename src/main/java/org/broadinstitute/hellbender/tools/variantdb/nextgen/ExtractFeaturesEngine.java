@@ -65,6 +65,7 @@ public class ExtractFeaturesEngine {
     private final int hqGenotypeGQThreshold;
     private final int hqGenotypeDepthThreshold;
     private final double hqGenotypeABThreshold;
+    private final List<Map<String, String>> queryLabels;
 
 //    /** Set of sample names seen in the variant data from BigQuery. */
 //    private final Set<String> sampleNames = new HashSet<>();
@@ -86,7 +87,9 @@ public class ExtractFeaturesEngine {
                                final int numSamples,
                                final int hqGenotypeGQThreshold,
                                final int hqGenotypeDepthThreshold,
-                               final double hqGenotypeABThreshold) {
+                               final double hqGenotypeABThreshold,
+                               final List<Map<String, String>> queryLabels
+                               ) {
 
         this.localSortMaxRecordsInRam = localSortMaxRecordsInRam;
 
@@ -109,6 +112,8 @@ public class ExtractFeaturesEngine {
 
         this.variantContextMerger = new ReferenceConfidenceVariantContextMerger(annotationEngine, vcfHeader);
 
+        this.queryLabels = queryLabels;
+
     }
 
     // taken from GnarlyGenotypingEngine
@@ -130,13 +135,21 @@ public class ExtractFeaturesEngine {
 
         final String userDefinedFunctions = ExtractFeaturesBQ.getVQSRFeatureExtractUserDefinedFunctionsString();
 
+        // a hardcoded label is added to the query to make tracking this workflow easier downstream
+        Map<String, String> labelForQuery = new HashMap<String, String>();
+        labelForQuery.put("Variant Store", "Extract Features from "+projectID);
+        // add additional key value pair labels
+        for (Map labelMap: queryLabels) {
+            labelForQuery.putAll(labelMap);
+        }
+
         final StorageAPIAvroReader storageAPIAvroReader = BigQueryUtils.executeQueryWithStorageAPI(
                 featureQueryString,
                 SchemaUtils.FEATURE_EXTRACT_FIELDS,
                 projectID,
                 userDefinedFunctions,
                 useBatchQueries,
-                null);
+                labelForQuery);
 
         createVQSRInputFromTableResult(storageAPIAvroReader);
     }
