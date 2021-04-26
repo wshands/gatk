@@ -14,6 +14,10 @@ import java.util.stream.Collectors;
 
 public class SVCollapser {
 
+    public static boolean isCnvType(final StructuralVariantType type) {
+        return type == StructuralVariantType.DEL || type == StructuralVariantType.DUP || type == StructuralVariantType.CNV;
+    }
+
     public enum BreakpointSummaryStrategy {
         /**
          * Use the (first) middle value to summarize cluster starts and ends, such that the start and end were seen in the data
@@ -375,7 +379,7 @@ public class SVCollapser {
         if (types.size() == 1) {
             return types.iterator().next();
         }
-        if (types.stream().allMatch(SVClusterEngine::isCnvType)) {
+        if (types.stream().allMatch(SVCollapser::isCnvType)) {
             return StructuralVariantType.CNV;
         }
         final List<String> typeStrings = types.stream().map(StructuralVariantType::name).collect(Collectors.toList());

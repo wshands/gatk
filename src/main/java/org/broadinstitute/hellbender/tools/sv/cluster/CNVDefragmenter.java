@@ -9,9 +9,8 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.VariantContextGetters;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Set;
 
 import static org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants.COPY_NUMBER_FORMAT;
 
@@ -60,11 +59,11 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
 
         // In the single-sample case, match copy number strictly if we're looking at the same sample
         // TODO repeated check for CN attributes in hasSampleOverlap and getBestAvailableCarrierSamples
-        final List<String> carriersA = getBestAvailableCarrierSamples(a);
-        final List<String> carriersB = getBestAvailableCarrierSamples(b);
+        final Set<String> carriersA = getCarrierSamples(a);
+        final Set<String> carriersB = getCarrierSamples(b);
         if (carriersA.size() == 1 && carriersA.equals(carriersB)) {
-            final Genotype genotypeA = a.getGenotypes().get(carriersA.get(0));
-            final Genotype genotypeB = b.getGenotypes().get(carriersB.get(0));
+            final Genotype genotypeA = a.getGenotypes().get(carriersA.iterator().next());
+            final Genotype genotypeB = b.getGenotypes().get(carriersB.iterator().next());
             if (genotypeA.hasExtendedAttribute(COPY_NUMBER_FORMAT) && genotypeB.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
                 final int copyNumberA = VariantContextGetters.getAttributeAsInt(genotypeA, COPY_NUMBER_FORMAT, 0);
                 final int copyNumberB = VariantContextGetters.getAttributeAsInt(genotypeB, COPY_NUMBER_FORMAT, 0);
@@ -82,14 +81,6 @@ public class CNVDefragmenter extends SVClusterEngine<SVCallRecord> {
             }
         }
         return true;
-    }
-
-    private List<String> getBestAvailableCarrierSamples(final SVCallRecord record) {
-        if (hasDefinedCopyNumbers(record.getGenotypes())) {
-            return getCopyNumberCarrierGenotypes(record).stream().map(Genotype::getSampleName).collect(Collectors.toList());
-        } else {
-            return getGenotypedCarrierGenotypes(record, new HashSet<>(record.getAltAlleles())).stream().map(Genotype::getSampleName).collect(Collectors.toList());
-        }
     }
 
     /**

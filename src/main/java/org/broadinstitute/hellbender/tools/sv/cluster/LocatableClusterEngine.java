@@ -304,19 +304,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         public List<Integer> getItemIds() {
             return itemIds;
         }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o.getClass().equals(Cluster.class))) return false;
-            Cluster cluster = (Cluster) o;
-            return maxClusterableStart == cluster.maxClusterableStart && Objects.equals(itemIds, cluster.itemIds);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(maxClusterableStart, itemIds);
-        }
     }
 
 }

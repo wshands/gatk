@@ -10,6 +10,7 @@ import htsjdk.variant.vcf.VCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecordUtils;
+import org.broadinstitute.hellbender.tools.sv.SVTestUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -39,12 +40,8 @@ public class SVCollapserTest {
 
     @Test(dataProvider= "ploidyTestData")
     public void testCollapsePloidy(final int[] ploidy, final int result) {
-        final Collection<Genotype> genotypes = IntStream.of(ploidy).mapToObj(SVCollapserTest::buildGenotypeWithPloidy).collect(Collectors.toList());
+        final Collection<Genotype> genotypes = IntStream.of(ploidy).mapToObj(p -> SVTestUtils.buildHomGenotypeWithPloidy(Allele.REF_N, p)).collect(Collectors.toList());
         Assert.assertEquals(collapser.collapsePloidy(genotypes), result);
-    }
-
-    private static Genotype buildGenotypeWithPloidy(final int ploidy) {
-        return new GenotypeBuilder().alleles(Collections.nCopies(ploidy, Allele.REF_N)).make();
     }
 
     @DataProvider(name = "collapseRefAllelesTestData")
@@ -67,18 +64,9 @@ public class SVCollapserTest {
     public void testCollapseRefAlleles(final List<Allele> alleles, final Allele result) {
         final List<Allele> variantAlleles = alleles.stream().distinct().collect(Collectors.toList());
         final List<SVCallRecord> records = alleles.stream()
-                .map(a -> newCallRecordWithGenotypeAlleles(Collections.singletonList(a), variantAlleles))
+                .map(a -> SVTestUtils.newCallRecordWithGenotypeAlleles(Collections.singletonList(a), variantAlleles))
                 .collect(Collectors.toList());
         Assert.assertEquals(collapser.collapseRefAlleles(records), result);
-    }
-
-    private static SVCallRecord newCallRecordWithGenotypeAlleles(final List<Allele> genotypeAlleles, final List<Allele> variantAlleles) {
-        return new SVCallRecord("", "chr1", 100, true, "chr1", 199, false,
-                StructuralVariantType.DEL,
-                100, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
-                genotypeAlleles,
-                Collections.singletonList(new GenotypeBuilder().alleles(variantAlleles).make()),
-                Collections.emptyMap());
     }
 
     @DataProvider(name = "getSymbolicAlleleBaseSymbolTestData")
@@ -121,7 +109,7 @@ public class SVCollapserTest {
                                        final List<Allele> result) {
         final List<Allele> variantAlleles = recordGenotypeAlleles.stream().flatMap(List::stream).distinct().collect(Collectors.toList());
         final List<SVCallRecord> records = recordGenotypeAlleles.stream()
-                .map(a -> newCallRecordWithGenotypeAlleles(a, variantAlleles))
+                .map(a -> SVTestUtils.newCallRecordWithGenotypeAlleles(a, variantAlleles))
                 .collect(Collectors.toList());
         final List<Allele> sortedTest = SVCallRecordUtils.sortAlleles(collapser.collapseAltAlleles(records, svtype));
         final List<Allele> sortedExpected = SVCallRecordUtils.sortAlleles(result);
@@ -308,9 +296,9 @@ public class SVCollapserTest {
                                        final String[] expectedKeys,
                                        final Object[] expectedValues) {
         final List<Map<String, Object>> inputAttributesList = IntStream.range(0, keys.size())
-                .mapToObj(i -> keyValueArraysToMap(keys.get(i), values.get(i)))
+                .mapToObj(i -> SVTestUtils.keyValueArraysToMap(keys.get(i), values.get(i)))
                 .collect(Collectors.toList());
-        final Map<String, Object> expectedAttributes = keyValueArraysToMap(expectedKeys, expectedValues);
+        final Map<String, Object> expectedAttributes = SVTestUtils.keyValueArraysToMap(expectedKeys, expectedValues);
 
         // Test as genotype attributes
         final List<Genotype> genotypes = inputAttributesList.stream()
@@ -320,28 +308,11 @@ public class SVCollapserTest {
 
         // Test as variant attributes
         final List<SVCallRecord> variants = IntStream.range(0, inputAttributesList.size())
-                .mapToObj(i -> SVCollapserTest.newNamedCallRecordWithAttributes(variantIds.get(i), inputAttributesList.get(i)))
+                .mapToObj(i -> SVTestUtils.newNamedCallRecordWithAttributes(variantIds.get(i), inputAttributesList.get(i)))
                 .collect(Collectors.toList());
         final Map<String, Object> expectedAttributesWithMembers = new HashMap<>(expectedAttributes);
         expectedAttributesWithMembers.put(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY, variantIds);
         Assert.assertEquals(collapser.collapseVariantAttributes(variants), expectedAttributesWithMembers);
-    }
-
-    private static SVCallRecord newNamedCallRecordWithAttributes(final String id, final Map<String, Object> attributes) {
-        return new SVCallRecord(id, "chr1", 100, true, "chr1", 199, false,
-                StructuralVariantType.DEL,
-                100, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
-                Collections.emptyList(),
-                Collections.emptyList(),
-                attributes);
-    }
-
-    private static final Map<String, Object> keyValueArraysToMap(final String[] keys, final Object[] values) {
-        final Map<String, Object> map = new HashMap<>();
-        for (int i = 0; i < keys.length; i++) {
-            map.put(keys[i], values[i]);
-        }
-        return map;
     }
 
 
@@ -408,15 +379,8 @@ public class SVCollapserTest {
     @Test(dataProvider= "collapseLengthTestData")
     public void collapseLengthTest(final int[] lengths, final String[] chrom2, final StructuralVariantType[] svtypes,
                                    final int newStart, final int newEnd, final StructuralVariantType newType, final int expectedLength) {
-        final List<SVCallRecord> records = IntStream.range(0, lengths.length).mapToObj(i -> newCallRecordWithLengthAndTypeAndChrom2(lengths[i], svtypes[i], chrom2[i])).collect(Collectors.toList());
+        final List<SVCallRecord> records = IntStream.range(0, lengths.length).mapToObj(i -> SVTestUtils.newCallRecordWithLengthAndTypeAndChrom2(lengths[i], svtypes[i], chrom2[i])).collect(Collectors.toList());
         Assert.assertEquals(collapser.collapseLength(records, newStart, newEnd, newType), expectedLength);
-    }
-
-    // Note that strands may not be valid
-    private static SVCallRecord newCallRecordWithLengthAndTypeAndChrom2(final int length, final StructuralVariantType svtype, final String chrom2) {
-        return new SVCallRecord("", "chr1", 1, true, chrom2, length, false,
-                svtype, length, Collections.singletonList("pesr"), Collections.emptyList(), Collections.emptyList(),
-                Collections.emptyMap());
     }
 
     @DataProvider(name = "collapseIdsTestData")
@@ -430,15 +394,9 @@ public class SVCollapserTest {
 
     @Test(dataProvider= "collapseIdsTestData")
     public void collapseIdsTest(final List<String> ids, final String expectedResult) {
-        final List<SVCallRecord> records = ids.stream().map(SVCollapserTest::newCallRecordWithId).collect(Collectors.toList());
+        final List<SVCallRecord> records = ids.stream().map(SVTestUtils::newCallRecordWithId).collect(Collectors.toList());
         final String result = collapser.collapseIds(records);
         Assert.assertEquals(result, expectedResult);
-    }
-
-    private static SVCallRecord newCallRecordWithId(final String id) {
-        return new SVCallRecord(id, "chr1", 1, true, "chr1", 100, false,
-                StructuralVariantType.DEL, 100, Collections.singletonList("pesr"), Collections.emptyList(),
-                Collections.emptyList(), Collections.emptyMap());
     }
 
     @DataProvider(name = "getMostPreciseCallsTestData")
@@ -503,16 +461,10 @@ public class SVCollapserTest {
 
     @Test(dataProvider= "getMostPreciseCallsTestData")
     public void getMostPreciseCallsTest(final String[] ids, final List<List<String>> algorithms, final Set<String> expectedIds) {
-        final List<SVCallRecord> records = IntStream.range(0, ids.length).mapToObj(i -> newCallRecordWithIdAndAlgorithms(ids[i], algorithms.get(i))).collect(Collectors.toList());
+        final List<SVCallRecord> records = IntStream.range(0, ids.length).mapToObj(i -> SVTestUtils.newCallRecordWithIdAndAlgorithms(ids[i], algorithms.get(i))).collect(Collectors.toList());
         final List<String> resultIds = collapser.getMostPreciseCalls(records).stream().map(SVCallRecord::getId).collect(Collectors.toList());
         Assert.assertEquals(resultIds.size(), expectedIds.size());
         Assert.assertTrue(expectedIds.containsAll(resultIds));
-    }
-
-    private static SVCallRecord newCallRecordWithIdAndAlgorithms(final String id, final List<String> algorithms) {
-        return new SVCallRecord(id, "chr1", 1, true, "chr1", 100, false,
-                StructuralVariantType.DEL, 100, algorithms, Collections.emptyList(),
-                Collections.emptyList(), Collections.emptyMap());
     }
 
     @DataProvider(name = "collapseIntervalTestData")
@@ -586,7 +538,7 @@ public class SVCollapserTest {
                                      final int[] expectedMedian, final int[] expectedMinMax, final int[] expectedMaxMin,
                                      final int[] expectedMean) {
         final List<SVCallRecord> records =  IntStream.range(0, starts.length)
-                .mapToObj(i -> newCallRecordWithIntervalAndType(starts[i], ends[i], svtype)).collect(Collectors.toList());
+                .mapToObj(i -> SVTestUtils.newCallRecordWithIntervalAndType(starts[i], ends[i], svtype)).collect(Collectors.toList());
 
         final Map.Entry<Integer, Integer> resultMedian = collapser.collapseInterval(records);
         Assert.assertEquals((int) resultMedian.getKey(), expectedMedian[0]);
@@ -603,13 +555,6 @@ public class SVCollapserTest {
         final Map.Entry<Integer, Integer> resultMean = collapserMean.collapseInterval(records);
         Assert.assertEquals((int) resultMean.getKey(), expectedMean[0]);
         Assert.assertEquals((int) resultMean.getValue(), expectedMean[1]);
-    }
-
-    // Note strands and length may not be set properly
-    private static SVCallRecord newCallRecordWithIntervalAndType(final int start, final int end, final StructuralVariantType svtype) {
-        return new SVCallRecord("", "chr1", start, true, "chr1", end, false,
-                svtype, end - start + 1, Collections.singletonList("pesr"), Collections.emptyList(),
-                Collections.emptyList(), Collections.emptyMap());
     }
 
     @DataProvider(name = "collapseTypesTestData")
@@ -634,7 +579,7 @@ public class SVCollapserTest {
 
     @Test(dataProvider= "collapseTypesTestData")
     public void collapseTypesTest(final List<StructuralVariantType> types, final StructuralVariantType expectedResult) {
-        final List<SVCallRecord> records = types.stream().map(t -> newCallRecordWithIntervalAndType(1, 100, t)).collect(Collectors.toList());
+        final List<SVCallRecord> records = types.stream().map(t -> SVTestUtils.newCallRecordWithIntervalAndType(1, 100, t)).collect(Collectors.toList());
         Assert.assertEquals(collapser.collapseTypes(records), expectedResult);
     }
 
@@ -654,7 +599,7 @@ public class SVCollapserTest {
 
     @Test(dataProvider= "collapseAlgorithmsTestData")
     public void collapseAlgorithmsTest(final List<List<String>> algorithmLists, final List<String> expectedResult) {
-        final List<SVCallRecord> records = algorithmLists.stream().map(list -> newCallRecordWithIdAndAlgorithms("", list)).collect(Collectors.toList());
+        final List<SVCallRecord> records = algorithmLists.stream().map(list -> SVTestUtils.newCallRecordWithIdAndAlgorithms("", list)).collect(Collectors.toList());
         Assert.assertEquals(collapser.collapseAlgorithms(records), expectedResult);
     }
 

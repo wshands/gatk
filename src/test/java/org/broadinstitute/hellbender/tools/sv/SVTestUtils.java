@@ -12,6 +12,7 @@ import org.broadinstitute.hellbender.tools.sv.cluster.SVCollapser;
 import org.broadinstitute.hellbender.utils.GenomeLoc;
 import org.broadinstitute.hellbender.utils.GenomeLocParser;
 import org.testng.Assert;
+import org.testng.TestException;
 
 import java.util.*;
 import java.util.function.Function;
@@ -246,5 +247,85 @@ public class SVTestUtils {
                 VariantContextTestUtils.assertGenotypesAreEqual(one.get(sample), two.get(sample));
             }
         }
+    }
+
+    public static Genotype buildHomGenotypeWithPloidy(final Allele allele, final int ploidy) {
+        return new GenotypeBuilder().alleles(buildHomAlleleListWithPloidy(allele, ploidy)).make();
+    }
+
+    public static List<Allele> buildHomAlleleListWithPloidy(final Allele allele, final int ploidy) {
+        return Collections.nCopies(ploidy, allele);
+    }
+
+    public static List<Allele> buildBiallelicListWithPloidy(final Allele altAllele, final Allele refAllele, final int copyNumber, final int ploidy) {
+        final int numAlt;
+        if (altAllele.equals(Allele.SV_SIMPLE_DEL)) {
+            numAlt = Math.max(ploidy - copyNumber, 0);
+        } else if (altAllele.equals(Allele.SV_SIMPLE_DUP)) {
+            numAlt = Math.max(copyNumber - ploidy, 0);
+        } else {
+            throw new TestException("Unsupported alt allele: " + altAllele.getDisplayString());
+        }
+        final List<Allele> alleles = new ArrayList<>(ploidy);
+        final int numRef = ploidy - numAlt;
+        for (int i = 0; i < numRef; i++) {
+            alleles.add(refAllele);
+        }
+        for (int i = 0; i < numAlt; i++) {
+            alleles.add(altAllele);
+        }
+        return alleles;
+    }
+
+    public static SVCallRecord newCallRecordWithGenotypeAlleles(final List<Allele> genotypeAlleles, final List<Allele> variantAlleles) {
+        return new SVCallRecord("", "chr1", 100, true, "chr1", 199, false,
+                StructuralVariantType.DEL,
+                100, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
+                genotypeAlleles,
+                Collections.singletonList(new GenotypeBuilder().alleles(variantAlleles).make()),
+                Collections.emptyMap());
+    }
+
+    public static SVCallRecord newNamedCallRecordWithAttributes(final String id, final Map<String, Object> attributes) {
+        return new SVCallRecord(id, "chr1", 100, true, "chr1", 199, false,
+                StructuralVariantType.DEL,
+                100, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
+                Collections.emptyList(),
+                Collections.emptyList(),
+                attributes);
+    }
+
+    public static final Map<String, Object> keyValueArraysToMap(final String[] keys, final Object[] values) {
+        final Map<String, Object> map = new HashMap<>();
+        for (int i = 0; i < keys.length; i++) {
+            map.put(keys[i], values[i]);
+        }
+        return map;
+    }
+
+    // Note that strands may not be valid
+    public static SVCallRecord newCallRecordWithLengthAndTypeAndChrom2(final int length, final StructuralVariantType svtype, final String chrom2) {
+        return new SVCallRecord("", "chr1", 1, true, chrom2, length, false,
+                svtype, length, Collections.singletonList("pesr"), Collections.emptyList(), Collections.emptyList(),
+                Collections.emptyMap());
+    }
+
+    public static SVCallRecord newCallRecordWithId(final String id) {
+        return new SVCallRecord(id, "chr1", 1, true, "chr1", 100, false,
+                StructuralVariantType.DEL, 100, Collections.singletonList("pesr"), Collections.emptyList(),
+                Collections.emptyList(), Collections.emptyMap());
+    }
+
+    public static SVCallRecord newCallRecordWithIdAndAlgorithms(final String id, final List<String> algorithms) {
+        return new SVCallRecord(id, "chr1", 1, true, "chr1", 100, false,
+                StructuralVariantType.DEL, 100, algorithms, Collections.emptyList(),
+                Collections.emptyList(), Collections.emptyMap());
+    }
+
+    // Note strands and length may not be set properly
+    public static SVCallRecord newCallRecordWithIntervalAndType(final int start, final int end, final StructuralVariantType svtype) {
+        return new SVCallRecord("", "chr1", start, true, "chr1", end, false,
+                svtype, end - start + 1, Collections.singletonList("pesr"), Collections.emptyList(),
+                Collections.emptyList(), Collections.emptyMap());
     }
 }

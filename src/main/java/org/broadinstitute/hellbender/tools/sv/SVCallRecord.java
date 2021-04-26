@@ -27,6 +27,8 @@ public class SVCallRecord implements SVLocatable {
     private int length;
     private final List<String> algorithms;
     private final List<Allele> alleles;
+    private final Allele refAllele;
+    private final List<Allele> altAlleles;
     private final GenotypesContext genotypes;
     private final Map<String,Object> attributes;    // TODO: utilize this to pass through variant attributes
 
@@ -62,6 +64,10 @@ public class SVCallRecord implements SVLocatable {
         this.length = length;
         this.algorithms = Collections.unmodifiableList(algorithms);
         this.alleles = Collections.unmodifiableList(alleles);
+        this.altAlleles = alleles.stream().filter(allele -> !allele.isNoCall() && !allele.isReference()).collect(Collectors.toList());
+        final List<Allele> refAllelesList = alleles.stream().filter(allele -> !allele.isNoCall() && allele.isReference()).collect(Collectors.toList());
+        Utils.validate(refAllelesList.size() <= 1, "Encountered multiple reference alleles");
+        this.refAllele = refAllelesList.isEmpty() ? null : refAllelesList.get(0);
         this.genotypes = GenotypesContext.copy(genotypes).immutable();
         this.attributes = Collections.unmodifiableMap(attributes);
     }
@@ -143,9 +149,9 @@ public class SVCallRecord implements SVLocatable {
         return alleles;
     }
 
-    public List<Allele> getAltAlleles() {
-        return alleles.stream().filter(allele -> !allele.isNoCall() && !allele.isReference()).collect(Collectors.toList());
-    }
+    public List<Allele> getAltAlleles() { return altAlleles; }
+
+    public Allele getRefAllele() { return refAllele; }
 
     public Set<String> getAllSamples() {
         return genotypes.stream().map(Genotype::getSampleName)

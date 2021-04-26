@@ -64,86 +64,88 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
             return false;
         }
         // Checks appropriate parameter set
-        return clusterTogetherWithParams(a, b, evidenceParams)
-                || clusterTogetherWithParams(a, b, depthOnlyParams)
-                || clusterTogetherWithParams(a, b, mixedParams);
+        return clusterTogetherWithParams(a, b, evidenceParams, dictionary)
+                || clusterTogetherWithParams(a, b, depthOnlyParams, dictionary)
+                || clusterTogetherWithParams(a, b, mixedParams, dictionary);
     }
 
-    protected Set<Genotype> getCopyNumberCarrierGenotypes(final SVCallRecord record) {
+    private static Collection<Genotype> getCNVCarrierGenotypesByCopyNumber(final SVCallRecord record) {
+        Utils.validate(record.isCNV(), "Cannot determine carriers of non-CNV using copy number attribute.");
+        final List<Allele> altAlleles = record.getAltAlleles();
+        Utils.validate(altAlleles.size() <= 1,
+                "Carrier samples cannot be determined by copy number for multi-allelic sites. Set sample overlap threshold to 0.");
+        if (altAlleles.isEmpty()) {
+            return Collections.emptyList();
+        }
+        final Allele altAllele = altAlleles.get(0);
         return record.getGenotypes().stream()
-                .filter(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT) && VariantContextGetters.getAttributeAsInt(g, COPY_NUMBER_FORMAT, 0) != g.getPloidy())
-                .collect(Collectors.toSet());
+                .filter(g -> isCNVCarrierByCopyNumber(g, altAllele))
+                .collect(Collectors.toList());
     }
 
-    // TODO match copy numbers for multi-allelic variants
-    protected boolean copyNumberSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
-        if (hasDefinedCopyNumbers(a.getGenotypes()) && hasDefinedCopyNumbers(b.getGenotypes())) {
-            final Set<String> carrierSamplesA = getCopyNumberCarrierGenotypes(a).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
-            final Set<String> carrierSamplesB = getCopyNumberCarrierGenotypes(b).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
-            return hasSampleOverlap(carrierSamplesA, carrierSamplesB, minSampleOverlap);
+    private static boolean isCNVCarrierByCopyNumber(final Genotype genotype, final Allele altAllele) {
+        final int ploidy = genotype.getPloidy();
+        if (ploidy == 0) {
+            return false;
+        }
+        final int copyNumber = VariantContextGetters.getAttributeAsInt(genotype, COPY_NUMBER_FORMAT, 0);
+        if (altAllele.equals(Allele.SV_SIMPLE_DEL)) {
+            return copyNumber < ploidy;
         } else {
-            return genotypeSampleOverlap(a, b, minSampleOverlap);
+            // DUP
+            return copyNumber > ploidy;
         }
     }
 
-    protected boolean hasDefinedCopyNumbers(final Collection<Genotype> genotypes) {
-        return genotypes.stream().allMatch(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT));
+    private static Set<String> getCarrierSamplesByCopyNumber(final SVCallRecord record) {
+        return getCNVCarrierGenotypesByCopyNumber(record).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
     }
 
-    private boolean hasSampleOverlap(final Set<String> samplesA, final Set<String> samplesB, final double minSampleOverlap) {
-        if (samplesA.isEmpty() && samplesB.isEmpty()) {
-            return true;
-        }
-        final Set<String> sharedSamples = new LinkedHashSet<>(samplesA);
-        sharedSamples.retainAll(samplesB);
-        final double sampleOverlap = sharedSamples.size() / (double) Math.max(samplesA.size(), samplesB.size());
+    private static boolean hasSampleSetOverlap(final Set<String> samplesA, final Set<String> samplesB, final double minSampleOverlap) {
+        final double sampleOverlap = getSampleSetOverlap(samplesA, samplesB) / (double) Math.max(samplesA.size(), samplesB.size());
         return sampleOverlap >= minSampleOverlap;
     }
 
-    protected List<Genotype> getGenotypedCarrierGenotypes(final SVCallRecord record, final Allele allele) {
-        return record.getGenotypes().stream()
-                .filter(g -> g.getAlleles().stream().anyMatch(a -> a.equals(allele)))
-                .collect(Collectors.toList());
+    private static int getSampleSetOverlap(final Collection<String> a, final Set<String> b) {
+        return (int) a.stream().filter(b::contains).count();
     }
 
-    protected List<Genotype> getGenotypedCarrierGenotypes(final SVCallRecord record, final Set<Allele> alleles) {
-        return record.getGenotypes().stream()
-                .filter(g -> g.getAlleles().stream().anyMatch(alleles::contains))
-                .collect(Collectors.toList());
+    private static boolean hasDefinedCopyNumbers(final Collection<Genotype> genotypes) {
+        return genotypes.stream().allMatch(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT));
     }
 
-    protected boolean genotypeSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
-        final List<Allele> altAllelesA = a.getAltAlleles();
-        final List<Allele> altAllelesB = b.getAltAlleles();
-        Utils.validate(altAllelesA.size() <= 1 && altAllelesB.size() <= 1, "Genotype-based sample overlap not supported for multi-allelic sites");
-        final Set<String> carrierSamplesA;
-        final Set<String> carrierSamplesB;
-        if (altAllelesA.isEmpty()) {
-            carrierSamplesA = Collections.emptySet();
-        } else {
-            carrierSamplesA = getGenotypedCarrierGenotypes(a, altAllelesA.get(0)).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
+    private static Set<String> getCarrierSamplesByGenotype(final SVCallRecord record) {
+        final Set<Allele> altAlleles = new HashSet<>(record.getAltAlleles());
+        if (altAlleles.isEmpty()) {
+            return Collections.emptySet();
         }
-        if (altAllelesB.isEmpty()) {
-            carrierSamplesB = Collections.emptySet();
-        } else {
-            carrierSamplesB = getGenotypedCarrierGenotypes(b, altAllelesB.get(0)).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
-        }
-        return hasSampleOverlap(carrierSamplesA, carrierSamplesB, minSampleOverlap);
+        return record.getGenotypes().stream()
+                .filter(g -> g.getAlleles().stream().anyMatch(altAlleles::contains))
+                .map(Genotype::getSampleName)
+                .collect(Collectors.toSet());
     }
 
-    protected boolean hasSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
+    protected static Set<String> getCarrierSamples(final SVCallRecord record) {
+        if (record.isCNV() && hasDefinedCopyNumbers(record.getGenotypes())) {
+            return getCarrierSamplesByCopyNumber(record);
+        } else {
+            return getCarrierSamplesByGenotype(record);
+        }
+    }
+
+    protected static boolean hasSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
         if (minSampleOverlap > 0) {
-            if (a.isCNV() && b.isCNV()) {
-                return copyNumberSampleOverlap(a, b, minSampleOverlap);
-            } else {
-                return genotypeSampleOverlap(a, b, minSampleOverlap);
-            }
+            final Set<String> samplesA = getCarrierSamples(a);
+            final Set<String> samplesB = getCarrierSamples(b);
+            return hasSampleSetOverlap(samplesA, samplesB, minSampleOverlap);
         } else {
             return true;
         }
     }
 
-    private boolean clusterTogetherWithParams(final SVCallRecord a, final SVCallRecord b, final ClusteringParameters params) {
+    private static boolean clusterTogetherWithParams(final SVCallRecord a, final SVCallRecord b,
+                                                     final ClusteringParameters params,
+                                                     final SAMSequenceDictionary dictionary) {
         // Type check
         if (!params.isValidPair(a, b)) {
             return false;
@@ -177,7 +179,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         return intervalA1.overlaps(intervalB1) && intervalA2.overlaps(intervalB2);
     }
 
-    private int getLengthForOverlap(final SVCallRecord record) {
+    private static int getLengthForOverlap(final SVCallRecord record) {
         Utils.validate(record.isIntrachromosomal(), "Record even must be intra-chromosomal");
         if (record.getType() == StructuralVariantType.INS) {
             return record.getLength() < 1 ? INSERTION_ASSUMED_LENGTH_FOR_OVERLAP : record.getLength();
@@ -190,12 +192,13 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     @Override
     protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
         return Math.max(
-                getMaxClusterableStartingPositionWithParams(call, call.isDepthOnly() ? depthOnlyParams : evidenceParams),
-                getMaxClusterableStartingPositionWithParams(call, mixedParams)
+                getMaxClusterableStartingPositionWithParams(call, call.isDepthOnly() ? depthOnlyParams : evidenceParams, dictionary),
+                getMaxClusterableStartingPositionWithParams(call, mixedParams, dictionary)
         );
     }
 
-    private int getMaxClusterableStartingPositionWithParams(final SVCallRecord call, final ClusteringParameters params) {
+    private static int getMaxClusterableStartingPositionWithParams(final SVCallRecord call, final ClusteringParameters params,
+                                                            final SAMSequenceDictionary dictionary) {
         final String contig = call.getContigA();
         final int contigLength = dictionary.getSequence(contig).getSequenceLength();
         // Reciprocal overlap window
@@ -233,10 +236,6 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
     public final void setEvidenceParams(ClusteringParameters evidenceParams) {
         this.evidenceParams = evidenceParams;
-    }
-
-    public static boolean isCnvType(final StructuralVariantType type) {
-        return type == StructuralVariantType.DEL || type == StructuralVariantType.DUP || type == StructuralVariantType.CNV;
     }
 
     public static class ClusteringParameters {

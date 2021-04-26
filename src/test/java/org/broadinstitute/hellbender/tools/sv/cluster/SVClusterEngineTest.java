@@ -1,8 +1,7 @@
 package org.broadinstitute.hellbender.tools.sv.cluster;
 
 import com.google.common.collect.Lists;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.StructuralVariantType;
+import htsjdk.variant.variantcontext.*;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.SVCallRecord;
 import org.broadinstitute.hellbender.tools.sv.SVTestUtils;
@@ -12,10 +11,10 @@ import org.testng.annotations.BeforeTest;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import static org.broadinstitute.hellbender.tools.sv.cluster.LocatableClusterEngine.CLUSTERING_TYPE.MAX_CLIQUE;
 import static org.broadinstitute.hellbender.tools.sv.cluster.LocatableClusterEngine.CLUSTERING_TYPE.SINGLE_LINKAGE;
@@ -352,5 +351,106 @@ public class SVClusterEngineTest {
         Assert.assertEquals(output3.get(0).getPositionB(), SVTestUtils.call1.getPositionB());
         Assert.assertEquals(output3.get(0).getPositionA(), SVTestUtils.sameBoundsSampleMismatch.getPositionA());
         Assert.assertEquals(output3.get(0).getPositionB(), SVTestUtils.sameBoundsSampleMismatch.getPositionB());
+    }
+
+    @Test
+    public void testAddMaxCliqueLarge() {
+        final int numRecords = 100;
+        final SVClusterEngine<SVCallRecord> engine = SVTestUtils.getNewDefaultMaxCliqueEngine();
+        final int length = 5000;
+        for (int i = 0; i < numRecords; i++) {
+            final int start = 1000 + 10 * i;
+            final int end = start + length - 1;
+            engine.add(SVTestUtils.newCallRecordWithIntervalAndType(start, end, StructuralVariantType.DEL));
+        }
+        final List<SVCallRecord> result = engine.getOutput();
+        Assert.assertEquals(result.size(), 50);
+        for (final SVCallRecord resultRecord : result) {
+            Assert.assertTrue(resultRecord.getAttributes().containsKey(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY));
+            Assert.assertEquals(((List<Integer>) resultRecord.getAttributes().get(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY)).size(), 51);
+        }
+    }
+
+    @DataProvider(name = "testGetCarrierSamplesBiallelicData")
+    public Object[][] testGetCarrierSamplesBiallelicData() {
+        return new Object[][]{
+                // Empty
+                {0, null, null, new int[]{}, new String[]{}},
+                {0, null, Allele.SV_SIMPLE_DEL, new int[]{}, new String[]{}},
+                {0, Allele.REF_N, null, new int[]{}, new String[]{}},
+                {0, Allele.NO_CALL, null, new int[]{}, new String[]{}},
+                {0, Allele.NO_CALL, Allele.SV_SIMPLE_DEL, new int[]{}, new String[]{}},
+                {0, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{}, new String[]{}},
+                // Ploidy 0
+                {0, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{0}, new String[]{}},
+                // Ploidy 1, no carrier
+                {1, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{1, 1}, new String[]{}},
+                // Ploidy 1, with carrier
+                {1, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{1, 0}, new String[]{"1"}},
+                // Ploidy 2, no carrier
+                {2, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{2, 2, 2}, new String[]{}},
+                // Ploidy 2, with carriers
+                {2, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{2, 1, 1}, new String[]{"1", "2"}},
+                {2, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{2, 1, 0}, new String[]{"1", "2"}},
+                {2, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{2, 1, 3}, new String[]{"1"}}, // third is not consistent with DEL
+                // DUP
+                {2, Allele.REF_N, Allele.SV_SIMPLE_DUP, new int[]{2, 3, 2}, new String[]{"1"}},
+                {2, Allele.REF_N, Allele.SV_SIMPLE_DUP, new int[]{2, 1, 3}, new String[]{"2"}}, // second is not consistent with DUP
+                // Ploidy 3
+                {3, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{3, 3, 3}, new String[]{}},
+                {3, Allele.REF_N, Allele.SV_SIMPLE_DEL, new int[]{0, 1, 2, 3}, new String[]{"0", "1", "2"}}
+        };
+    }
+
+    @Test(dataProvider= "testGetCarrierSamplesBiallelicData")
+    public void testGetCarrierSamplesBiallelic(final int ploidy, final Allele refAllele, final Allele altAllele,
+                                               final int[] copyNumbers, final String[] expectedSamples) {
+        final Set<String> expectedResult = Stream.of(expectedSamples).collect(Collectors.toSet());
+        final List<Allele> alleles = new ArrayList<>(2);
+        if (refAllele != null) {
+            alleles.add(refAllele);
+        }
+        final StructuralVariantType svtype;
+        if (altAllele != null) {
+            if (altAllele.equals(Allele.SV_SIMPLE_DEL)) {
+                svtype = StructuralVariantType.DEL;
+            } else if (altAllele.equals(Allele.SV_SIMPLE_DUP)) {
+                svtype = StructuralVariantType.DUP;
+            } else {
+                throw new TestException("Invalid alt allele: " + altAllele.getDisplayString());
+            }
+            alleles.add(altAllele);
+        } else {
+            svtype = StructuralVariantType.DEL; // default
+        }
+
+        // Create genotypes with copy number attribute (and no genotypes)
+        final List<Genotype> genotypesWithCopyNumber = IntStream.range(0, copyNumbers.length)
+                .mapToObj(i -> new GenotypeBuilder(String.valueOf(i))
+                        .attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, copyNumbers[i])
+                        .alleles(SVTestUtils.buildHomAlleleListWithPloidy(Allele.NO_CALL, ploidy))
+                        .make())
+                .collect(Collectors.toList());
+        final SVCallRecord recordWithCopyNumber = new SVCallRecord("", "chr1", 1000, true,
+                "chr1", 1999, false, svtype,
+                1000, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
+                alleles, GenotypesContext.copy(genotypesWithCopyNumber), Collections.emptyMap());
+        final Set<String> resultWithCopyNumber =  SVClusterEngine.getCarrierSamples(recordWithCopyNumber);
+
+        Assert.assertEquals(resultWithCopyNumber, expectedResult);
+
+        // Create genotypes with genotypes (and no copy number attribute)
+        final List<Genotype> genotypesWithGenotype = IntStream.range(0, copyNumbers.length)
+                .mapToObj(i -> new GenotypeBuilder(String.valueOf(i))
+                        .alleles(SVTestUtils.buildBiallelicListWithPloidy(altAllele, refAllele, copyNumbers[i], ploidy))
+                        .make())
+                .collect(Collectors.toList());
+        final SVCallRecord recordWithGenotype = new SVCallRecord("", "chr1", 1000, true,
+                "chr1", 1999, false, svtype,
+                1000, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
+                alleles, GenotypesContext.copy(genotypesWithGenotype), Collections.emptyMap());
+        final Set<String> resultWithGenotype = SVClusterEngine.getCarrierSamples(recordWithGenotype);
+
+        Assert.assertEquals(resultWithGenotype, expectedResult);
     }
 }
