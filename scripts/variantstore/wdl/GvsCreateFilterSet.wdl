@@ -239,6 +239,7 @@ task ExtractFilterTask {
                 --local-sort-max-records-in-ram ~{local_sort_max_records_in_ram} \
                 --sample-table ~{fq_sample_table} \
                 --alt-allele-table ~{fq_alt_allele_table} \
+                --queryLabels '{"label": "without", "a": "cause"}'
                 -L ~{intervals} \
                 ~{"-XL " + excluded_intervals} \
                 --project-id ~{read_project_id}
