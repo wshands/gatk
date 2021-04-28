@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.walkers.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv.GqRecalibrator;
 
 import htsjdk.variant.vcf.VCFConstants;
 import ml.dmlc.xgboost4j.java.*;
@@ -50,7 +50,6 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
 
     private Booster booster = null;
     private int gqPropertyIndex;
-    final float phredCoef = (float)(predictionScaleFactor * FastMath.log(10.0) / 10.0);
 
     private static final String TRAIN_MAT_KEY = "train";
     private static final String VALIDATION_MAT_KEY = "validation";
@@ -109,7 +108,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                 final float gq = propertiesArr[baselineIndex];
                 baselineIndex += numColumns;
                 final float baseline_idx = probToLogits(
-                    FastMath.max(0.1F, FastMath.min(phredToProb(gq), 0.9F))
+                    FastMath.max(0.1F, FastMath.min((float)phredToProb(gq), 0.9F))
                 );
                 baseline[idx] = baseline_idx;
                 weights[idx] = 1F;
@@ -141,10 +140,6 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                 put("eval_metric", "logloss");
             }
         };
-    }
-
-    private float phredToProb(final float phred) {
-        return (float)-FastMath.expm1(-phredCoef * FastMath.max(phred, 1e-3));
     }
 
     private class DataSubset {
@@ -276,14 +271,14 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             }
         }
 
-        private Loss getMiniBatchLoss(final Booster booster, final int miniBatchIndex, final boolean training) {
+        private FilterLoss getMiniBatchLoss(final Booster booster, final int miniBatchIndex, final boolean training) {
             final DMatrix miniBatchDMatrix = getBatchDMatrix(miniBatchIndex);
             final float[][] rawPredictions = getRawPredictions(booster, miniBatchDMatrix);
             final float[] pVSGood = pSampleVariantGood == null ? new float[rawPredictions.length] : pSampleVariantGood;
             for(int idx = 0; idx < rawPredictions.length; ++idx) {
                 pVSGood[idx] = logitsToProb(rawPredictions[idx][0]);
             }
-            final Loss loss;
+            final FilterLoss loss;
 
             if(isTrainingSet && training) {
                 final float[] d1Loss, d2Loss;
@@ -296,7 +291,12 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
                     this.lossDerivatives[0] = d1Loss;
                     this.lossDerivatives[1] = d2Loss;
                 }
-                loss = getLoss(pVSGood, d1Loss, d2Loss, variantIndices);
+
+                if(trainObjective == TrainObjective.PerVariantOptimized) {
+                    loss = getLossFromPerVariantOptimization(pVSGood, d1Loss, d2Loss, variantIndices);
+                } else {
+                    loss = getLossInheritanceAndTruth(pVSGood, d1Loss, d2Loss, variantIndices);
+                }
                 if(printProgress > 0) {
                     if(miniBatchIndex == 0) {
                         System.out.format("\tBoosting round %d on %s\n", 1 + getRound(), name);
@@ -332,12 +332,12 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
             return builder.build();
         }
 
-        public Loss getRoundLoss(final Booster booster, final boolean training) {
-            final Loss roundLoss = miniBatchSplits == null ?
+        public FilterLoss getRoundLoss(final Booster booster, final boolean training) {
+            final FilterLoss roundLoss = miniBatchSplits == null ?
                 getMiniBatchLoss(booster, 0, training) : //.divide(this.size());
                 IntStream.range(0, miniBatchSplits.length)
                     .mapToObj(idx -> this.getMiniBatchLoss(booster, idx, training))
-                    .reduce(Loss::add)
+                    .reduce(FilterLoss::add)
                     .orElseThrow(RuntimeException::new)
                     .divide(this.size());
             if(printProgress > 0) {
@@ -436,7 +436,7 @@ public class XGBoostMinGqVariantFilter extends MinGqVariantFilterBase {
         boolean needSaveCheckpoint = !dataSubsets.isEmpty();
         boolean needStop = !dataSubsets.isEmpty();
         for(final DataSubset dataSubset : dataSubsets) {
-            final Loss roundLoss = dataSubset.getRoundLoss(booster, true);
+            final FilterLoss roundLoss = dataSubset.getRoundLoss(booster, true);
             dataSubset.appendScore(roundLoss.toFloat());
             if(!dataSubset.isTrainingSet) {
                 // check if need to stop iterating or save model checkpoint

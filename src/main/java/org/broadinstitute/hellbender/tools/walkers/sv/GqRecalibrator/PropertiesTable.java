@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.walkers.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv.GqRecalibrator;
 
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
@@ -7,11 +7,12 @@ import net.minidev.json.parser.ParseException;
 import org.apache.commons.math3.util.FastMath;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.jetbrains.annotations.NotNull;
+import scala.sys.Prop;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.*;
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
@@ -86,15 +87,19 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         return getOrCreateProperty(propertyName, propertyClass, initialNumAllocatedRows);
     }
 
-    public Property getOrCreateProperty(final String propertyName, final PropertyClass propertyClass, final int numRows) {
+    public Property getOrCreateProperty(final String propertyName, final PropertyClass propertyClass,
+                                        final int numAllocatedRows) {
         // Maintain propertyNames in sorted order, and keep other entries in same order
         final int propertyIndex = getPropertyIndex(propertyName);
         final Property property;
         if(propertyIndex >= 0) {
             property = properties.get(propertyIndex);
+            if(property.getAllocatedRows() < numAllocatedRows) {
+                property.setAllocatedRows(numAllocatedRows);
+            }
         } else {
             final int insertIndex = -1 - propertyIndex;
-            property = Property.create(propertyClass, propertyName, numRows);
+            property = Property.create(propertyClass, propertyName, numAllocatedRows);
             if(!property.isNumeric()) {
                 allNumeric = false;
             }
@@ -251,7 +256,7 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
     }
 
     protected int getConsistentIntPropertyValue(ToIntFunction<Property> method, final String valuesLabel) {
-        final int[] distinctValues =properties.stream()
+        final int[] distinctValues = properties.stream()
                 .mapToInt(method)
                 .filter(c -> c >= 0)
                 .distinct()
@@ -262,6 +267,8 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
             case 1: // consistent value
                 return distinctValues[0];
             default: // inconsistent values
+                System.out.println(valuesLabel + ":");
+                properties.forEach(property -> System.out.println("\t" + property.name + ": " + method.applyAsInt(property)));
                 throw new IllegalArgumentException("PropertiesTable contains inconsistent numbers of " + valuesLabel);
         }
     }
@@ -307,10 +314,11 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
                 labelsEncoding.get(property.name) :
                 property.getAllLabels();
             if(allLabels != null) {
-                remove(property.name);
-                for(final Property oneHotProperty : property.oneHot(allLabels)) {
-                    insert(oneHotProperty);
+                if(!labelsEncoding.containsKey(property.name)) {
+                    addLabelEncoding(property.name, allLabels);
                 }
+                remove(property.name);
+                property.oneHot(allLabels, this);
             }
         }
         allNumeric = true;
@@ -338,10 +346,10 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
      *   5) allocate float[] propertiesRow so that rows can be efficiently queried for inference
      */
     public void validateAndFinalize() {
+        oneHot();
         getNumColumns();
         getNumRows();
         trim();
-        oneHot();
         setBaselineAndScales();
         propertiesRow = new float[getNumProperties()];
     }
@@ -392,7 +400,8 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         jsonObject.put(PROPERTY_SCALE_KEY, propScale);
 
         try {
-            outputStream.write(jsonObject.toJSONString().getBytes());
+            outputStream.write(jsonObject.toJSONString().getBytes(StandardCharsets.UTF_8));
+            outputStream.write("\n".getBytes(StandardCharsets.UTF_8));
         } catch(IOException ioException) {
             throw new GATKException("Error saving data summary json", ioException);
         }
@@ -400,21 +409,22 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
 
     protected void saveLabelsEncoding(final OutputStream outputStream) {
         final JSONObject jsonObject = new JSONObject();
-        for(Map.Entry<String, List<String>> encodingEntry : labelsEncoding.entrySet()) {
+        for(final Map.Entry<String, List<String>> encodingEntry : labelsEncoding.entrySet()) {
             final JSONArray labels = new JSONArray();
             labels.addAll(encodingEntry.getValue());
             jsonObject.put(encodingEntry.getKey(), labels);
         }
         try {
-            outputStream.write(jsonObject.toJSONString().getBytes());
+            outputStream.write(jsonObject.toJSONString().getBytes(StandardCharsets.UTF_8));
+            outputStream.write("\n".getBytes(StandardCharsets.UTF_8));
         } catch(IOException ioException) {
             throw new GATKException("Error saving data summary json", ioException);
         }
+
     }
 
     public void saveDataEncoding(final OutputStream outputStream) throws IOException {
         saveNormalizationStats(outputStream);
-        outputStream.write("\n".getBytes());
         saveLabelsEncoding(outputStream);
     }
 
@@ -481,13 +491,35 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         }
     }
 
-    protected void loadNormalizations(final InputStream inputStream) {
-        final JSONObject jsonObject;
+
+    final String getNextLine(final InputStream inputStream) {
         try {
-            jsonObject = (JSONObject) JSONValue.parseWithException(inputStream);
-        } catch (IOException | ParseException ioException) {
-            throw new GATKException("Unable to parse JSON from inputStream", ioException);
+            byte[] bytes = new byte[1000];
+            int ind = 0;
+            for(int c = inputStream.read(); (byte)c != '\n' && c != -1; c = inputStream.read()) {
+                bytes[ind] = (byte)c;
+                ++ind;
+                if(ind == bytes.length) {
+                    bytes = Arrays.copyOf(bytes, bytes.length * 2);
+                }
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (IOException ioException) {
+            throw new GATKException("Unable to get next line from inputStream", ioException);
         }
+    }
+
+    final JSONObject getNextJSONObject(final InputStream inputStream) {
+        final String nextLine = getNextLine(inputStream);
+        try {
+            return (JSONObject) JSONValue.parseWithException(nextLine);
+        } catch (ParseException | ClassCastException parseException) {
+            throw new GATKException("Unable to parse JSON from inputStream", parseException);
+        }
+    }
+
+    protected void loadNormalizations(final InputStream inputStream) {
+        final JSONObject jsonObject = getNextJSONObject(inputStream);
         final JSONArray propNames = ((JSONArray) jsonObject.get(PROPERTY_NAMES_KEY));
         final JSONArray propClasses = ((JSONArray) jsonObject.get(PROPERTY_CLASSES_KEY));
         final JSONArray propBase = ((JSONArray) jsonObject.get(PROPERTY_BASELINE_KEY));
@@ -501,12 +533,7 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
     }
 
     protected void loadEncodings(final InputStream inputStream) {
-        final JSONObject jsonObject;
-        try {
-            jsonObject = (JSONObject) JSONValue.parseWithException(inputStream);
-        } catch (IOException | ParseException ioException) {
-            throw new GATKException("Unable to parse JSON from inputStream", ioException);
-        }
+        final JSONObject jsonObject = getNextJSONObject(inputStream);
         for(final String propertyName : jsonObject.keySet()) {
             final JSONArray labels = (JSONArray) jsonObject.get(propertyName);
             addLabelEncoding(propertyName, labels.stream().map(label -> (String)label).collect(Collectors.toList()));
@@ -549,7 +576,7 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         }
         public boolean isNumeric() { return true; }
         public List<String> getAllLabels() { return null; }
-        public List<Property> oneHot(final List<String> allLabels) { return null; }
+        public void oneHot(final List<String> allLabels, final PropertiesTable propertiesTable) {}
 
         public static Property create(final PropertyClass propertyClass, final String name) {
             return create(propertyClass, name, DEFAULT_INITIAL_NUM_ALLOCATED_ROWS);
@@ -701,6 +728,9 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
             this.values = Arrays.copyOf(this.values, numRows);
         }
         @Override protected void assignNextValue(final Object value) { this.values[numRows] = (boolean[])value; }
+        protected void assignColumnValue(final int column, final boolean value) {
+            this.values[numRows][column] = value;
+        }
         @Override protected void calculateBaselineAndScale() {
             // special case for booleans
             final long numTrue = IntStream.range(0, numRows).mapToLong(i -> getNumTrue(values[i])).sum();
@@ -963,30 +993,37 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
         @Override public List<String> getAllLabels() {
             return Arrays.stream(values, 0, numRows).distinct().sorted().collect(Collectors.toList());
         }
-        @Override public List<Property> oneHot(final List<String> allLabels) {
+        @Override public void oneHot(final List<String> allLabels, final PropertiesTable propertiesTable) {
             switch(allLabels.size()) {
                 case 0:
-                case 1:  // no actual property, return empty non-null List<Property>
-                    return new ArrayList<>();
+                case 1:  // no actual property
+                    return;
                 case 2:  // have a single new boolean property
                     final String trueLabel = allLabels.get(1);
-                    final BooleanArrProperty boolProperty = new BooleanArrProperty(trueLabel, numRows);
+                    final BooleanArrProperty boolProperty = (BooleanArrProperty)propertiesTable.getOrCreateProperty(
+                        trueLabel, PropertyClass.BooleanArrProperty, numRows
+                    );
+                    boolProperty.numRows = 0;
                     for(int row = 0; row < numRows; ++row) {
                         boolProperty.append(this.values[row].equals(trueLabel));
                     }
-                    return Collections.singletonList(boolProperty);
+                    return;
                 default:  // have new one-hot encoded set of multiple properties
                     final int numProperties = allLabels.size();
                     final List<Property> properties = IntStream.range(0, numProperties)
-                        .mapToObj(i -> new BooleanArrProperty(allLabels.get(i), numRows))
+                        .mapToObj(i ->
+                            (BooleanArrProperty)propertiesTable.getOrCreateProperty(
+                               allLabels.get(i), PropertyClass.BooleanArrProperty, numRows
+                            )
+                        )
                         .collect(Collectors.toList());
+                    properties.forEach(p -> p.numRows = 0);
                     for(int row = 0; row < numRows; ++row) {
                         final String label = this.values[row];
                         for(int propertyIndex = 0; propertyIndex < numProperties; ++propertyIndex) {
                             properties.get(propertyIndex).append(label.equals(allLabels.get(propertyIndex)));
                         }
                     }
-                    return properties;
             }
         }
     }
@@ -1022,40 +1059,46 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
             return Arrays.stream(values, 0, numRows).flatMap(Arrays::stream).distinct().sorted()
                 .collect(Collectors.toList());
         }
-        @Override public List<Property> oneHot(final List<String> allLabels) {
+        @Override public void oneHot(final List<String> allLabels, final PropertiesTable propertiesTable) {
             switch(allLabels.size()) {
                 case 0:
-                case 1:  // no actual property, return empty non-null List<Property>
-                    return new ArrayList<>();
+                case 1:  // no actual property
+                    return;
                 case 2:  // have a single new boolean property
                     final String trueLabel = allLabels.get(1);
-                    final BooleanMatProperty boolProperty = new BooleanMatProperty(trueLabel, numRows);
+                    final BooleanMatProperty boolProperty = (BooleanMatProperty)propertiesTable.getOrCreateProperty(
+                            trueLabel, PropertyClass.BooleanMatProperty, numRows
+                    );
+                    boolProperty.numRows = 0;
                     for(int row = 0; row < numRows; ++row) {
                         final String[] colLabels = this.values[row];
-                        final boolean[] colBooleans = new boolean[colLabels.length];
                         for(int col = 0; col < colLabels.length; ++col) {
-                            colBooleans[col] = colLabels[col].equals(trueLabel);
+                            boolProperty.assignColumnValue(col, colLabels[col].equals(trueLabel));
                         }
-                        boolProperty.append(colBooleans);
+                        ++boolProperty.numRows;
                     }
-                    return Collections.singletonList(boolProperty);
+                    return;
                 default:  // have new one-hot encoded set of multiple properties
                     final int numProperties = allLabels.size();
-                    final List<Property> properties = IntStream.range(0, numProperties)
-                            .mapToObj(i -> new BooleanMatProperty(allLabels.get(i), numRows))
-                            .collect(Collectors.toList());
+                    final List<BooleanMatProperty> properties = IntStream.range(0, numProperties)
+                        .mapToObj(i ->
+                            (BooleanMatProperty)propertiesTable.getOrCreateProperty(
+                                allLabels.get(i), PropertyClass.BooleanMatProperty, numRows
+                            )
+                        )
+                        .collect(Collectors.toList());
+                    properties.forEach(p -> p.numRows = 0);
                     for(int row = 0; row < numRows; ++row) {
                         final String[] colLabels = this.values[row];
                         for(int propertyIndex = 0; propertyIndex < numProperties; ++propertyIndex) {
-                            final boolean[] colBooleans = new boolean[colLabels.length];
                             final String propertyLabel = allLabels.get(propertyIndex);;
+                            final BooleanMatProperty booleanMatProperty = properties.get(propertyIndex);
                             for(int col = 0; col < colLabels.length; ++col) {
-                                colBooleans[col] = colLabels[col].equals(propertyLabel);
+                                booleanMatProperty.assignColumnValue(col, colLabels[col].equals(propertyLabel));
                             }
-                            properties.get(propertyIndex).append(colBooleans);
+                            ++booleanMatProperty.numRows;
                         }
                     }
-                    return properties;
             }
         }
     }
@@ -1095,30 +1138,37 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
             return Arrays.stream(values, 0, numRows).flatMap(o -> ((Set<String>)o).stream())
                 .distinct().sorted().collect(Collectors.toList());
         }
-        @Override public List<Property> oneHot(final List<String> allLabels) {
+        @Override public void oneHot(final List<String> allLabels, final PropertiesTable propertiesTable) {
             switch(allLabels.size()) {
                 case 0:
-                case 1:  // no actual property, return empty non-null List<Property>
-                    return new ArrayList<>();
+                case 1:  // no actual property
+                    return;
                 case 2:  // have a single new boolean property
                     final String trueLabel = allLabels.get(1);
-                    final BooleanArrProperty boolProperty = new BooleanArrProperty(trueLabel, numRows);
+                    final BooleanArrProperty boolProperty = (BooleanArrProperty)propertiesTable.getOrCreateProperty(
+                            trueLabel, PropertyClass.BooleanArrProperty, numRows
+                    );
+                    boolProperty.numRows = 0;
                     for(int row = 0; row < numRows; ++row) {
                         boolProperty.append(((Set<String>)this.values[row]).contains(trueLabel));
                     }
-                    return Collections.singletonList(boolProperty);
+                    return;
                 default:  // have new one-hot encoded set of multiple properties
                     final int numProperties = allLabels.size();
                     final List<Property> properties = IntStream.range(0, numProperties)
-                            .mapToObj(i -> new BooleanArrProperty(allLabels.get(i), numRows))
-                            .collect(Collectors.toList());
+                        .mapToObj(i ->
+                            (BooleanArrProperty)propertiesTable.getOrCreateProperty(
+                                    allLabels.get(i), PropertyClass.BooleanArrProperty, numRows
+                            )
+                        )
+                        .collect(Collectors.toList());
+                    properties.forEach(p -> p.numRows = 0);
                     for(int row = 0; row < numRows; ++row) {
                         final Set<String> rowLabels = (Set<String>)this.values[row];
                         for(int propertyIndex = 0; propertyIndex < numProperties; ++propertyIndex) {
                             properties.get(propertyIndex).append(rowLabels.contains(allLabels.get(propertyIndex)));
                         }
                     }
-                    return properties;
             }
         }
     }
@@ -1157,40 +1207,46 @@ class PropertiesTable implements Iterable<PropertiesTable.Property> {
             return Arrays.stream(values, 0, numRows).flatMap(Arrays::stream)
                 .flatMap(Collection::stream).distinct().sorted().collect(Collectors.toList());
         }
-        @Override public List<Property> oneHot(final List<String> allLabels) {
+        @Override public void oneHot(final List<String> allLabels, final PropertiesTable propertiesTable) {
             switch(allLabels.size()) {
                 case 0:
-                case 1:  // no actual property, return empty non-null List<Property>
-                    return new ArrayList<>();
+                case 1:  // no actual property
+                    return;
                 case 2:  // have a single new boolean property
                     final String trueLabel = allLabels.get(1);
-                    final BooleanMatProperty boolProperty = new BooleanMatProperty(trueLabel, numRows);
+                    final BooleanMatProperty boolProperty = (BooleanMatProperty)propertiesTable.getOrCreateProperty(
+                        trueLabel, PropertyClass.BooleanMatProperty, numRows
+                    );
+                    boolProperty.numRows = 0;
                     for(int row = 0; row < numRows; ++row) {
                         final Set<String>[] colLabels = this.values[row];
-                        final boolean[] colBooleans = new boolean[colLabels.length];
                         for(int col = 0; col < colLabels.length; ++col) {
-                            colBooleans[col] = colLabels[col].contains(trueLabel);
+                            boolProperty.assignColumnValue(col, colLabels[col].contains(trueLabel));
                         }
-                        boolProperty.append(colBooleans);
+                        ++boolProperty.numRows;
                     }
-                    return Collections.singletonList(boolProperty);
+                    return;
                 default:  // have new one-hot encoded set of multiple properties
                     final int numProperties = allLabels.size();
-                    final List<Property> properties = IntStream.range(0, numProperties)
-                            .mapToObj(i -> new BooleanMatProperty(allLabels.get(i), numRows))
-                            .collect(Collectors.toList());
+                    final List<BooleanMatProperty> properties = IntStream.range(0, numProperties)
+                        .mapToObj(i ->
+                            (BooleanMatProperty)propertiesTable.getOrCreateProperty(
+                                allLabels.get(i), PropertyClass.BooleanMatProperty, numRows
+                            )
+                        )
+                        .collect(Collectors.toList());
+                    properties.forEach(p -> p.numRows = 0);
                     for(int row = 0; row < numRows; ++row) {
                         final Set<String>[] colLabels = this.values[row];
                         for(int propertyIndex = 0; propertyIndex < numProperties; ++propertyIndex) {
-                            final boolean[] colBooleans = new boolean[colLabels.length];
+                            final BooleanMatProperty booleanMatProperty = properties.get(propertyIndex);
                             final String propertyLabel = allLabels.get(propertyIndex);;
                             for(int col = 0; col < colLabels.length; ++col) {
-                                colBooleans[col] = colLabels[col].contains(propertyLabel);
+                                booleanMatProperty.assignColumnValue(col,colLabels[col].contains(propertyLabel));
                             }
-                            properties.get(propertyIndex).append(colBooleans);
+                            ++booleanMatProperty.numRows;
                         }
                     }
-                    return properties;
             }
         }
     }

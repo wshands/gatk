@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.walkers.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv.GqRecalibrator;
 
 import htsjdk.samtools.util.CoordMath;
 import htsjdk.samtools.util.Locatable;

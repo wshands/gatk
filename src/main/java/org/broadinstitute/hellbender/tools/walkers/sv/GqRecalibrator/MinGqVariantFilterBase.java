@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.walkers.sv;
+package org.broadinstitute.hellbender.tools.walkers.sv.GqRecalibrator;
 
 import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.*;
@@ -20,7 +20,6 @@ import org.broadinstitute.hellbender.utils.samples.SampleDBBuilder;
 import org.broadinstitute.hellbender.utils.samples.Trio;
 
 import java.io.*;
-import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.stream.*;
@@ -64,9 +63,16 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                  +" bad variant IDs")
     public GATKPath truthFile = null;
 
-    private enum RunMode { TRAIN, FILTER }
-    @Argument(fullName="mode", doc="Mode of operation: either \"TRAIN\" or \"FILTER\"")
+    private enum RunMode {Train, Filter}
+    @Argument(fullName="mode", doc="Mode of operation: either \"Train\" or \"Filter\"")
     public RunMode runMode;
+
+    public enum TrainObjective {PerVariantOptimized, LogLoss}
+    @Argument(fullName="objective", optional=true,
+             doc="Choose clasifier training objective: \n"
+                + "\tPerVariantOptimized: match truth values obtained via per-variant optimal min-GQ\n"
+                + "\tLogLoss: optimize log-loss of pMendelian and pOverlap directly")
+    public TrainObjective trainObjective = TrainObjective.PerVariantOptimized;
 
     @Argument(fullName="keep-homvar", shortName="kh", doc="Keep homvar variants even if their GQ is less than min-GQ", optional=true)
     public boolean keepHomvar = true;
@@ -103,26 +109,44 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     @Argument(fullName="prediction-scale-factor", doc="Scale factor for raw predictions to logits", optional=true)
     public double predictionScaleFactor = 1.0;
+    final double phredCoef = FastMath.log(10.0) / 10.0;
 
+    @Argument(fullName="target-precision", doc="Desired minimum precision to achieve before maximizing recall", optional=true)
+    public static double targetPrecision = 0.95;
+
+    @Argument(fullName="max-inheritance-af", optional=true,
+        doc="Max allele frequency where inheritance will be considered truthful. AF in range (mIAf, 1.0 - mIAf) have no score"
+    )
+    public static double maxInheritanceAf = 0.2;
+
+    @Argument(fullName="strict-mendelian", optional=true,
+            doc="If true, apply normal rules for mendelian inheritance; if false, allow confusion between HET and HOMVAR"
+    )
+    public static boolean strictMendelian = false;
 
     List<TractOverlapDetector> tractOverlapDetectors = null;
 
-    static final Map<String, double[]> propertyBinsMap = new HashMap<String, double[]>() {
+    static final Map<String, double[]> propertyBinsMap = new LinkedHashMap<String, double[]>() {
         private static final long serialVersionUID = 0;
         {
-            put(VCFConstants.ALLELE_FREQUENCY_KEY, new double[] {0.05, 0.5});
             put(SVLEN_KEY, new double[] {2.0, 500.0, 5000.0});
+            put(VCFConstants.ALLELE_FREQUENCY_KEY, new double[] {maxInheritanceAf, 1.0 - maxInheritanceAf});
         }
     };
+    // numVariants array of property-category bins
+    protected int[] propertyBins = null;
+    int numPropertyBins;
+    protected long[] variantsPerPropertyBin = null;
+    protected String[] propertyBinLabels = null;
+    protected double[] propertyBinInheritanceWeights = null;
+    protected double[] propertyBinTruthWeights = null;
 
-
-
-    protected List<String> trainingSampleIds = null; // numSamples list of IDs for samples that will be used for training
+    protected List<String> sampleIds = null; // numSamples list of IDs for samples that will be used for training
     protected int[][] trioSampleIndices = null; // numTrios x 3 matrix of sample indices (paternal, maternal, child) for each trio
     protected Set<Integer> allTrioSampleIndices; // set of all sample indices that are in a trio
-    protected final Map<String, Integer> trainingSampleIndices = new HashMap<>(); // map from sampleId to numerical index, for samples used in training
+    protected final Map<String, Integer> sampleIndices = new HashMap<>(); // map from sampleId to numerical index, for samples used in training
     protected final PropertiesTable propertiesTable = new PropertiesTable();
-
+    protected List<String> variantIds = new ArrayList<>();
 
     // numVariants x numSamples matrix of allele counts:
     protected List<int[]> sampleVariantAlleleCounts = new ArrayList<>();
@@ -136,14 +160,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     // map from variantIndex to array of known bad GQ values for that variant
     protected Map<Integer, int[]> badVariantGqs = null;
 
-    // numVariants array of property-category bins
-    protected int[] propertyBins = null;
-    int numPropertyBins;
-    protected long[] variantsPerPropertyBin = null;
-    protected String[] propertyBinLabels = null;
-    protected double[] propertyBinInheritanceWeights = null;
-    protected double[] propertyBinTruthWeights = null;
-
     protected Random randomGenerator = Utils.getRandomGenerator();
 
     private VariantContextWriter vcfWriter = null;
@@ -153,7 +169,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private int numTrios;
 
     private static final float PROB_EPS = 1.0e-3F;
-    private static final Set<String> GAIN_SV_TYPES = new HashSet<>(Arrays.asList("INS", "DUP", "MEI", "ITX"));
     private static final Set<String> BREAKPOINT_SV_TYPES = new HashSet<>(Arrays.asList("BND", "CTX"));
     private static final double SV_EXPAND_RATIO = 1.0; // ratio of how much to expand SV gain range to SVLEN
     private static final int BREAKPOINT_HALF_WIDTH = 50; // how wide to make breakpoint intervals for tract overlap
@@ -170,8 +185,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private static final String GOOD_VARIANT_TRUTH_KEY = "good";
     private static final String BAD_VARIANT_TRUTH_KEY = "bad";
     private static final String CHR2_KEY = "CHR2";
-    private static final String POS2_KEY = "POS2";
-    private static final String END2_KEY = "END2";
 
     private static final String PE_GQ_KEY = "PE_GQ";
     private static final String RD_GQ_KEY = "RD_GQ";
@@ -183,6 +196,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private Map<String, Set<String>> goodSampleVariants = null;
     private Map<String, Set<String>> badSampleVariants = null;
 
+
     // train/validation split indices
     private int[] trainingIndices;
     private int[] validationIndices;
@@ -191,7 +205,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private int numFilteredGenotypes;
 
     // properties for calculating f1 score or estimating its pseudo-derivatives
-    private Boolean [][] isTrueVariant; // numVariants x numSamples
     private int[] perVariantOptimalMinGq = null; // <- REMOVE
     protected int[] maxDiscoverableMendelianAc = null;
     long numDiscoverableMendelianAc = 0;
@@ -232,19 +245,19 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         // collect ped trios into training samples
         pedTrios.stream()
                 .flatMap(trio -> Stream.of(trio.getPaternalID(), trio.getMaternalID(), trio.getChildID()))
-                .forEach(this::addTrainingSampleId);
+                .forEach(this::addSampleIndex);
         // keep track of the samples that are in trios (those will always have "truth" through inheritance)
         trioSampleIndices = pedTrios.stream()
                 .map(
                     trio -> Stream.of(trio.getPaternalID(), trio.getMaternalID(), trio.getChildID())
-                            .mapToInt(trainingSampleIndices::get)
+                            .mapToInt(sampleIndices::get)
                             .toArray()
                 )
                 .toArray(int[][]::new);
 
         allTrioSampleIndices = pedTrios.stream()
                 .flatMap(trio -> Stream.of(trio.getPaternalID(), trio.getMaternalID(), trio.getChildID()))
-                .map(trainingSampleIndices::get)
+                .map(sampleIndices::get)
                 .collect(Collectors.toSet());
 
     }
@@ -296,23 +309,26 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             return;
         }
         // Add any new samples that have truth but are not in trios file to the training samples
-        goodSampleVariants.values().stream().flatMap(Collection::stream).forEach(this::addTrainingSampleId);
-        badSampleVariants.values().stream().flatMap(Collection::stream).forEach(this::addTrainingSampleId);
+        goodSampleVariants.values().stream().flatMap(Collection::stream).forEach(this::addSampleIndex);
+        badSampleVariants.values().stream().flatMap(Collection::stream).forEach(this::addSampleIndex);
         // prepare to hold data for scoring
         goodVariantGqs = new HashMap<>();
         badVariantGqs = new HashMap<>();
     }
 
-    private void addTrainingSampleId(final String sampleId) {
-        trainingSampleIndices.put(sampleId, trainingSampleIndices.getOrDefault(sampleId, trainingSampleIndices.size()));
+    private void addSampleIndex(final String sampleId) {
+        if(!sampleIndices.containsKey(sampleId)) {
+            sampleIndices.put(sampleId, sampleIndices.size());
+        }
     }
 
-    private void setTrainingSampleIds() {
-        trainingSampleIds = trainingSampleIndices.entrySet()
+    private void setSampleIds() {
+        sampleIds = sampleIndices.entrySet()
             .stream()
             .sorted(Comparator.comparingInt(Map.Entry::getValue))
             .map(Map.Entry::getKey)
             .collect(Collectors.toList());
+        numSamples = sampleIndices.size();
     }
 
     private void initializeVcfWriter() {
@@ -329,21 +345,23 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     @Override
     public void onTraversalStart() {
         loadTrainedModel();  // load model and saved properties stats
-            tractOverlapDetectors = genomeTractFiles.stream()
-                .map(genomeTractFile -> {
-                        try {
-                            return new TractOverlapDetector(genomeTractFile);
-                        } catch(IOException ioException) {
-                            throw new GATKException("Error loading " + genomeTractFile, ioException);
-                        }
-                    })
-                .collect(Collectors.toList());
-        if(runMode == RunMode.TRAIN) {
+        tractOverlapDetectors = genomeTractFiles.stream()  // load genome tracts
+            .map(genomeTractFile -> {
+                    try {
+                        return new TractOverlapDetector(genomeTractFile);
+                    } catch(IOException ioException) {
+                        throw new GATKException("Error loading " + genomeTractFile, ioException);
+                    }
+                })
+            .collect(Collectors.toList());
+        if(runMode == RunMode.Train) {
             getPedTrios();  // get trios from pedigree file
             loadVariantTruthData(); // load variant truth data from JSON file
-            setTrainingSampleIds(); // set data organizing training samples
-            numSamples = trainingSampleIndices.size();
+            // at this point, included samples will only be those that are in a trio or have some variant truth data
+            setSampleIds(); // set data organizing training samples
         } else {
+            getHeaderForVariants().getGenotypeSamples().forEach(this::addSampleIndex); // use all samples in VCF
+            setSampleIds();
             initializeVcfWriter();  // initialize vcfWriter and write header
             numFilteredGenotypes = 0;
             propertiesTable.setNumAllocatedRows(1);
@@ -366,7 +384,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private boolean getVariantIsFilterable(final VariantContext variantContext, final Map<String, Integer> sampleAlleleCounts) {
         final boolean maybeFilterable = !(keepMultiallelic && getIsMultiallelic(variantContext));
         if(maybeFilterable) {
-            if(runMode == RunMode.FILTER) {
+            if(runMode == RunMode.Filter) {
                 // filter no matter what, because end-user may be interested in minGQ
                 return true;
             } else {
@@ -383,8 +401,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     /**
      * form numTrios x 3 matrix of allele counts for specified variantIndex
-     * @param variantIndex
-     * @return
      */
     protected int[][] getTrioAlleleCountsMatrix(final int variantIndex) {
         final int[] sampleAlleleCounts = sampleVariantAlleleCounts.get(variantIndex);
@@ -399,8 +415,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     /**
      * form numTrios x 3 matrix of genotype qualities for specified variantIndex
-     * @param variantIndex
-     * @return
      */
     protected int[][] getTrioGenotypeQualitiesMatrix(final int variantIndex) {
         final int[] sampleGenotypeQualities = sampleVariantGenotypeQualities.get(variantIndex);
@@ -438,10 +452,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
     }
 
-    private boolean hasDistalTarget(final VariantContext variantContext) {
-        return variantContext.hasAttribute(CHR2_KEY) && variantContext.hasAttribute(END2_KEY) && variantContext.hasAttribute(POS2_KEY);
-    }
-
     private SimpleInterval getDistalTarget(final String targetString) {
         return new SimpleInterval(targetString.substring(targetString.indexOf("_") + 1));
     }
@@ -449,32 +459,19 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private void getTractProperties(final TractOverlapDetector tractOverlapDetector,
                                     final VariantContext variantContext) {
         // get range of variant (use expanded location for insertions or duplications)
-
-//        To-do:
-//            1) Change this to form list of locations
-//                -> list of overlaps -> min / max
-//                -> spans by looping over all possible pairs if appropriate
-//                list of locations
-//                    BND-type: left + right
-//                    all others have center
-//                    if end - pos > 1 then add left + right
-//                    distal targets get added in
-//            2) compare to score with "correct" answers from initial iteration
-//                weight by bin
-//                weight by gq - optimal min gq
         final List<Locatable> overlapCheckLocations = new ArrayList<>();
         final String svType = variantContext.getAttributeAsString(VCFConstants.SVTYPE, null);
-        final int centerInd;
         if(BREAKPOINT_SV_TYPES.contains(svType)) {
             // Add checks at the breakpoint locations. They are points so we want to check tract overlaps in the regions
             // around them
             overlapCheckLocations.add(
-                new SimpleInterval(variantContext.getContig(), variantContext.getStart() - BREAKPOINT_HALF_WIDTH,
+                new SimpleInterval(variantContext.getContig(),
+                             FastMath.max(1, variantContext.getStart() - BREAKPOINT_HALF_WIDTH),
                              variantContext.getStart() + BREAKPOINT_HALF_WIDTH)
             );
             overlapCheckLocations.add(
                 new SimpleInterval(variantContext.getAttributeAsString(CHR2_KEY, null),
-                             variantContext.getEnd() - BREAKPOINT_HALF_WIDTH,
+                             FastMath.max(1, variantContext.getEnd() - BREAKPOINT_HALF_WIDTH),
                               variantContext.getEnd() + BREAKPOINT_HALF_WIDTH)
             );
         } else {
@@ -490,19 +487,19 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 0;
             overlapCheckLocations.add(
                 new SimpleInterval(variantContext.getContig(),
-                    variantContext.getStart() - expand,
+                    FastMath.max(1, variantContext.getStart() - expand),
                     variantContext.getStart() + expand)
             );
             // if the interval isn't narrow, add the end points as potential breakpoints to check
             if(!is_narrow) {
                 overlapCheckLocations.add(
                     new SimpleInterval(variantContext.getContig(),
-                                      variantContext.getStart() - BREAKPOINT_HALF_WIDTH,
+                                      FastMath.max(1, variantContext.getStart() - BREAKPOINT_HALF_WIDTH),
                                       variantContext.getStart() + BREAKPOINT_HALF_WIDTH)
                 );
                 overlapCheckLocations.add(
                     new SimpleInterval(variantContext.getContig(),
-                                 variantContext.getEnd() - BREAKPOINT_HALF_WIDTH,
+                                 FastMath.max(1, variantContext.getEnd() - BREAKPOINT_HALF_WIDTH),
                                  variantContext.getEnd() + BREAKPOINT_HALF_WIDTH)
                 );
             }
@@ -514,7 +511,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 .map(key -> variantContext.getAttributeAsStringList(key, null))
                 .filter(Objects::nonNull)
                 .flatMap(List::stream)
-                .map(targetString -> new SimpleInterval(targetString.substring(targetString.indexOf("_") + 1)))
+                .map(this::getDistalTarget)
                 .forEach(overlapCheckLocations::add);
 
         final double[] overlaps;
@@ -568,8 +565,9 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         return Integer.parseInt((String)x); // throws an exception if this isn't a string
     }
 
+
     private int[] getGenotypeAttributeAsInt(final Iterable<Genotype> sampleGenotypes, final String attributeKey,
-                                            final int missingAttributeValue) {
+                                            @SuppressWarnings("SameParameterValue")final int missingAttributeValue) {
         return StreamSupport.stream(sampleGenotypes.spliterator(), false)
                         .mapToInt(g -> getGenotypeAttributeAsInt(g, attributeKey, missingAttributeValue))
                         .toArray();
@@ -589,7 +587,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         );
         if(!getVariantIsFilterable(variantContext, sampleAlleleCounts)) {
             // no need to train on unfilterable variants, and filtering is trivial
-            if(runMode == RunMode.FILTER) {
+            if(runMode == RunMode.Filter) {
                 ++numVariants;
                 vcfWriter.add(variantContext); // add variantContext unchanged
             }
@@ -647,7 +645,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             getTractProperties(tractOverlapDetector, variantContext);
         }
 
-        final Iterable<Genotype> sampleGenotypes = variantContext.getGenotypesOrderedBy(trainingSampleIds);
+        final Iterable<Genotype> sampleGenotypes = variantContext.getGenotypesOrderedBy(sampleIds);
         propertiesTable.append(
             VCFConstants.GENOTYPE_QUALITY_KEY,
             StreamSupport.stream(sampleGenotypes.spliterator(), false).mapToInt(Genotype::getGQ).toArray()
@@ -660,12 +658,13 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             )
         );
 
-        if(runMode == RunMode.TRAIN) {
-            // get per-sample genotype qualities as a map indexed by sample ID
-            final Map<String, Integer> sampleGenotypeQualities = variantContext.getGenotypes().stream().collect(
-                    Collectors.toMap(Genotype::getSampleName, Genotype::getGQ)
-            );
+        // get per-sample genotype qualities as a map indexed by sample ID
+        final Map<String, Integer> sampleGenotypeQualities = variantContext.getGenotypes().stream().collect(
+                Collectors.toMap(Genotype::getSampleName, Genotype::getGQ)
+        );
 
+        if(runMode == RunMode.Train) {
+            variantIds.add(variantContext.getID());
             if(goodSampleVariants != null) {
                 if(goodSampleVariants.containsKey(variantContext.getID())) {
                     // Get sample IDs of known good variants that are filterable
@@ -678,7 +677,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                     if(knownGoodSampleIds.length > 0) {
                         // get indices and GQ values of good samples for this variant
                         goodSampleVariantIndices.put(
-                            numVariants - 1, Arrays.stream(knownGoodSampleIds).map(trainingSampleIndices::get).collect(Collectors.toSet())
+                            numVariants - 1, Arrays.stream(knownGoodSampleIds).map(sampleIndices::get).collect(Collectors.toSet())
                         );
                         // Get GQ values of known good variants that are filterable
                         goodVariantGqs.put(
@@ -697,7 +696,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                     if(knownBadSampleIds.length > 0) {
                         // get indices and GQ values of good samples for this variant
                         badSampleVariantIndices.put(
-                                numVariants - 1, Arrays.stream(knownBadSampleIds).map(trainingSampleIndices::get).collect(Collectors.toSet())
+                                numVariants - 1, Arrays.stream(knownBadSampleIds).map(sampleIndices::get).collect(Collectors.toSet())
                         );
                         // Get GQ values of known good variants that are filterable
                         badVariantGqs.put(
@@ -709,17 +708,22 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
             // get allele counts for training samples for this variant
             sampleVariantAlleleCounts.add(
-                trainingSampleIds.stream().mapToInt(sampleAlleleCounts::get).toArray()
+                sampleIds.stream().mapToInt(sampleAlleleCounts::get).toArray()
             );
 
             // get genotype qualities for training samples for this variant
             sampleVariantGenotypeQualities.add(
-                trainingSampleIds.stream().mapToInt(sampleGenotypeQualities::get).toArray()
+                sampleIds.stream().mapToInt(sampleGenotypeQualities::get).toArray()
             );
         } else {
+            sampleVariantAlleleCounts.add(sampleIds.stream().mapToInt(sampleAlleleCounts::get).toArray());
+            sampleVariantGenotypeQualities.add(sampleIds.stream().mapToInt(sampleGenotypeQualities::get).toArray());
             propertiesTable.validateAndFinalize();
             vcfWriter.add(filterVariantContext(variantContext));
+
             propertiesTable.clearRows();
+            sampleVariantAlleleCounts.clear();
+            sampleVariantGenotypeQualities.clear();
         }
     }
 
@@ -757,7 +761,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     }
 
 
-    private boolean notCloseEnough(final String strRep, final double val, final double tol) {
+    private boolean notCloseEnough(final String strRep, final double val,
+                                   @SuppressWarnings("SameParameterValue") final double tol) {
         return FastMath.abs(Double.parseDouble(strRep) - val) > FastMath.abs(tol * val);
     }
 
@@ -803,14 +808,15 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     private void setPropertyBins() {
         propertyBins = new int[numVariants]; // guaranteed to be all zeros by Java spec
 
-        final PropertiesTable.StringArrProperty svType = (PropertiesTable.StringArrProperty) propertiesTable.get(VCFConstants.SVTYPE);
+        final PropertiesTable.StringArrProperty svType =
+            (PropertiesTable.StringArrProperty) propertiesTable.get(VCFConstants.SVTYPE);
         final List<String> allSvTypes = svType.getAllLabels();
         final Map<String, Integer> binNames = IntStream.range(0, allSvTypes.size())
             .boxed()
             .collect(Collectors.toMap(i -> VCFConstants.SVTYPE + "=" + allSvTypes.get(i), i -> i));
-        IntStream.range(0, numVariants).forEach(variantIndex -> {
-            propertyBins[variantIndex] = binNames.get(VCFConstants.SVTYPE + "=" + svType.getAsString(variantIndex));
-        });
+        IntStream.range(0, numVariants).forEach(variantIndex ->
+            propertyBins[variantIndex] = binNames.get(VCFConstants.SVTYPE + "=" + svType.getAsString(variantIndex))
+        );
 
         propertyBinsMap.forEach((propertyName, bins) -> {
             final List<String> oldBinNames = binNames.entrySet()
@@ -842,6 +848,24 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         binNames.forEach((key, value) -> propertyBinLabels[value] = key);
         variantsPerPropertyBin = new long[numPropertyBins];
         Arrays.stream(propertyBins).forEach(bin -> ++variantsPerPropertyBin[bin]);
+        // Finally, want the property bin descriptions to be in sorted order for easier reading out fitting results
+        final int[] sortInds = IntStream.range(0, numPropertyBins)
+            .boxed()
+            .sorted(Comparator.comparing(i -> propertyBinLabels[i]))
+            .mapToInt(Integer::new)
+            .toArray();
+        propertyBinLabels = IntStream.range(0, numPropertyBins)
+            .mapToObj(i -> propertyBinLabels[sortInds[i]])
+            .toArray(String[]::new);
+        variantsPerPropertyBin = IntStream.range(0, numPropertyBins)
+            .mapToLong(i -> variantsPerPropertyBin[sortInds[i]])
+            .toArray();
+
+        final int[] unsortInds = new int[numPropertyBins];
+        IntStream.range(0, numPropertyBins).forEach(i -> unsortInds[sortInds[i]] = i);
+        propertyBins = Arrays.stream(propertyBins)
+            .map(i -> unsortInds[i])
+            .toArray();
     }
 
     private IntStream streamFilterableGq(final IntStream acStream, final IntStream gqStream) {
@@ -852,28 +876,16 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     protected IntStream getCandidateMinGqs(final int variantIndex) {
         final IntStream alleleCountsStream = Arrays.stream(getTrioAlleleCountsMatrix(variantIndex)).flatMapToInt(Arrays::stream);
         final IntStream genotypeQualitiesStream = Arrays.stream(getTrioGenotypeQualitiesMatrix(variantIndex)).flatMapToInt(Arrays::stream);
-        return getCandidateMinGqs(alleleCountsStream, genotypeQualitiesStream, null);
+        return getCandidateMinGqs(alleleCountsStream, genotypeQualitiesStream);
     }
 
-    protected IntStream getCandidateMinGqs(final int[] rowIndices) {
-        final IntStream alleleCountsStream = Arrays.stream(rowIndices).flatMap(
-                rowIndex -> Arrays.stream(getTrioAlleleCountsMatrix(rowIndex)).flatMapToInt(Arrays::stream)
-        );
-        final IntStream genotypeQualitiesStream = Arrays.stream(rowIndices).flatMap(
-                rowIndex -> Arrays.stream(getTrioGenotypeQualitiesMatrix(rowIndex)).flatMapToInt(Arrays::stream)
-        );
-        return getCandidateMinGqs(alleleCountsStream, genotypeQualitiesStream, null);
-    }
-
-    protected IntStream getCandidateMinGqs(final int[][] alleleCounts, final int[][] genotypeQualities,
-                                           final Integer preexistingCandidateMinGq) {
+    protected IntStream getCandidateMinGqs(final int[][] alleleCounts, final int[][] genotypeQualities) {
         final IntStream alleleCountsStream = Arrays.stream(alleleCounts).flatMapToInt(Arrays::stream);
         final IntStream genotypeQualitiesStream = Arrays.stream(genotypeQualities).flatMapToInt(Arrays::stream);
-        return getCandidateMinGqs(alleleCountsStream, genotypeQualitiesStream, preexistingCandidateMinGq);
+        return getCandidateMinGqs(alleleCountsStream, genotypeQualitiesStream);
     }
 
-    protected IntStream getCandidateMinGqs(final IntStream alleleCountsStream, final IntStream genotypeQualitiesStream,
-                                           final Integer preexistingCandidateMinGq) {
+    protected IntStream getCandidateMinGqs(final IntStream alleleCountsStream, final IntStream genotypeQualitiesStream) {
         // form list of candidate min GQ values that could alter filtering for this variant
         final List<Integer> candidateGq = streamFilterableGq(alleleCountsStream, genotypeQualitiesStream)
                 .distinct()
@@ -885,12 +897,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
         // consider filtering out all filterable variants by adding 1 to highest filterable GQ value
         candidateGq.add(1 + candidateGq.get(candidateGq.size() - 1));
-
-        // find min GQ value that is redundant with preexistingCandidateMinGq
-        final OptionalInt redundantIdx = preexistingCandidateMinGq == null ?
-            OptionalInt.empty() :
-            IntStream.range(0, candidateGq.size())
-                    .filter(i -> candidateGq.get(i) >= preexistingCandidateMinGq).findFirst();
 
         // These candidate values are as large as they can be without altering filtering results.
         // If possible, move candidates down (midway to next change value) so that inaccuracy in predicting
@@ -905,14 +911,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             }
         }
 
-        // remove candidate gq that is redundant with preexistingCandidateMinGq
-        if (redundantIdx.isPresent()) {
-            candidateGq.remove(redundantIdx.getAsInt());
-            if(candidateGq.isEmpty()) {
-                return null;
-            }
-        }
-
         // return stream of primitive int
         return candidateGq.stream().mapToInt(Integer::intValue);
     }
@@ -920,9 +918,13 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     private boolean isMendelian(final int fatherAc, final int motherAc, final int childAc) {
         // child allele counts should not exhibit de-novo mutations nor be missing inherited homvar
-        final int minAc = fatherAc / 2 + motherAc / 2;
         final int maxAc = (fatherAc > 0 ? 1 : 0) + (motherAc > 0 ? 1 : 0);
-        return (minAc <= childAc) && (childAc <= maxAc);
+        if(strictMendelian) {
+            final int minAc = fatherAc / 2 + motherAc / 2;
+            return (minAc <= childAc) && (childAc <= maxAc);
+        } else {
+            return childAc <= maxAc;
+        }
     }
 
     private double getPMendelian(final int fatherAc, final int motherAc, final int childAc,
@@ -991,14 +993,15 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         return (float)(FastMath.log(sigma / (1F - sigma)) / predictionScaleFactor);
     }
 
-
     /**
-     * Convert from dLoss / dProb to dLoss / dLogits
+     * Convert from dLoss / dProb to dLoss / dLogits (assumes prob = sigma(logits))
+     * @param prob
      * @param d1LossDProb
      * @param d2LossDProb
-     * @param d1LossDPredict
-     * @param d2LossDPredict
-     * @param predictIndex
+     * @param weight
+     * @param d1LossDLogits
+     * @param d2LossDLogits
+     * @param sampleIndex
      */
     protected void setLossDerivs(final double prob, final double d1LossDProb, final double d2LossDProb,
                                  final double weight, final double[] d1LossDLogits, final double[] d2LossDLogits,
@@ -1021,10 +1024,11 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                                                         + d1LossDProb * d2ProbDLogit));
     }
 
-    private Loss getLoss(final float[] pSample, final double[] d1PSample, final double[] d2PSample,
-                           final int startPredictionIndex, final Integer[] sampleIndexToPredictionIndex,
-                           final double variantInheritanceWeight, final double variantTruthWeight,
-                           final int variantIndex, final List<Integer> priorSampleIndices) {
+    private FilterLoss getLossInheritanceAndTruth(final float[] pSample, final double[] d1PSample,
+                                                  final double[] d2PSample, final int startPredictionIndex,
+                                                  final Integer[] sampleIndexToPredictionIndex,
+                                                  final double variantInheritanceWeight, final double variantTruthWeight,
+                                                  final int variantIndex, final List<Integer> priorSampleIndices) {
         final int[] sampleAlleleCounts = sampleVariantAlleleCounts.get(variantIndex);
         final Set<Integer> goodSampleIndices = goodSampleVariantIndices.getOrDefault(variantIndex, Collections.emptySet());
         final Set<Integer> badSampleIndices = badSampleVariantIndices.getOrDefault(variantIndex, Collections.emptySet());
@@ -1115,11 +1119,11 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
         truthLoss /= numTruth;
 
-        return new Loss(inheritanceLoss * variantInheritanceWeight, truthLoss * variantTruthWeight);
+        return new FilterLoss(inheritanceLoss * variantInheritanceWeight, truthLoss * variantTruthWeight);
     }
 
-    protected Loss getLoss(final float[] pSample, final float[] d1PSample, final float[] d2PSample,
-                           final int[] variantIndices) {
+    protected FilterLoss getLossInheritanceAndTruth(final float[] pSample, final float[] d1PSample,
+                                                    final float[] d2PSample, final int[] variantIndices) {
 
         // want average loss per variant, weighted so that each type of propertyBin has equal weight
         final int[] propertyBinCounts = new int[numPropertyBins];
@@ -1130,7 +1134,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         final double[] d2PSampleDouble = new double[numSamples];
         final Integer[] sampleIndexToPredictionIndex = new Integer[numSamples];
         final List<Integer> priorSampleIndices = new ArrayList<>(pSample.length);
-        Loss loss = new Loss(0F, 0F);
+        FilterLoss loss = new FilterLoss(0F, 0F);
         int startPredictionIndex = 0;
         for(final int variantIndex : variantIndices) {
             final int propertyBin = propertyBins[variantIndex];
@@ -1138,10 +1142,12 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                                                   / propertyBinCounts[propertyBin];
             final double variantTruthWeight = propertyBinTruthWeights[propertyBin]
                     / propertyBinCounts[propertyBin];
-            loss = Loss.add(
+            loss = FilterLoss.add(
                 loss,
-                getLoss(pSample, d1PSampleDouble, d2PSampleDouble, startPredictionIndex, sampleIndexToPredictionIndex,
-                        variantInheritanceWeight, variantTruthWeight, variantIndex, priorSampleIndices)
+                getLossInheritanceAndTruth(
+                    pSample, d1PSampleDouble, d2PSampleDouble, startPredictionIndex, sampleIndexToPredictionIndex,
+                    variantInheritanceWeight, variantTruthWeight, variantIndex, priorSampleIndices
+                )
             );
             for(int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex) {
                 final Integer predictionIndex = sampleIndexToPredictionIndex[sampleIndex];
@@ -1159,8 +1165,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                     startPredictionIndex + ", pSample.length = " + pSample.length);
         }
 
-        // get loss from prior that at least half of the sample-variants should be confidently correct
-        //   (loss = -log(p) for the 50% of largest p)
+        // get loss from prior that known proportion of the sample-variants should be confidently correct
+        //   (loss = -log(p) for the passing proportion of p)
         final int numPenalizeFail = (int)FastMath.round( optimalProportionOfSampleVariantsPassing
                                                             * priorSampleIndices.size());
         final int numAllowFail = priorSampleIndices.size() - numPenalizeFail;
@@ -1183,83 +1189,19 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
         priorLoss *= priorWeight;
 
-        return Loss.add(loss, new Loss(priorLoss, 0F));
+        return FilterLoss.add(loss, new FilterLoss(priorLoss, 0F));
     }
 
 
     private boolean isMendelianKeepHomvar(final int fatherAc, final int motherAc, final int childAc) {
         // child allele counts should not exhibit de-novo mutations nor be missing inherited homvar
-        final int maxAc = (fatherAc > 0 ? 1 : 0) + (motherAc > 0 ? 1 : 0);
-        return childAc <= maxAc;
-    }
-
-
-    static protected class FilterSummary {
-        final int minGq;
-        final long numDiscoverable;
-        final long numPassed;
-        final long numMendelian;
-        final long numTruePositive;
-        final long numFalsePositive;
-        final long numFalseNegative;
-        final String label;
-
-        FilterSummary(final int minGq,
-                      final long numDiscoverable, final long numPassed, final long numMendelian,
-                      final long numTruePositive, final long numFalsePositive, final long numFalseNegative,
-                      final String label) {
-            this.minGq = minGq;
-            this.numDiscoverable = numDiscoverable;
-            this.numPassed = numPassed;
-            this.numMendelian = numMendelian;
-            this.numTruePositive = numTruePositive;
-            this.numFalsePositive = numFalsePositive;
-            this.numFalseNegative = numFalseNegative;
-            this.label = label;
-        }
-
-        static final FilterSummary EMPTY = new FilterSummary(
-            Integer.MIN_VALUE, 0L, 0L, 0L, 0L,
-            0L, 0L, null
-        );
-
-        boolean isEmpty() { return numDiscoverable <= 0; }
-        boolean isNotEmpty() { return numDiscoverable > 0; }
-
-        FilterSummary setMinGq(final int newMinGq) {
-            return new FilterSummary(newMinGq, numDiscoverable, numPassed, numMendelian,
-                                     numTruePositive, numFalsePositive, numFalseNegative, label);
-        }
-
-        FilterSummary shiftMinGq(final int minGqShift) {
-            return setMinGq(minGq + minGqShift);
-        }
-
-        FilterSummary add(final FilterSummary other) {
-            return new FilterSummary(
-                minGq,
-                numDiscoverable + other.numDiscoverable, numPassed + other.numPassed,
-                numMendelian + other.numMendelian, numTruePositive + other.numTruePositive,
-                numFalsePositive + other.numFalsePositive, numFalseNegative + other.numFalseNegative,
-                label == null ? other.label : label
-            );
-        }
-
-        FilterSummary subtract(final FilterSummary other) {
-            return new FilterSummary(
-                minGq,
-                numDiscoverable - other.numDiscoverable, numPassed - other.numPassed,
-                numMendelian - other.numMendelian, numTruePositive - other.numTruePositive,
-                numFalsePositive - other.numFalsePositive, numFalseNegative - other.numFalseNegative,
-                label == null ? other.label : label
-            );
-        }
-
-        @Override
-        public String toString() {
-            return label + ":{minGq:" + minGq + ",  numDiscoverable:" + numDiscoverable + ", numPassed:" + numPassed
-                   + ", numMendelian:" + numMendelian + ", numTruePositive:" + numTruePositive
-                   + ", numFalsePositive:" + numFalsePositive + ", numFalseNegative: " + numFalseNegative + "}";
+        if(strictMendelian) {
+            final int minAc = fatherAc / 2 + motherAc / 2;
+            final int maxAc = (fatherAc > 0 ? 1 : 0) + (motherAc > 0 ? 1 : 0);
+            return (minAc <= childAc) && (childAc <= maxAc);
+        } else {
+            final int maxAc = fatherAc > 0 || motherAc > 0 ? 2 : 0;
+            return childAc <= maxAc;
         }
     }
 
@@ -1288,6 +1230,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         long numTruePositives = 0;
         long numFalsePositives = 0;
         long numFalseNegatives = 0;
+        long numTrueNegatives = 0;
         if(goodGqs != null) {
             for (final int gq : goodGqs) {
                 if(gq >= minGq) {
@@ -1301,9 +1244,12 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             for(final int gq : badGqs) {
                 if(gq >= minGq) {
                     ++numFalsePositives;
+                } else {
+                    ++numTrueNegatives;
                 }
             }
         }
+
         if(keepHomvar) {
             for (int trioIndex = 0; trioIndex < numTrios; ++trioIndex) {
                 final int[] trioAc = alleleCounts[trioIndex];
@@ -1336,9 +1282,9 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                     continue;
                 }
                 final int[] trioGq = genotypeQualities[trioIndex];
-                final int fatherAc = trioGq[0] < minGq ? 0 : trioAc[0];
-                final int motherAc = trioGq[1] < minGq ? 0 : trioAc[1];
-                final int childAc = trioGq[2] < minGq ? 0 : trioAc[2];
+                final int fatherAc = trioGq[0] < minGq ? trioAc[0] - 1 : trioAc[0];
+                final int motherAc = trioGq[1] < minGq ? trioAc[1] - 1 : trioAc[1];
+                final int childAc = trioGq[2] < minGq ? trioAc[2] - 1 : trioAc[2];
                 final int numPassedTrio = fatherAc + motherAc + childAc;
                 if (numPassedTrio > 0) {
                     numPassed += numPassedTrio;
@@ -1349,7 +1295,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             }
         }
         return new FilterSummary(minGq, numDiscoverable, numPassed, numMendelian,
-                                 numTruePositives, numFalsePositives, numFalseNegatives, label);
+                                 numTruePositives, numFalsePositives, numFalseNegatives, numTrueNegatives, label);
     }
 
     private int getFilteredAlleleCounts(final int sampleIndex, final int[] sampleAlleleCounts,
@@ -1365,6 +1311,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         long numTruePositives = 0;
         long numFalsePositives = 0;
         long numFalseNegatives = 0;
+        long numTrueNegatives = 0;
 
         final Set<Integer> goodSampleIndices = goodSampleVariantIndices.getOrDefault(variantIndex, Collections.emptySet());
         final Set<Integer> badSampleIndices = badSampleVariantIndices.getOrDefault(variantIndex, Collections.emptySet());
@@ -1383,8 +1330,12 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 } else {
                     ++numFalseNegatives;
                 }
-            } else if(badSampleIndices.contains(sampleIndex) && samplePasses[predictionIndex]) {
-                ++numFalsePositives;
+            } else if(badSampleIndices.contains(sampleIndex)) {
+                if(samplePasses[predictionIndex]) {
+                    ++numFalsePositives;
+                } else {
+                    ++numTrueNegatives;
+                }
             }
         }
 
@@ -1419,7 +1370,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
         final long numDiscoverable = maxDiscoverableMendelianAc[variantIndex];
         return new FilterSummary(minGQ, numDiscoverable, numPassed, numMendelian,
-                                 numTruePositives, numFalsePositives, numFalseNegatives, label);
+                                 numTruePositives, numFalsePositives, numFalseNegatives, numTrueNegatives, label);
     }
 
     protected BinnedFilterSummaries getBinnedFilterSummary(final boolean[] samplePasses, final int variantIndex) {
@@ -1428,273 +1379,25 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                                          propertyBin, numPropertyBins);
     }
 
-
-    protected BinnedFilterSummaries getBinnedFilterSummary(final int minGq, final long numDiscoverable,
-                                             final int[][] alleleCounts, final int[][] genotypeQualities,
-                                             final int[] goodGqs, final int[] badGqs, final int propertyBin) {
-        return new BinnedFilterSummaries(
-            getFilterSummary(minGq, numDiscoverable, alleleCounts, genotypeQualities, goodGqs, badGqs,
-                             propertyBinLabels[propertyBin]),
-            propertyBin, numPropertyBins
-        );
-    }
-
-    static protected double getInheritanceF1(final long numDiscoverableMendelian, final long numMendelian, final long numPassed) {
-        // calculate f1 score:
-        //     f1 = 2.0 / (1.0 / recall + 1.0 / precision)
-        //     recall = numMendelian / numDiscoverableMendelian
-        //     precision = numMendelian / numPassed
-        //     -> f1 = 2.0 * numMendelian / (numNonRef + numPassed)
-        // No data to filter? -> no loss -> f1 = 1.0
-        final double f1 = (numDiscoverableMendelian > 0) ?
-                2.0 * (double)numMendelian / (double)(numDiscoverableMendelian + numPassed) :
-                1.0;
-        if(f1 < 0 || f1 > 1) {
-            throw new GATKException("f1 out of range(f1=" + f1 + "). numDiscoverableMendelian=" + numDiscoverableMendelian
-                                    + ", numMendelian=" + numMendelian + ", numPassed=" + numPassed);
-        }
-        return f1;
-    }
-
-    static protected double getTruthF1(final long numTruePositive, final long numFalsePositive, final long numFalseNegative) {
-        // NOTE: calls are compared against list of true variants and false variants
-        // calculate f1 score:
-        //     f1 = 2.0 / (1.0 / recall + 1.0 / precision)
-        //     recall = numTruePositive / (numTruePositive + numFalseNegative)
-        //     precision = numTruePositive / (numTruePositive + numFalsePositive)
-        //     -> f1 = 2.0 * numTruePositive / (2 * numTruePositive + numFalseNegative + numFalsePositive)
-        // No data to filter? -> no loss -> f1 = 1.0
-        final double f1 = numFalseNegative + numFalsePositive > 0 ?
-            2.0 * numTruePositive / (2.0 * numTruePositive + numFalseNegative + numFalsePositive) :
-            1.0;
-        if(f1 < 0 || f1 > 1) {
-            // this should never happen => negative numbers as inputs, i.e. a bug in accumulation of raw stats
-            throw new GATKException("f1 out of range(f1=" + f1 + "). numTruePositive=" + numTruePositive
-                    + ", numFalsePositive=" + numFalsePositive + ", numFalseNegative=" + numFalseNegative);
-        }
-        return f1;
-    }
-
-    static protected class Loss implements Comparable<Loss> {
-        final double inheritanceLoss;
-        final double truthLoss;
-        final String label;
-        final static double truthWeight = MinGqVariantFilterBase.truthWeight;
-        final static double inheritanceWeight = 1.0 - truthWeight;
-
-        Loss(final double inheritanceLoss, final double truthLoss, final String label) {
-            this.inheritanceLoss = inheritanceLoss;
-            this.truthLoss = truthLoss;
-            this.label = label;
-        }
-
-        Loss(final double inheritanceLoss, final double truthLoss) {
-            this.inheritanceLoss = inheritanceLoss;
-            this.truthLoss = truthLoss;
-            this.label = null;
-        }
-
-        Loss(final FilterSummary filterSummary) {
-            this(
-                    1.0 - getInheritanceF1(filterSummary.numDiscoverable, filterSummary.numMendelian, filterSummary.numPassed),
-                    1.0 - getTruthF1(filterSummary.numTruePositive, filterSummary.numFalsePositive, filterSummary.numFalseNegative),
-                    filterSummary.label
-            );
-        }
-
-        Loss(final Loss copyLoss) {
-            this(copyLoss.inheritanceLoss, copyLoss.truthLoss, copyLoss.label);
-        }
-
-        Loss(final Loss copyLoss, final String label) {
-            this(copyLoss.inheritanceLoss, copyLoss.truthLoss, label);
-        }
-
-        Loss(final Collection<FilterSummary> filterSummaries) {
-            this(
-                filterSummaries.stream()
-                    .map(Loss::new)
-                    .reduce(Loss::add).orElse(EMPTY)
-                    .divide(max((int)filterSummaries.stream()
-                                        .filter(FilterSummary::isNotEmpty).count(),
-                             1) ),
-                filterSummaries.stream()
-                    .filter(FilterSummary::isNotEmpty)
-                    .map(Loss::new)
-                    .map(Loss::toString)
-                    .collect(Collectors.joining("\n"))
-                    + "\noverall: "
-            );
-        }
-
-        Loss(final float[] pSampleVariantIsGood, final boolean[] sampleVariantIsGood) {
-            final double balancedLoss = IntStream.range(0, pSampleVariantIsGood.length)
-                .mapToDouble(
-                    idx -> -FastMath.log(
-                        sampleVariantIsGood[idx] ? (double)pSampleVariantIsGood[idx] : 1.0 - (double)pSampleVariantIsGood[idx]
-                    )
-                )
-                .sum();
-            this.inheritanceLoss = balancedLoss;
-            this.truthLoss = balancedLoss;
-            this.label = null;
-        }
-
-        static Loss add(final Loss lossA, final Loss lossB) {
-            return new Loss(lossA.inheritanceLoss + lossB.inheritanceLoss,
-                            lossA.truthLoss + lossB.truthLoss,
-                            lossA.label == null ? lossB.label : lossA.label);
-        }
-
-        Loss divide(final int scale) {
-            return new Loss(inheritanceLoss / scale, truthLoss / scale, label);
-        }
-
-        Loss multiply(final int scale) {
-            return new Loss(inheritanceLoss * scale, truthLoss * scale, label);
-        }
-
-//        public boolean ge(final Loss other) {
-//            return (inheritanceLoss >= other.inheritanceLoss) && (truthLoss >= other.truthLoss);
-//        }
-//
-//        public boolean gt(final Loss other) {
-//            return this.ge(other) && (inheritanceLoss > other.inheritanceLoss) || (truthLoss > other.truthLoss);
-//        }
-//
-//        public boolean le(final Loss other) {
-//            return (inheritanceLoss <= other.inheritanceLoss) && (truthLoss <= other.truthLoss);
-//        }
-//
-//        public boolean lt(final Loss other) {
-//            return this.le(other) && (inheritanceLoss < other.inheritanceLoss) || (truthLoss < other.truthLoss);
-//        }
-
-        public boolean ge(final Loss other) {
-            return toDouble() >= other.toDouble();
-        }
-
-        public boolean gt(final Loss other) {
-            return toDouble() > other.toDouble();
-        }
-
-        public boolean le(final Loss other) {
-            return toDouble() <= other.toDouble();
-        }
-
-        public boolean lt(final Loss other) {
-            return toDouble() < other.toDouble();
-        }
-
-        @Override
-        public int compareTo(final @NotNull Loss other) {
-            if(this.lt(other)) {
-                return -1;
-            } else if(this.gt(other)) {
-                return 1;
-            } else {
-                return 0;
-            }
-        }
-
-        private static String getDescription(final double inheritanceLoss, final double truthLoss) {
-            return "{inherit:" + inheritanceLoss + ",truth:" + truthLoss + "}";
-        }
-
-        @Override
-        public String toString() {
-            return label == null ?
-                getDescription(inheritanceLoss, truthLoss) :
-                label + ": " + getDescription(inheritanceLoss, truthLoss);
-        }
-
-        double toDouble() { return inheritanceWeight * inheritanceLoss + truthWeight * truthLoss; }
-        float toFloat() { return (float)toDouble(); }
-
-        static final Loss POSITIVE_INFINITY = new Loss(Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY);
-        static final Loss NaN = new Loss(Double.NaN, Double.NaN);
-        static final Loss EMPTY = new Loss(FilterSummary.EMPTY);
-    }
-
-    static protected class BinnedFilterSummaries extends ArrayList<FilterSummary> {
-        private static final long serialVersionUID = 0;
-
-        BinnedFilterSummaries(final Collection<FilterSummary> filterSummaries) {
-            super(filterSummaries);
-        }
-
-        BinnedFilterSummaries(final FilterSummary filterSummary, final int binIndex, final int numBins) {
-            this(
-                IntStream.range(0, numBins)
-                    .mapToObj(i -> i == binIndex ? filterSummary : FilterSummary.EMPTY)
-                    .collect(Collectors.toList())
-            );
-        }
-
-        BinnedFilterSummaries add(final BinnedFilterSummaries other) {
-            return this.equals(BinnedFilterSummaries.EMPTY) ?
-                other :
-                other.equals(BinnedFilterSummaries.EMPTY) ?
-                    this :
-                    new BinnedFilterSummaries(
-                        IntStream.range(0, this.size()).mapToObj(
-                            i -> this.get(i).add(other.get(i))).collect(Collectors.toList()
-                        )
-                    );
-        }
-
-        BinnedFilterSummaries subtract(final BinnedFilterSummaries other) {
-            return other.equals(BinnedFilterSummaries.EMPTY) ?
-                this :
-                this.equals(BinnedFilterSummaries.EMPTY) ?
-                    new BinnedFilterSummaries(
-                            other.stream()
-                                .map(FilterSummary.EMPTY::subtract)
-                                .collect(Collectors.toList())
-                    ) :
-                    new BinnedFilterSummaries(
-                            IntStream.range(0, this.size()).mapToObj(
-                                    i -> this.get(i).subtract(other.get(i))).collect(Collectors.toList()
-                            )
-                    );
-        }
-
-        int getMinGq() {
-            // Different bins may be empty (set to Integer.MIN_VALUE)
-            // Thus minGq is either inconsistent (summed over multiple variants) or the maximum over all bins.
-            return this.stream().mapToInt(filterSummary -> filterSummary.minGq).max().orElseThrow(RuntimeException::new);
-        }
-
-        BinnedFilterSummaries setMinGq(final int newMinGq) {
-            return new BinnedFilterSummaries(
-                this.stream().map(filterSummary -> filterSummary.setMinGq(newMinGq)).collect(Collectors.toList())
-            );
-        }
-
-        static BinnedFilterSummaries EMPTY = new BinnedFilterSummaries(FilterSummary.EMPTY, 0, 1);
-    }
-
-    static protected class FilterQuality extends BinnedFilterSummaries implements Comparable<FilterQuality> {
-        private static final long serialVersionUID = 0;
-        final Loss loss;
-
-        FilterQuality(final Collection<FilterSummary> filterSummaries) {
-            super(filterSummaries);
-            this.loss = new Loss(filterSummaries);
-        }
+    static protected class FilterQuality extends FilterSummary implements Comparable<FilterQuality> {
+        final FilterLoss loss;
 
         FilterQuality(final FilterSummary filterSummary) {
-            this(Collections.singletonList(filterSummary));
+            super(filterSummary);
+            this.loss = new FilterLoss(filterSummary);
         }
 
-
         @Override
-        public int compareTo(final @NotNull FilterQuality other) { return this.loss.compareTo(other.loss); }
+        public int compareTo(final @NotNull MinGqVariantFilterBase.FilterQuality other) {
+            final int lossCompare = this.loss.compareTo(other.loss);
+            // for two equivalent-loss filters, take the more permissive one
+            return lossCompare == 0 ? Integer.compare(this.minGq, other.minGq) : lossCompare;
+        }
 
         static final FilterQuality EMPTY = new FilterQuality(FilterSummary.EMPTY);
     }
 
-    protected FilterQuality getOptimalVariantMinGq(final int variantIndex, final BinnedFilterSummaries backgroundFilterSummary) {
+    protected FilterQuality getOptimalVariantMinGq(final int variantIndex, final FilterSummary backgroundFilterSummary) {
         final IntStream candidateMinGqs = getCandidateMinGqs(variantIndex);
         if(candidateMinGqs == null) {
             // minGq doesn't matter for this row, so return previous optimal filter or trivial filter
@@ -1706,13 +1409,13 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         final int[][] variantGenotypeQualities = getTrioGenotypeQualitiesMatrix(variantIndex);
         final int [] goodGqs = goodVariantGqs == null ? null : goodVariantGqs.getOrDefault(variantIndex, null);
         final int [] badGqs = badVariantGqs == null ? null : badVariantGqs.getOrDefault(variantIndex, null);
-        final int propertyBin = propertyBins[variantIndex];
+        final String label = propertyBinLabels[propertyBins[variantIndex]];
         if(backgroundFilterSummary == null) {
             // doing optimization only considering loss of each individual variant
             return candidateMinGqs.parallel()
                     .mapToObj(minGq -> new FilterQuality(
-                            getBinnedFilterSummary(minGq, numDiscoverable, variantAlleleCounts, variantGenotypeQualities,
-                                                   goodGqs, badGqs, propertyBin)
+                            getFilterSummary(minGq, numDiscoverable, variantAlleleCounts, variantGenotypeQualities,
+                                             goodGqs, badGqs, label)
                         ))
                     .min(FilterQuality::compareTo)
                     .orElseThrow(RuntimeException::new);
@@ -1721,8 +1424,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             return candidateMinGqs
                     .parallel()
                     .mapToObj(minGq -> new FilterQuality(
-                            getBinnedFilterSummary(minGq, numDiscoverable, variantAlleleCounts, variantGenotypeQualities,
-                                                   goodGqs, badGqs, propertyBin)
+                            getFilterSummary(minGq, numDiscoverable, variantAlleleCounts, variantGenotypeQualities,
+                                                   goodGqs, badGqs, label)
                             .add(backgroundFilterSummary)
                     ))
                     .min(FilterQuality::compareTo)
@@ -1730,171 +1433,56 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         }
     }
 
-    protected BinnedFilterSummaries getBackgroundFilterSummary(
-            final int[] optimizingIndices, final int[] trainingIndices,
-            int[] minGqs
-    ) {
-        // Make empty summary
-        BinnedFilterSummaries filterSummary = BinnedFilterSummaries.EMPTY;
-        if(trainingIndices == null || trainingIndices.length == 0 || trainingIndices == optimizingIndices) {
-            // Not using any background, return trivial background summary
-            return filterSummary;
-        }
-        if(minGqs == null) {
-            throw new GATKException("If using non-trivial trainingIndices, must pass non-null minGqs with length equal to trainingIndices.length");
-        }
-
-        int optimizeIndex = 0;
-        int nextRow = optimizingIndices == null ? Integer.MAX_VALUE : optimizingIndices[optimizeIndex];
-        if(nextRow < trainingIndices[0]) {
-            throw new GATKException("optimizingIndices start before training set");
-        }
-        // Add results at training indices not in the eval set
-        for (int i = 0; i < trainingIndices.length; ++i) {
-            final int trainingIndex = trainingIndices[i];
-            if (nextRow > trainingIndex) {
-                // This index is not in the eval set, add it to background
-                filterSummary = filterSummary.add(getBinnedFilterSummary(minGqs[i], trainingIndex));
-            } else {
-                // This index is in the optimize set, skip it and point to next optimize index
-                ++optimizeIndex;
-                nextRow = optimizeIndex < optimizingIndices.length ?
-                    optimizingIndices[optimizeIndex] :
-                    Integer.MAX_VALUE;
-            }
-        }
-
-        return filterSummary;
-    }
-
-    /**
-     * Optimize minGq as a constant value on optimizeIndices,
-     * @param optimizeIndices
-     * @param trainingIndices
-     * @param minGqs
-     * @return
-     */
-    protected FilterQuality getOptimalMinGq(final int[] optimizeIndices,
-                                            final int[] trainingIndices, final int[] minGqs) {
-        if(optimizeIndices.length == 0) {
-            throw new GATKException("Can't get optimalMinGq from empty rowIndices");
-        }
-        IntStream candidateMinGqs = getCandidateMinGqs(optimizeIndices);
-        if(candidateMinGqs == null) {
-            // minGq doesn't matter for these rows, just return something
-            candidateMinGqs = IntStream.of(Integer.MIN_VALUE);
-        }
-
-        final BinnedFilterSummaries backgroundFilterSummary = getBackgroundFilterSummary(
-                optimizeIndices, trainingIndices, minGqs
-        );
-
-        // For each candidate minGq:
-        //      add backgroundFilterSummary to FilterSummaries from optimizeIndices
-        //      convert to FilterQuality (calculate Loss)
-        // Return FilterQuality corresponding to best Loss
-        return candidateMinGqs
-                .parallel()
-                .mapToObj(
-                    candidateMinGq -> new FilterQuality(
-                        Arrays.stream(optimizeIndices)
-                            .mapToObj(evalIndex -> getBinnedFilterSummary(candidateMinGq, evalIndex))
-                            .reduce(backgroundFilterSummary.setMinGq(candidateMinGq), BinnedFilterSummaries::add)
-                    )
-                )
-                .min(FilterQuality::compareTo)
-                .orElseThrow(() -> new GATKException("Could not find optimal minGq filter. This is a bug."));
-    }
-
     private void setMaxDiscoverableMendelianAc() {
         maxDiscoverableMendelianAc = new int [numVariants];
         numDiscoverableMendelianAc = 0;
+        final PropertiesTable.Property alleleFrequencies = propertiesTable.get(VCFConstants.ALLELE_FREQUENCY_KEY);
         for(int variantIndex = 0; variantIndex < numVariants; ++variantIndex) {
+            final double variantAlleleFrequency = alleleFrequencies.getAsFloat(variantIndex, 0);
+            if(variantAlleleFrequency >= maxInheritanceAf) {
+                // don't believe inheritance for super-common variants
+                maxDiscoverableMendelianAc[variantIndex] = 0;
+                continue;
+            }
+
             final int[][] variantAlleleCounts = getTrioAlleleCountsMatrix(variantIndex);
             final int[][] variantGenotypeQualities = getTrioGenotypeQualitiesMatrix(variantIndex);
-            final IntStream candidateMinGq = getCandidateMinGqs(variantAlleleCounts, variantGenotypeQualities, null);
+            final IntStream candidateMinGq = getCandidateMinGqs(variantAlleleCounts, variantGenotypeQualities);
 
             maxDiscoverableMendelianAc[variantIndex] = candidateMinGq == null ? 0 :
                 candidateMinGq.parallel().map(
-                        minGq -> (int)getFilterSummary(minGq, 0, variantAlleleCounts, variantGenotypeQualities, null, null, null).numMendelian
+                        minGq -> (int)getFilterSummary(minGq, Integer.MAX_VALUE, variantAlleleCounts, variantGenotypeQualities, null, null, null).numMendelian
                 ).max().orElse(0);
             numDiscoverableMendelianAc += maxDiscoverableMendelianAc[variantIndex];
-        }
-    }
-
-    private void setOptimalProportionOfSampleVariantsPassing() {
-        int numPass = 0;
-        int numFilterable = 0;
-
-        for(int variantIndex = 0; variantIndex < numVariants; ++variantIndex) {
-            for(int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex) {
-                if(getSampleVariantIsFilterable(variantIndex, sampleIndex)) {
-                    ++numFilterable;
-                    final int gq = sampleVariantGenotypeQualities.get(variantIndex)[sampleIndex];
-                    if(gq >= perVariantOptimalMinGq[variantIndex]) {
-                        ++numPass;
-                    }
-                }
-            }
-        }
-        optimalProportionOfSampleVariantsPassing = numPass / (double)numFilterable;
-        if(printProgress > 0) {
-            System.out.format("Optimal proportion of variants passing: %.3f\n", optimalProportionOfSampleVariantsPassing);
         }
     }
 
     private void setPerVariantOptimalMinGq() {
         // Get initial optimal filter qualities, optimizing each variant separately
         // Collect total summary stats, store min GQ
+        final List<List<Integer>> indicesList = IntStream.range(0, numPropertyBins)
+            .mapToObj(propertyBin -> new ArrayList<Integer>())
+            .collect(Collectors.toList());
+        IntStream.range(0, numVariants)
+            .forEach(index -> indicesList.get(propertyBins[index]).add(index));
+
         perVariantOptimalMinGq = new int[numVariants];
-        BinnedFilterSummaries overallSummary = BinnedFilterSummaries.EMPTY;
-        final BinnedFilterSummaries[] filterSummaries = new BinnedFilterSummaries[numVariants];
-        for(int variantIndex = 0; variantIndex < numVariants; ++variantIndex) {
-            final FilterQuality greedyFilter = getOptimalVariantMinGq(variantIndex, null);
-            filterSummaries[variantIndex] = greedyFilter;
-            overallSummary = overallSummary.add(greedyFilter);
-            perVariantOptimalMinGq[variantIndex] = greedyFilter.getMinGq();
+        propertyBinInheritanceWeights = new double[numPropertyBins];
+        propertyBinTruthWeights = new double[numPropertyBins];
+        FilterSummary unbinnedFilterSummary = FilterSummary.EMPTY;
+        for(int propertyBin = 0; propertyBin < numPropertyBins; ++propertyBin) {
+            final List<Integer> indices = indicesList.get(propertyBin);
+            final FilterQuality binFilterQuality = setBinOptimalMinGq(indices, propertyBin);
+            unbinnedFilterSummary = unbinnedFilterSummary.add(binFilterQuality);
+            // set weight for truth and inheritance for this bin based on the loss / performance
+            final double inheritanceLoss = binFilterQuality.loss.inheritanceLoss;
+            propertyBinInheritanceWeights[propertyBin] = inheritanceLoss < 0.5 ? 1.0 - 2 * inheritanceLoss : 0.0;
+            final double truthLoss = binFilterQuality.loss.truthLoss;
+            propertyBinTruthWeights[propertyBin] = truthLoss < 0.5 ? 1.0 - 2 * truthLoss : 0.0;
+
         }
 
-        // Iteratively improve filters, optimizing for OVERALL loss
-        boolean anyImproved = true;
-        int numIterations = 0;
-        Loss previousLoss = new Loss(overallSummary);
-        while(anyImproved) {
-            ++numIterations;
-            anyImproved = false;
-            for(int variantIndex = 0; variantIndex < numVariants; ++variantIndex) {
-                final BinnedFilterSummaries previousFilter = filterSummaries[variantIndex];
-                final BinnedFilterSummaries backgroundFilter = overallSummary.subtract(previousFilter);
-                final FilterQuality greedyFilter = getOptimalVariantMinGq(variantIndex, backgroundFilter);
-                perVariantOptimalMinGq[variantIndex] = greedyFilter.getMinGq();
-                filterSummaries[variantIndex] = greedyFilter.subtract(backgroundFilter);
-                overallSummary = greedyFilter;
-
-                if(greedyFilter.loss.lt(previousLoss)) {
-                    anyImproved = true;
-                } else if(greedyFilter.loss.gt(previousLoss)) {
-                    throw new GATKException("Loss increased. This is a bug. previousLoss=" + previousLoss
-                                            + ", greedyFilter.loss=" + greedyFilter.loss);
-                }
-                previousLoss = greedyFilter.loss;
-            }
-            System.out.println("Iteration " + numIterations + ": loss=" + previousLoss);
-        }
-        displayHistogram("Optimal minGq histogram", Arrays.stream(perVariantOptimalMinGq), true);
-
-        // add up the variant BinnedFilterSummaries,
-        // compute the loss for each bin
-        // and set weight for truth and inheritance for each bin based on the loss / performance of the overall
-        //      optimal filterSummaries
-        overallSummary = Arrays.stream(filterSummaries).reduce(BinnedFilterSummaries::add).orElseThrow(RuntimeException::new);
-        final List<Loss> optimalBinnedLosses = overallSummary.stream().map(Loss::new).collect(Collectors.toList());
-        propertyBinInheritanceWeights = optimalBinnedLosses.stream()
-            .mapToDouble(loss -> loss.inheritanceLoss < 0.5 ? 1.0 - 2 * loss.inheritanceLoss : 0.0)
-            .toArray();
-        propertyBinTruthWeights = optimalBinnedLosses.stream()
-                .mapToDouble(loss -> loss.truthLoss < 0.5 ? 1.0 - 2 * loss.truthLoss : 0.0)
-                .toArray();
+        // scale weights so that they sum to 1.0
         final double totalInherit = Arrays.stream(propertyBinInheritanceWeights).sum();
         propertyBinInheritanceWeights = Arrays.stream(propertyBinInheritanceWeights).map(w -> w / totalInherit).toArray();
         final double totalTruth = Arrays.stream(propertyBinTruthWeights).sum();
@@ -1909,25 +1497,52 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                                 .count()
                 )
                 .sum();
-        final FilterSummary unBinnedSummary = overallSummary.stream().reduce(FilterSummary::add).orElseThrow(RuntimeException::new);
-        optimalProportionOfSampleVariantsPassing = unBinnedSummary.numPassed / (double)numFilterable;
+        optimalProportionOfSampleVariantsPassing = unbinnedFilterSummary.numPassed / (double)numFilterable;
         if(printProgress > 0) {
             System.out.format("Optimal proportion of variants passing: %.3f\n", optimalProportionOfSampleVariantsPassing);
         }
     }
 
+    FilterQuality setBinOptimalMinGq(final List<Integer> indices, final int propertyBin) {
+        System.out.println("Optimizing minGqs for " + propertyBinLabels[propertyBin]);
+        FilterSummary overallSummary = FilterSummary.EMPTY;
+        final FilterSummary[] filterSummaries = new FilterSummary[indices.size()];
+        for(int i = 0; i < indices.size(); ++i) {
+            final int variantIndex = indices.get(i);
+            final FilterQuality greedyFilter = getOptimalVariantMinGq(variantIndex, null);
+            filterSummaries[i] = greedyFilter;
+            overallSummary = overallSummary.add(greedyFilter);
+            perVariantOptimalMinGq[variantIndex] = greedyFilter.minGq;
+        }
 
+        // Iteratively improve filters, optimizing for OVERALL loss
+        boolean anyImproved = true;
+        int numIterations = 0;
+        FilterLoss previousLoss = new FilterLoss(overallSummary);
+        while(anyImproved) {
+            ++numIterations;
+            anyImproved = false;
+            for(int i = 0; i < indices.size(); ++i) {
+                final int variantIndex = indices.get(i);
+                final FilterSummary previousFilter = filterSummaries[i];
+                final FilterSummary backgroundFilter = overallSummary.subtract(previousFilter);
+                final FilterQuality greedyFilter = getOptimalVariantMinGq(variantIndex, backgroundFilter);
+                perVariantOptimalMinGq[variantIndex] = greedyFilter.minGq;
+                filterSummaries[i] = greedyFilter.subtract(backgroundFilter);
+                overallSummary = greedyFilter;
 
-    static int[] take(final int[] values, final int[] indices) {
-        return Arrays.stream(indices).map(i -> values[i]).toArray();
-    }
-
-    static double[] take(final double[] values, final int[] indices) {
-        return Arrays.stream(indices).mapToDouble(i -> values[i]).toArray();
-    }
-
-    protected int[] getPerVariantOptimalMinGq(final int[] variantIndices) {
-        return take(perVariantOptimalMinGq, variantIndices);
+                if(greedyFilter.loss.lt(previousLoss)) {
+                    anyImproved = true;
+                } else if(greedyFilter.loss.gt(previousLoss)) {
+                    throw new GATKException("Loss increased. This is a bug. previousLoss=" + previousLoss
+                            + ", greedyFilter.loss=" + greedyFilter.loss);
+                }
+                previousLoss = greedyFilter.loss;
+            }
+            System.out.println("Iteration " + numIterations + ": loss=" + previousLoss);
+        }
+        displayHistogram("Optimal minGq histogram", Arrays.stream(perVariantOptimalMinGq), true);
+        return new FilterQuality(overallSummary);
     }
 
     protected long getNumTrainableSamples(final int variantIndex) {
@@ -2059,8 +1674,8 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     void printDebugInfo() {
         System.out.println("########################################");
-        System.out.println("numVariants: " + numVariants);
-        System.out.println("numTrios: " + numTrios);
+        System.out.println("numVariants: " + getNumVariants());
+        System.out.println("numTrios: " + getNumTrios());
         System.out.println("numProperties: " + getNumProperties());
         System.out.println("index\tpropertyName\tpropertyBaseline\tpropertyScale");
         int idx = 0;
@@ -2086,12 +1701,68 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         System.out.println("########################################");
     }
 
-    protected Loss getLoss2(final float[] pSampleVariantGood, final int[] variantIndices) {
+
+    protected FilterLoss getLossFromPerVariantOptimization(final float[] pSampleVariantGood, final float[] d1Loss,
+                                                           final float[] d2Loss, final int[] variantIndices) {
         final boolean[] sampleVariantIsGood = getSampleVariantTruth(variantIndices);
-        return new Loss(pSampleVariantGood, sampleVariantIsGood);
+        final double[] balancedLoss = new double[numPropertyBins];
+        final double[] weightedNumPredicts = new double[numPropertyBins];
+        final double avgBinWeight = IntStream.range(0, numPropertyBins)
+            .mapToDouble(i -> FastMath.max(propertyBinInheritanceWeights[i], propertyBinTruthWeights[i]))
+            .average().orElseThrow(RuntimeException::new);
+        int predictIndex = 0;
+        for(final int variantIndex : variantIndices) {
+            final int propertyBin = propertyBins[variantIndex];
+            final int[] sampleGQs = sampleVariantGenotypeQualities.get(variantIndex);
+            final int optimalMinGq = perVariantOptimalMinGq[variantIndex];
+            for(int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex) {
+                if(!getSampleVariantIsTrainable(variantIndex, sampleIndex)) {
+                    continue;
+                }
+                final double p = pSampleVariantGood[predictIndex];
+                final double delta, loss, d1, d2;
+                if(sampleVariantIsGood[predictIndex]) {
+                    delta = FastMath.max(PROB_EPS, p);
+                    loss = -FastMath.log(delta);
+                    d1 = -1.0 / delta;
+                    d2 = -d1 / delta;
+                } else {
+                    delta = FastMath.max(PROB_EPS, 1.0 - p);
+                    loss = -FastMath.log(delta);
+                    d1 = 1.0 / delta;
+                    d2 = d1 / delta;
+                }
+                final double truthConfidence = max(
+                    0.0,1.0  - phredToProb(FastMath.abs(sampleGQs[sampleIndex] - optimalMinGq))
+                );
+                final double binWeight = FastMath.max(propertyBinInheritanceWeights[propertyBin],
+                                                      propertyBinTruthWeights[propertyBin])
+                        / avgBinWeight;
+                final double weight = truthConfidence * binWeight;
+                setLossDerivs(p, d1, d2, weight, d1Loss, d2Loss, predictIndex);
+                weightedNumPredicts[propertyBin] += weight;
+                balancedLoss[propertyBin] += loss * weight;
+                ++predictIndex;
+            }
+        }
+
+        double totalWeight = 0.0;
+        double totalLoss = 0.0;
+        for(int propertyBin = 0; propertyBin < numPropertyBins; ++propertyBin) {
+            if(weightedNumPredicts[propertyBin] == 0) {
+                continue;
+            }
+            final double binWeight = FastMath.max(propertyBinInheritanceWeights[propertyBin],
+                                                  propertyBinTruthWeights[propertyBin]);
+            final double binLoss = balancedLoss[propertyBin] / weightedNumPredicts[propertyBin];
+            totalWeight += binWeight;
+            totalLoss += binLoss;
+        }
+        totalLoss /= totalWeight;
+        return new FilterLoss(totalLoss, totalLoss);
     }
 
-    protected Loss getLoss(final float[] pSampleVariantGood, final int[] variantIndices) {
+    protected FilterLoss getLoss(final float[] pSampleVariantGood, final int[] variantIndices) {
         final boolean[][] sampleVariantPasses = new boolean[variantIndices.length][];
         int flatIndex = 0;
         for(int row = 0; row < variantIndices.length; ++row) {
@@ -2104,20 +1775,20 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
             }
         }
 
-        return new Loss(
+        return new FilterLoss(
             IntStream.range(0, variantIndices.length)
                 .mapToObj(i -> getBinnedFilterSummary(sampleVariantPasses[i], variantIndices[i]))
                 .reduce(BinnedFilterSummaries::add).orElse(BinnedFilterSummaries.EMPTY)
         );
     }
 
-    protected Loss getLoss(final int[] minGq, final int[] variantIndices) {
+    protected FilterLoss getLoss(final int[] minGq, final int[] variantIndices) {
         if(minGq.length != variantIndices.length) {
             throw new GATKException(
                     "Length of minGq (" + minGq.length + ") does not match length of variantIndices (" + variantIndices.length + ")"
             );
         }
-        return new Loss(
+        return new FilterLoss(
             IntStream.range(0, minGq.length)
                 .mapToObj(i -> getBinnedFilterSummary(minGq[i], variantIndices[i]))
                 .reduce(BinnedFilterSummaries::add).orElse(BinnedFilterSummaries.EMPTY)
@@ -2144,7 +1815,6 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
                 }
             };
             propertiesTable.saveDataEncoding(unclosableOutputStream);
-            unclosableOutputStream.write("\n".getBytes());
             saveModel(unclosableOutputStream);
         } catch(IOException ioException) {
             throw new GATKException("Error saving modelFile " + modelFile, ioException);
@@ -2170,7 +1840,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     private void loadTrainedModel() {
         if(modelFile == null || !Files.exists(modelFile.toPath())) {
-            if(runMode == RunMode.FILTER) {
+            if(runMode == RunMode.Filter) {
                 throw new UserException("mode=FILTER, but trained model file was not provided.");
             }
             return;
@@ -2187,20 +1857,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
         } catch (Exception exception) {
             throw new GATKException("Error loading modelFile " + modelFile + " (malformed file?)", exception);
         }
-    }
-
-    protected double getDoubleFromJSON(final Object jsonObject) {
-        if(jsonObject instanceof Double) {
-            return (Double) jsonObject;
-        } else if(jsonObject instanceof BigDecimal) {
-            return ((BigDecimal)jsonObject).doubleValue();
-        } else {
-            throw new GATKException("Unknown conversion to double for " + jsonObject.getClass().getName());
-        }
-    }
-
-    protected List<String> getStringListFromJSON(final Object jsonObject) {
-        return ((JSONArray)jsonObject).stream().map(o -> (String)o).collect(Collectors.toList());
+        System.out.println("loadTrainedModel complete");
     }
 
     private byte[] modelCheckpoint = null;
@@ -2222,11 +1879,11 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
     protected abstract void saveModel(final OutputStream outputStream);
     protected abstract void loadModel(final InputStream inputStream);
 
-    protected int phredScale(final float p) {
-        return (int)FastMath.round(-10 * FastMath.log10(p));
-    }
     protected int phredScale(final double p) {
-        return (int)FastMath.round(-10 * FastMath.log10(p));
+        return (int)FastMath.round(-10.0 * FastMath.log10(p));
+    }
+    protected double phredToProb(final double phred) {
+        return FastMath.exp(-phredCoef * phred);
     }
     protected int adjustedGq(final float[] sampleVariantProperties) {
         return phredScale(predict(sampleVariantProperties));
@@ -2234,7 +1891,7 @@ public abstract class MinGqVariantFilterBase extends VariantWalker {
 
     @Override
     public Object onTraversalSuccess() {
-        if(runMode == RunMode.TRAIN) {
+        if(runMode == RunMode.Train) {
             if(numVariants == 0) {
                 throw new GATKException("No variants contained in vcf: " + drivingVariantFile);
             }
