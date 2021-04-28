@@ -424,7 +424,7 @@ public class SVClusterEngineTest {
             svtype = StructuralVariantType.DEL; // default
         }
 
-        // Create genotypes with copy number attribute (and no genotypes)
+        // Create genotypes with copy number attribute (and no GT)
         final List<Genotype> genotypesWithCopyNumber = IntStream.range(0, copyNumbers.length)
                 .mapToObj(i -> new GenotypeBuilder(String.valueOf(i))
                         .attribute(GATKSVVCFConstants.COPY_NUMBER_FORMAT, copyNumbers[i])
@@ -439,7 +439,7 @@ public class SVClusterEngineTest {
 
         Assert.assertEquals(resultWithCopyNumber, expectedResult);
 
-        // Create genotypes with genotypes (and no copy number attribute)
+        // Create genotypes with GT (and no copy number attribute)
         final List<Genotype> genotypesWithGenotype = IntStream.range(0, copyNumbers.length)
                 .mapToObj(i -> new GenotypeBuilder(String.valueOf(i))
                         .alleles(SVTestUtils.buildBiallelicListWithPloidy(altAllele, refAllele, copyNumbers[i], ploidy))

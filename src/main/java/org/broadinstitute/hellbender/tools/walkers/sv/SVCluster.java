@@ -75,6 +75,8 @@ public final class SVCluster extends MultiVariantWalker {
     public static final String DEFRAG_PADDING_FRACTION_LONG_NAME = "defrag-padding-fraction";
     public static final String CONVERT_INV_LONG_NAME = "convert-inv-to-bnd";
     public static final String ALGORITHM_LONG_NAME = "algorithm";
+    public static final String FAST_MODE_LONG_NAME = "fast-mode";
+    public static final String OMIT_MEMBERS_LONG_NAME = "omit-members";
 
     enum CLUSTER_ALGORITHM {
         DEFRAGMENT_CNV,
@@ -112,14 +114,14 @@ public final class SVCluster extends MultiVariantWalker {
 
     @Argument(
             doc = "Fast mode. Drops hom-ref and no-call genotype fields and emits them as no-calls.",
-            fullName = "fast-mode",
+            fullName = FAST_MODE_LONG_NAME,
             optional = true
     )
     private boolean fastMode = false;
 
     @Argument(
             doc = "Omit cluster member ID annotations",
-            fullName = "omit-members",
+            fullName = OMIT_MEMBERS_LONG_NAME,
             optional = true
     )
     private boolean omitMembers = false;

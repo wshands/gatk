@@ -15,6 +15,7 @@ import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.sv.cluster.SVClusterEngineArgumentsCollection;
 import org.spark_project.guava.collect.Lists;
 import org.testng.Assert;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
@@ -75,10 +76,18 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(foundExpectedDefragmentedRecord);
     }
 
-    @Test
-    public void testMerge() {
+    @DataProvider(name = "testMergeData")
+    public Object[][] testMergeData() {
+        return new Object[][]{
+                {true},
+                {false}
+        };
+    }
+
+    @Test(dataProvider= "testMergeData")
+    public void testMergeHelper(final boolean omitMembers) {
         final File output = createTempFile("merged", ".vcf");
-        final ArgumentsBuilder args = new ArgumentsBuilder()
+        ArgumentsBuilder args = new ArgumentsBuilder()
                 .addOutput(output)
                 .addFlag(StandardArgumentDefinitions.DISABLE_SEQUENCE_DICT_VALIDATION_NAME)
                 .add(StandardArgumentDefinitions.SEQUENCE_DICTIONARY_NAME, SEQUENCE_DICT)
@@ -99,6 +108,9 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(SVClusterEngineArgumentsCollection.PESR_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.PESR_INTERVAL_OVERLAP_FRACTION_NAME, 1)
                 .add(SVClusterEngineArgumentsCollection.PESR_BREAKEND_WINDOW_NAME, 0);
+        if (omitMembers) {
+            args = args.addFlag(SVCluster.OMIT_MEMBERS_LONG_NAME);
+        }
 
         runCommandLine(args, SVCluster.class.getSimpleName());
 
@@ -113,15 +125,17 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         // Check for one record
         int expectedRecordsFound = 0;
         for (final VariantContext variant : records) {
-            Assert.assertTrue(variant.hasAttribute(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY));
+            Assert.assertEquals(!variant.hasAttribute(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY), omitMembers);
             Assert.assertTrue(variant.hasAttribute(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE));
             if (variant.getID().equals("manta_HG00096_8620")) {
                 expectedRecordsFound++;
                 final List<String> algorithms = variant.getAttributeAsStringList(GATKSVVCFConstants.ALGORITHMS_ATTRIBUTE, null);
                 Assert.assertEquals(algorithms.size(), 1);
                 Assert.assertEquals(algorithms.get(0), "manta");
-                final List<String> members = variant.getAttributeAsStringList(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY, null);
-                Assert.assertEquals(members.size(), 2);
+                if (!omitMembers) {
+                    final List<String> members = variant.getAttributeAsStringList(GATKSVVCFConstants.CLUSTER_MEMBER_IDS_KEY, null);
+                    Assert.assertEquals(members.size(), 2);
+                }
                 final List<Allele> alts = variant.getAlternateAlleles();
                 Assert.assertEquals(alts.size(), 1);
                 Assert.assertEquals(alts.get(0), Allele.SV_SIMPLE_INS);
@@ -201,10 +215,18 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
         Assert.assertEquals(expectedRecordsFound, 1);
     }
 
-    @Test
-    public void testClusterMaxClique() {
+    @DataProvider(name = "testClusterMaxCliqueData")
+    public Object[][] testClusterMaxCliqueData() {
+        return new Object[][]{
+                {true},
+                {false}
+        };
+    }
+
+    @Test(dataProvider= "testClusterMaxCliqueData")
+    public void testClusterMaxClique(final boolean fastMode) {
         final File output = createTempFile("max_clique_cluster", ".vcf");
-        final ArgumentsBuilder args = new ArgumentsBuilder()
+        ArgumentsBuilder args = new ArgumentsBuilder()
                 .addOutput(output)
                 .addVCF(getToolTestDataDir() + "1kgp_test.merged.vcf.gz")
                 .add(SVCluster.ALGORITHM_LONG_NAME, SVCluster.CLUSTER_ALGORITHM.MAX_CLIQUE)
@@ -217,6 +239,9 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 .add(SVClusterEngineArgumentsCollection.PESR_SAMPLE_OVERLAP_FRACTION_NAME, 0)
                 .add(SVClusterEngineArgumentsCollection.PESR_INTERVAL_OVERLAP_FRACTION_NAME, 0.1)
                 .add(SVClusterEngineArgumentsCollection.PESR_BREAKEND_WINDOW_NAME, 500);
+        if (fastMode) {
+            args = args.addFlag(SVCluster.FAST_MODE_LONG_NAME);
+        }
 
         runCommandLine(args, SVCluster.class.getSimpleName());
 
@@ -252,7 +277,7 @@ public class SVClusterIntegrationTest extends CommandLineProgramTest {
                 for (final Genotype g : variant.getGenotypes()) {
                     if (g.getSampleName().equals("HG00140")) {
                         Assert.assertTrue(g.isHet());
-                    } else {
+                    } else if (!fastMode) {
                         Assert.assertTrue(g.isHomRef());
                     }
                 }

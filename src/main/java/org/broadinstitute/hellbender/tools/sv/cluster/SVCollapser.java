@@ -63,9 +63,9 @@ public class SVCollapser {
 
         final Allele refAllele = collapseRefAlleles(items);
         final List<Allele> altAlleles = collapseAltAlleles(items, type);
-        final int numAlleles = (refAllele.isReference() ? 1 : 0) + altAlleles.size();
+        final int numAlleles = (refAllele == null ? 0 : 1) + altAlleles.size();
         final List<Allele> alleles = new ArrayList<>(numAlleles);
-        if (refAllele.isReference()) {
+        if (refAllele != null) {
             alleles.add(refAllele);
         }
         alleles.addAll(altAlleles);
@@ -86,9 +86,8 @@ public class SVCollapser {
     }
 
     protected Allele collapseRefAlleles(final Collection<SVCallRecord> items) {
-        List<Allele> refAlleles = items.stream().map(SVCallRecord::getAlleles)
-                .flatMap(List::stream)
-                .filter(a -> !a.isNoCall() && a.isReference())
+        List<Allele> refAlleles = items.stream().map(SVCallRecord::getRefAllele)
+                .filter(Objects::nonNull)
                 .distinct()
                 .collect(Collectors.toList());
         if (refAlleles.size() > 1) {
@@ -96,7 +95,7 @@ public class SVCollapser {
             refAlleles = Collections.singletonList(Allele.REF_N);
         }
         if (refAlleles.isEmpty()) {
-            return Allele.NO_CALL;
+            return null;
         } else {
             return refAlleles.get(0);
         }
@@ -112,9 +111,8 @@ public class SVCollapser {
 
     protected List<Allele> collapseAltAlleles(final Collection<SVCallRecord> items, final StructuralVariantType type) {
         Utils.nonNull(items);
-        final List<Allele> altAlleles = items.stream().map(SVCallRecord::getAlleles)
+        final List<Allele> altAlleles = items.stream().map(SVCallRecord::getAltAlleles)
                 .flatMap(List::stream)
-                .filter(a -> a != null && !a.isNoCall() && !a.isReference())
                 .distinct()
                 .collect(Collectors.toList());
         if (altAlleles.isEmpty()) {
@@ -126,7 +124,7 @@ public class SVCollapser {
             // TODO does not search for subtypes e.g. <DUP:TANDEM>
             if (altAlleles.size() == 2 && altAlleles.contains(Allele.SV_SIMPLE_DEL) && altAlleles.contains(Allele.SV_SIMPLE_DUP)) {
                 // CNVs
-                if (type == StructuralVariantType.CNV || type == null) {
+                if (type == StructuralVariantType.CNV) {
                     return altAlleles;
                 } else {
                     throw new IllegalArgumentException("Encountered multi-allelic with DEL/DUP for non-CNV");

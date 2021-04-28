@@ -277,16 +277,16 @@ public class SVTestUtils {
         return alleles;
     }
 
-    public static SVCallRecord newCallRecordWithGenotypeAlleles(final List<Allele> genotypeAlleles, final List<Allele> variantAlleles) {
+    public static SVCallRecord newCallRecordWithAlleles(final List<Allele> genotypeAlleles, final List<Allele> variantAlleles,
+                                                        final StructuralVariantType svtype) {
         return new SVCallRecord("", "chr1", 100, true, "chr1", 199, false,
-                StructuralVariantType.DEL,
-                100, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
-                genotypeAlleles,
-                Collections.singletonList(new GenotypeBuilder().alleles(variantAlleles).make()),
+                svtype, 100, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
+                variantAlleles,
+                Collections.singletonList(new GenotypeBuilder().alleles(genotypeAlleles).make()),
                 Collections.emptyMap());
     }
 
-    public static SVCallRecord newNamedCallRecordWithAttributes(final String id, final Map<String, Object> attributes) {
+    public static SVCallRecord newNamedDeletionCallRecordWithAttributes(final String id, final Map<String, Object> attributes) {
         return new SVCallRecord(id, "chr1", 100, true, "chr1", 199, false,
                 StructuralVariantType.DEL,
                 100, Collections.singletonList(GATKSVVCFConstants.DEPTH_ALGORITHM),
@@ -310,13 +310,13 @@ public class SVTestUtils {
                 Collections.emptyMap());
     }
 
-    public static SVCallRecord newCallRecordWithId(final String id) {
+    public static SVCallRecord newDeletionCallRecordWithId(final String id) {
         return new SVCallRecord(id, "chr1", 1, true, "chr1", 100, false,
                 StructuralVariantType.DEL, 100, Collections.singletonList("pesr"), Collections.emptyList(),
                 Collections.emptyList(), Collections.emptyMap());
     }
 
-    public static SVCallRecord newCallRecordWithIdAndAlgorithms(final String id, final List<String> algorithms) {
+    public static SVCallRecord newDeletionCallRecordWithIdAndAlgorithms(final String id, final List<String> algorithms) {
         return new SVCallRecord(id, "chr1", 1, true, "chr1", 100, false,
                 StructuralVariantType.DEL, 100, algorithms, Collections.emptyList(),
                 Collections.emptyList(), Collections.emptyMap());

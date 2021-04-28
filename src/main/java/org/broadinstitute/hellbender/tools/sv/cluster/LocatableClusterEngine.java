@@ -155,7 +155,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
                 // Check that this cluster is not a sub-cluster of any of the others being created
                 boolean isSubset = false;
                 for (int j = i + 1; j < triggeredClusterItemSets.size(); j++) {
-                    if (isSubsetOf(seedItems, triggeredClusterItemSets.get(j))) {
+                    if (triggeredClusterItemSets.get(j).containsAll(seedItems)) {
                         isSubset = true;
                         break;
                     }
@@ -208,21 +208,6 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         for (final Integer clusterId : clusterIdsToProcess) {
             processCluster(clusterId);
         }
-    }
-
-    private final boolean isSubsetOf(final Set<Integer> smallerSet, final Set<Integer> largerSet) {
-        if (largerSet.size() < smallerSet.size()) {
-            return false;
-        }
-        int n = 0;
-        for (final Integer item : smallerSet) {
-            if (largerSet.contains(item)) {
-                if (++n == smallerSet.size()) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private final void flushClusters() {

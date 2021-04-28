@@ -85,7 +85,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
 
     private static boolean isCNVCarrierByCopyNumber(final Genotype genotype, final Allele altAllele) {
         final int ploidy = genotype.getPloidy();
-        if (ploidy == 0) {
+        if (ploidy == 0 || !genotype.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
             return false;
         }
         final int copyNumber = VariantContextGetters.getAttributeAsInt(genotype, COPY_NUMBER_FORMAT, 0);
@@ -102,7 +102,11 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     private static boolean hasSampleSetOverlap(final Set<String> samplesA, final Set<String> samplesB, final double minSampleOverlap) {
-        final double sampleOverlap = getSampleSetOverlap(samplesA, samplesB) / (double) Math.max(samplesA.size(), samplesB.size());
+        final int denom = Math.max(samplesA.size(), samplesB.size());
+        if (denom == 0) {
+            return true;
+        }
+        final double sampleOverlap = getSampleSetOverlap(samplesA, samplesB) / (double) denom;
         return sampleOverlap >= minSampleOverlap;
     }
 
@@ -111,14 +115,15 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     private static boolean hasDefinedCopyNumbers(final Collection<Genotype> genotypes) {
-        return genotypes.stream().allMatch(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT));
+        return genotypes.stream().anyMatch(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT));
+    }
+
+    private static boolean hasExplicitGenotypes(final Collection<Genotype> genotypes) {
+        return genotypes.stream().anyMatch(Genotype::isCalled);
     }
 
     private static Set<String> getCarrierSamplesByGenotype(final SVCallRecord record) {
         final Set<Allele> altAlleles = new HashSet<>(record.getAltAlleles());
-        if (altAlleles.isEmpty()) {
-            return Collections.emptySet();
-        }
         return record.getGenotypes().stream()
                 .filter(g -> g.getAlleles().stream().anyMatch(altAlleles::contains))
                 .map(Genotype::getSampleName)
@@ -126,7 +131,7 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     protected static Set<String> getCarrierSamples(final SVCallRecord record) {
-        if (record.isCNV() && hasDefinedCopyNumbers(record.getGenotypes())) {
+        if (record.isCNV() && !hasExplicitGenotypes(record.getGenotypes()) && hasDefinedCopyNumbers(record.getGenotypes())) {
             return getCarrierSamplesByCopyNumber(record);
         } else {
             return getCarrierSamplesByGenotype(record);
