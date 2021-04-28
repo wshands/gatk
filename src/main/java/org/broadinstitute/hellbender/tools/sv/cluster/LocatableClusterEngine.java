@@ -9,8 +9,23 @@ import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+/**
+ * Base class for clustering items that possess start/end genomic coordinates. Efficient algorithms are implemented for
+ * single-linkage and max-clique clustering that leverage the low-dimensionality of position-based clustering criteria.
+ * These algorithms are suitable for clustering problems testing for overlapping events in coordinate-sorted order, with
+ * additional possible criteria, when the maximum feasible starting position for an item can be easily estimated (e.g.
+ * reciprocal overlap, end-point distance).
+ *
+ * A precise implementation of {@getMaxClusterableStartingPosition} is important for efficiency because it determines
+ * when a cluster can be finalized and omitted from further clustering tests.
+ *
+ * @param <T> class of items to cluster
+ */
 public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
+    /**
+     * Available clustering algorithms
+     */
     public enum CLUSTERING_TYPE {
         SINGLE_LINKAGE,
         MAX_CLIQUE
@@ -19,14 +34,19 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     protected final SAMSequenceDictionary dictionary;
     private final Function<Collection<T>, T> collapser; // Flattens clusters into a single representative item for output
     private Map<Integer, Cluster> idToClusterMap; // Active clusters
+    private final Map<Integer, T> idToItemMap; // Active items
     private final List<T> outputBuffer;
     protected final CLUSTERING_TYPE clusteringType;
     private String currentContig;
-    private final Map<Integer, T> idToItemMap;
     private int nextItemId;
     private int nextClusterId;
+    private int lastStart;
 
-
+    /**
+     * @param dictionary sequence dictionary pertaining to clustered items
+     * @param clusteringType algorithm choice
+     * @param collapser function that ingests a collection of clustered items and returns a single representative item
+     */
     public LocatableClusterEngine(final SAMSequenceDictionary dictionary,
                                   final CLUSTERING_TYPE clusteringType,
                                   final Function<Collection<T>, T> collapser) {
@@ -39,12 +59,31 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         idToItemMap = new HashMap<>();
         nextItemId = 0;
         nextClusterId = 0;
+        lastStart = 0;
     }
 
+    /**
+     * Returns whether two given items cluster.
+     * @param a first item
+     * @param b second item
+     */
     @VisibleForTesting
     abstract boolean clusterTogether(final T a, final T b);
+
+    /**
+     * Returns the maximum feasible starting position of any other item with the given item. That is, given item A and
+     * `X = getMaxClusterableStartingPosition(A)`, then for any item B on the current contig,
+     * `Y = start(B) > X => clusterTogether(A, B) == false`. Note that this is an upper-bound, but tighter estimates
+     * can greatly improve performance.
+     * @param item item in question
+     * @return max feasible clusterable start coordinate on the current contig
+     */
     abstract protected int getMaxClusterableStartingPosition(final T item);
 
+    /**
+     * Flushes all active clusters, adding them to the output buffer. Results from the output buffer are then copied out
+     * and the buffer is cleared. This should be called between contigs to save memory.
+     */
     public final List<T> getOutput() {
         flushClusters();
         final List<T> output = new ArrayList<>(outputBuffer);
@@ -52,24 +91,34 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return output;
     }
 
+    /**
+     * Returns true if there are any active or finalized clusters.
+     */
     public final boolean isEmpty() {
         return idToClusterMap.isEmpty() && outputBuffer.isEmpty();
     }
 
+    /**
+     * Adds and clusters the given item. Note that items must be added in order of increasing start position.
+     * @param item item to cluster
+     */
     public final void add(final T item) {
         // Start a new cluster if on a new contig
         if (!item.getContigA().equals(currentContig)) {
             flushClusters();
             currentContig = item.getContigA();
+            lastStart = 0;
             seedCluster(registerItem(item));
             return;
         }
         final int itemId = registerItem(item);
         final List<Integer> clusterIdsToProcess = cluster(itemId);
-        processFinalizedClusters(clusterIdsToProcess);
+        processClusters(clusterIdsToProcess);
     }
 
     private final int registerItem(final T item) {
+        Utils.validate(item.getPositionA() >= lastStart, "Items must be added in order of increasing start coordinate");
+        lastStart = item.getPositionA();
         final int itemId = nextItemId++;
         idToItemMap.put(itemId, item);
         return itemId;
@@ -81,6 +130,10 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return getMaxClusterableStartingPosition(itemIds.stream().map(this::getItem).collect(Collectors.toList()));
     }
 
+    /**
+     * Compute max feasible starting position of any other item for all items in the given collection. Note the items
+     * must all have the same starting contig.
+     */
     @VisibleForTesting
     protected final int getMaxClusterableStartingPosition(final Collection<T> items) {
         final List<String> contigA = items.stream().map(T::getContigA).distinct().collect(Collectors.toList());
@@ -97,7 +150,7 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
     /**
      * Add a new {@param <T>} to the current clusters and determine which are complete
-     * @param itemId
+     * @param itemId id of registered item to add
      * @return the IDs for clusters that are complete and ready for processing
      */
     private final List<Integer> cluster(final Integer itemId) {
@@ -184,6 +237,12 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         return clusterIdsToProcess;
     }
 
+    /**
+     * Creates a new cluster by agglomerating clusters with the given ids together (and deleting them from the currently
+     * active set), along with an additional item.
+     * @param clusterIds ids of clusters to combine
+     * @param itemId id of item to add to new cluster
+     */
     private final void combineClusters(final Collection<Integer> clusterIds, final Integer itemId) {
         final List<Cluster> clusters = clusterIds.stream().map(this::getCluster).collect(Collectors.toList());
         clusterIds.stream().forEach(idToClusterMap::remove);
@@ -198,18 +257,28 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         idToClusterMap.put(nextClusterId++, new Cluster(getMaxClusterableStartingPositionByIds(newClusterItems), newClusterItems));
     }
 
+    /**
+     * Finalizes a single cluster, removing it from the currently active set and adding it to the output buffer.
+     */
     private final void processCluster(final int clusterIndex) {
         final Cluster cluster = getCluster(clusterIndex);
         idToClusterMap.remove(clusterIndex);
         outputBuffer.add(collapser.apply(cluster.getItemIds().stream().map(idToItemMap::get).collect(Collectors.toList())));
     }
 
-    private final void processFinalizedClusters(final List<Integer> clusterIdsToProcess) {
+    /**
+     * Finalizes a set of clusters.
+     */
+    private final void processClusters(final List<Integer> clusterIdsToProcess) {
         for (final Integer clusterId : clusterIdsToProcess) {
             processCluster(clusterId);
         }
     }
 
+    /**
+     * Finalizes all active clusters and adds them to the output buffer. Also clears the currently active set of clusters
+     * and items.
+     */
     private final void flushClusters() {
         final List<Integer> clustersToFlush = new ArrayList<>(idToClusterMap.keySet());
         for (final Integer clusterId : clustersToFlush) {
@@ -220,6 +289,9 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         nextClusterId = 0;
     }
 
+    /**
+     * Creates a new singleton cluster containing the given item.
+     */
     private final void seedCluster(final Integer item) {
         final List<Integer> newClusters = new ArrayList<>(1);
         newClusters.add(item);
@@ -227,9 +299,10 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
     }
 
     /**
-     * Create a new cluster
-     * @param item
-     * @param seedItems
+     * Create a new cluster containing a new item and a set of existing items, and add it to the set of active clusters.
+     * Note that if there exists an identical activate cluster, it will not be added.
+     * @param item new item (assumed registered)
+     * @param seedItems existing items
      */
     private final void seedWithExistingCluster(final Integer item, final Collection<Integer> seedItems) {
         final List<Integer> newClusterItems = new ArrayList<>(1 + seedItems.size());
@@ -268,6 +341,9 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
         cluster.setMaxClusterableStart(Math.max(cluster.getMaxClusterableStart(), itemClusterableStartPosition));
     }
 
+    /**
+     * Container class for clustered items
+     */
     private static final class Cluster {
         private int maxClusterableStart;
         private final List<Integer> itemIds;
@@ -288,6 +364,23 @@ public abstract class LocatableClusterEngine<T extends SVLocatable> {
 
         public List<Integer> getItemIds() {
             return itemIds;
+        }
+
+        /**
+         * Note we do not check for equality on max clusterable start position, which could be dependent on the
+         * state of the engine.
+         */
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Cluster)) return false;
+            Cluster cluster = (Cluster) o;
+            return itemIds.equals(cluster.itemIds);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(itemIds);
         }
     }
 

@@ -17,6 +17,25 @@ import java.util.stream.Collectors;
 
 import static org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants.COPY_NUMBER_FORMAT;
 
+/**
+ * Clusters SVs based on event type, interval overlap, and sample overlap.
+ *
+ * Two items are clustered together if they:
+ *   - Match event types
+ *   - Match strands
+ *   - Match contigs
+ *   - Meet minimum interval reciprocal overlap (unless inter-chromosomal or a BND).
+ *   - Meet minimum sample reciprocal overlap using carrier status. Genotypes (GT fields) are used to determine carrier
+ *     status first. If not found and the event is of type DEL or DUP, then copy number (CN fields) are used instead.
+ *     In the latter case, it is expected that ploidy can be determined from the number of entries in GT.
+ *   - Start and end coordinates are within a defined distance.
+ *
+ * Interval overlap, sample overlap, and coordinate proximity parameters are defined separately for depth-only/depth-only,
+ * depth-only/PESR, and PESR/PESR pairs using the {@ClusteringParameters} class. Note that all criteria must be met for
+ * two candidate items to cluster, unless the comparison is depth-only/depth-only, in which case at least one of
+ * interval overlap and break-end proximity must be met. For insertions with undefined length (SVLEN less than 1), interval
+ * overlap is tested assuming the given start position and a length of {@INSERTION_ASSUMED_LENGTH_FOR_OVERLAP}.
+ */
 public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEngine<T> {
 
     protected final boolean enableCNV;  // DEL/DUP multi-allelic site clustering
@@ -33,6 +52,13 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     public static final ClusteringParameters DEFAULT_EVIDENCE_PARAMS =
             new EvidenceClusteringParameters(0.5, 500, 0);
 
+    /**
+     * Create a new engine
+     * @param dictionary sequence dictionary pertaining to clustered records
+     * @param clusteringType clustering algorithm
+     * @param enableCNV enables clustering of DEL/DUP variants into CNVs
+     * @param collapser cluster collapsing function
+     */
     public SVClusterEngine(final SAMSequenceDictionary dictionary,
                            final CLUSTERING_TYPE clusteringType,
                            final boolean enableCNV,
@@ -69,6 +95,9 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
                 || clusterTogetherWithParams(a, b, mixedParams, dictionary);
     }
 
+    /**
+     * Gets genotypes with non-ref copy number states for a CNV record, as defined by the CN field
+     */
     private static Collection<Genotype> getCNVCarrierGenotypesByCopyNumber(final SVCallRecord record) {
         Utils.validate(record.isCNV(), "Cannot determine carriers of non-CNV using copy number attribute.");
         final List<Allele> altAlleles = record.getAltAlleles();
@@ -83,6 +112,10 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Returns true if the copy number is non-ref. Note that ploidy is determined using the number of entries in the GT
+     * field.
+     */
     private static boolean isCNVCarrierByCopyNumber(final Genotype genotype, final Allele altAllele) {
         final int ploidy = genotype.getPloidy();
         if (ploidy == 0 || !genotype.hasExtendedAttribute(COPY_NUMBER_FORMAT)) {
@@ -97,10 +130,16 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         }
     }
 
+    /**
+     * Returns sample IDs of carriers using copy number
+     */
     private static Set<String> getCarrierSamplesByCopyNumber(final SVCallRecord record) {
         return getCNVCarrierGenotypesByCopyNumber(record).stream().map(Genotype::getSampleName).collect(Collectors.toSet());
     }
 
+    /**
+     * Checks for minimum fractional sample overlap of the two sets. Defaults to true if both sets are empty.
+     */
     private static boolean hasSampleSetOverlap(final Set<String> samplesA, final Set<String> samplesB, final double minSampleOverlap) {
         final int denom = Math.max(samplesA.size(), samplesB.size());
         if (denom == 0) {
@@ -110,18 +149,30 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         return sampleOverlap >= minSampleOverlap;
     }
 
+    /**
+     * Returns number of overlapping items
+     */
     private static int getSampleSetOverlap(final Collection<String> a, final Set<String> b) {
         return (int) a.stream().filter(b::contains).count();
     }
 
+    /**
+     * Returns true if any given genotype has a defined copy number
+     */
     private static boolean hasDefinedCopyNumbers(final Collection<Genotype> genotypes) {
-        return genotypes.stream().anyMatch(g -> g.hasExtendedAttribute(COPY_NUMBER_FORMAT));
+        return genotypes.stream().anyMatch(g -> g.getExtendedAttribute(COPY_NUMBER_FORMAT, null) != null);
     }
 
+    /**
+     * Returns true if any of the given genotypes is called
+     */
     private static boolean hasExplicitGenotypes(final Collection<Genotype> genotypes) {
         return genotypes.stream().anyMatch(Genotype::isCalled);
     }
 
+    /**
+     * Gets sample IDs of called non-ref genotypes
+     */
     private static Set<String> getCarrierSamplesByGenotype(final SVCallRecord record) {
         final Set<Allele> altAlleles = new HashSet<>(record.getAltAlleles());
         return record.getGenotypes().stream()
@@ -130,6 +181,11 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
                 .collect(Collectors.toSet());
     }
 
+    /**
+     * Gets carrier sample IDs based on called GT fields. If there are no called genotypes and the record is a CNV and
+     * has defined copy number fields, determines carrier status based on copy number state. Returns an empty set if
+     * neither is available.
+     */
     protected static Set<String> getCarrierSamples(final SVCallRecord record) {
         if (record.isCNV() && !hasExplicitGenotypes(record.getGenotypes()) && hasDefinedCopyNumbers(record.getGenotypes())) {
             return getCarrierSamplesByCopyNumber(record);
@@ -138,6 +194,9 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         }
     }
 
+    /**
+     * Returns true if there is sufficient fractional carrier sample overlap in the two records.
+     */
     protected static boolean hasSampleOverlap(final SVCallRecord a, final SVCallRecord b, final double minSampleOverlap) {
         if (minSampleOverlap > 0) {
             final Set<String> samplesA = getCarrierSamples(a);
@@ -148,6 +207,9 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         }
     }
 
+    /**
+     * Helper function to test for clustering between two items given a particular set of parameters.
+     */
     private static boolean clusterTogetherWithParams(final SVCallRecord a, final SVCallRecord b,
                                                      final ClusteringParameters params,
                                                      final SAMSequenceDictionary dictionary) {
@@ -184,6 +246,9 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
         return intervalA1.overlaps(intervalB1) && intervalA2.overlaps(intervalB2);
     }
 
+    /**
+     * Gets event length used for overlap testing.
+     */
     private static int getLengthForOverlap(final SVCallRecord record) {
         Utils.validate(record.isIntrachromosomal(), "Record even must be intra-chromosomal");
         if (record.getType() == StructuralVariantType.INS) {
@@ -195,15 +260,19 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     @Override
-    protected int getMaxClusterableStartingPosition(final SVCallRecord call) {
+    protected int getMaxClusterableStartingPosition(final SVCallRecord record) {
         return Math.max(
-                getMaxClusterableStartingPositionWithParams(call, call.isDepthOnly() ? depthOnlyParams : evidenceParams, dictionary),
-                getMaxClusterableStartingPositionWithParams(call, mixedParams, dictionary)
+                getMaxClusterableStartingPositionWithParams(record, record.isDepthOnly() ? depthOnlyParams : evidenceParams, dictionary),
+                getMaxClusterableStartingPositionWithParams(record, mixedParams, dictionary)
         );
     }
 
-    private static int getMaxClusterableStartingPositionWithParams(final SVCallRecord call, final ClusteringParameters params,
-                                                            final SAMSequenceDictionary dictionary) {
+    /**
+     * Returns max feasible start position of an item clusterable with the given record, given a set of clustering parameters.
+     */
+    private static int getMaxClusterableStartingPositionWithParams(final SVCallRecord call,
+                                                                   final ClusteringParameters params,
+                                                                   final SAMSequenceDictionary dictionary) {
         final String contig = call.getContigA();
         final int contigLength = dictionary.getSequence(contig).getSequenceLength();
         // Reciprocal overlap window
@@ -236,19 +305,30 @@ public class SVClusterEngine<T extends SVCallRecord> extends LocatableClusterEng
     }
 
     public final void setDepthOnlyParams(ClusteringParameters depthOnlyParams) { this.depthOnlyParams = depthOnlyParams; }
+
     public final void setMixedParams(ClusteringParameters mixedParams) {
         this.mixedParams = mixedParams;
     }
+
     public final void setEvidenceParams(ClusteringParameters evidenceParams) {
         this.evidenceParams = evidenceParams;
     }
 
+    /**
+     * Stores clustering parameters for different combinations of supporting algorithm types (depth-only/depth-only,
+     * depth-only/PESR, and PESR/PESR)
+     */
     public static class ClusteringParameters {
 
-        private final double reciprocalOverlap;
-        private final int window;
-        private final double sampleOverlap;
-        private final boolean overlapAndProximity;
+        private final double reciprocalOverlap;  // minimum fractional reciprocal overlap of event intervals
+        private final int window;  // maximum distance between variant end-points
+        private final double sampleOverlap; // minimum fractional carrier sample overlap
+
+         // if true, both reciprocal overlap and window criteria must be met
+         // if false, reciprocal overlap and/or window criteria must be met
+         private final boolean overlapAndProximity;
+
+        // returns true if two given records are the correct type of pair for this parameter set
         private final BiPredicate<SVCallRecord, SVCallRecord> validRecordsPredicate;
 
         public ClusteringParameters(final double reciprocalOverlap, final int window, final double sampleOverlap,

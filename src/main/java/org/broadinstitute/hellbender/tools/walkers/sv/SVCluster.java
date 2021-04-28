@@ -29,19 +29,86 @@ import java.util.stream.Collectors;
 import static org.broadinstitute.hellbender.tools.walkers.sv.JointGermlineCNVSegmentation.BREAKPOINT_SUMMARY_STRATEGY_LONG_NAME;
 
 /**
- * Clusters SVs with similar breakpoints based on coordinates and supporting evidence.
+ * Clusters structural variants based on coordinates, event type, and supporting algorithms. Primary use cases include:
+ *
+ * <ul>
+ *     <li>
+ *         Clustering SVs produced by multiple callers, based on interval overlap, breakpoint proximity, and sample overlap.
+ *     </li>
+ *     <li>
+ *         Merging multiple SV VCFs with disjoint sets of samples and/or variants.
+ *     </li>
+ *     <li>
+ *         Defragmentation of copy number variants produced with depth-based callers.
+ *     </li>
+ * </ul>
+ *
+ * For clustering tasks, the tool determines whether two variants should cluster based following criteria:
+ *
+ * <ul>
+ *     <li>
+ *         Matching SV type, with the exception of DEL/DUP combinations when --enable-cnv is used.
+ *     </li>
+ *     <li>
+ *         Matching break-end strands.
+ *     </li>
+ *     <li>
+ *         Interval reciprocal overlap (inapplicable for BNDs).
+ *     </li>
+ *     <li>
+ *         Distance between event end-points (break-end window).
+ *     </li>
+ *     <li>
+ *         Sample reciprocal overlap, based on carrier status determined by available genotypes (GT fields). If
+ *         no GT fields are called for a given variant, the tool attempts to find carriers based on copy number (CN fields)
+ *         and sample ploidy (as determined by the number of entries in GT). Note that carrier status can only be determined
+ *         from CN for DEL and DUP records.
+ *     </li>
+ * </ul>
+ *
+ * Interval overlap, break-end window, and sample overlap parameters are defined for three combinations of event types
+ * using the ALGORITHMS field:
+ * <ul>
+ *     <li>
+ *         Depth-only - both variants have only "depth" ALGORITHMS
+ *     </li>
+ *     <li>
+ *         Evidenced/PESR - both variants at least one non-depth entry in ALGORITHMS
+ *     </li>
+ *     <li>
+ *         Mixed - one variant is depth-only and the other is PESR
+ *     </li>
+ * </ul>
+ *
+ * Users must supply one or more VCFs containing SVs with the following info fields:
+ *
+ * <ul>
+ *     <li>
+ *         SVTYPE - event type (DEL, DUP, CNV, INS, INV, BND)
+ *     </li>
+ *     <li>
+ *         SVLEN - variant length (-1 for BNDs and insertions of unknown length)
+ *     </li>
+ *     <li>
+ *         STRANDS - break-end strands ("++", "+-", "-+", or "--")
+ *     </li>
+ *     <li>
+ *         CHROM2 / END2 - end coordinates (BNDs only).
+ *     </li>
+ *     <li>
+ *         ALGORITHMS - list of supporting tools/algorithms. These names may be arbitrary, except for depth-based callers,
+ *         which should be listed as "depth".
+ *     </li>
+ * </ul>
+ *
+ * The tool generates a new VCF with clusters collapsed into single representative records. By default, a MEMBERS field
+ * is generated that lists the input variant IDs contained in that record's cluster.
  *
  * <h3>Inputs</h3>
  *
  * <ul>
  *     <li>
- *         Unclustered structural variants from
- *     </li>
- *     <li>
- *         PE evidence file
- *     </li>
- *     <li>
- *         SR evidence file
+ *         One or more SV VCFs
  *     </li>
  * </ul>
  *
@@ -49,14 +116,17 @@ import static org.broadinstitute.hellbender.tools.walkers.sv.JointGermlineCNVSeg
  *
  * <ul>
  *     <li>
- *         Structural variant VCF
+ *         Clustered VCF
  *     </li>
  * </ul>
  *
  * <h3>Usage example</h3>
  *
  * <pre>
- *     gatk SVCluster
+ *     gatk SVCluster \
+ *       -V variants.vcf.gz \
+ *       -O clustered.vcf.gz \
+ *       --algorithm SINGLE_LINKAGE
  * </pre>
  *
  * @author Mark Walker &lt;markw@broadinstitute.org&gt;
@@ -106,7 +176,7 @@ public final class SVCluster extends MultiVariantWalker {
     private boolean enableCnv = false;
 
     @Argument(
-            doc = "Convert inversions to pairs of BNDs",
+            doc = "Convert inversions to BND records",
             fullName = CONVERT_INV_LONG_NAME,
             optional = true
     )
@@ -159,6 +229,8 @@ public final class SVCluster extends MultiVariantWalker {
     private String currentContig;
     private int numVariantsWritten = 0;
 
+    private static final List<Allele> FAST_MODE_DEFAULT_NON_CALL_ALLELES = Arrays.asList(Allele.NO_CALL);
+
     @Override
     public void onTraversalStart() {
         dictionary = getBestAvailableSequenceDictionary();
@@ -204,6 +276,7 @@ public final class SVCluster extends MultiVariantWalker {
                       final ReferenceContext referenceContext, final FeatureContext featureContext) {
         SVCallRecord call = SVCallRecordUtils.create(variant);
         if (fastMode) {
+            // Strip out no-call and ref genotypes to save memory and compute
             final GenotypesContext filteredGenotypes = GenotypesContext.copy(call.getGenotypes().stream()
                     .filter(SVCallRecordUtils::isAltGenotype)
                     .collect(Collectors.toList()));
@@ -268,9 +341,13 @@ public final class SVCluster extends MultiVariantWalker {
     }
 
     public VariantContext buildVariantContext(final SVCallRecord call) {
-        final List<Allele> missingAlleles = Arrays.asList(Allele.NO_CALL);
-        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), missingAlleles, samples, Collections.emptyMap());
+        // In case we're using fast mode
+        final GenotypesContext filledGenotypes = SVCallRecordUtils.fillMissingSamplesWithGenotypes(call.getGenotypes(), FAST_MODE_DEFAULT_NON_CALL_ALLELES, samples, Collections.emptyMap());
+
+        // Assign new variant ID
         final String newId = variantPrefix == null ? call.getId() : String.format("%s%08x", variantPrefix, numVariantsWritten++);
+
+        // Build new variant
         final SVCallRecord finalCall = new SVCallRecord(newId, call.getContigA(), call.getPositionA(), call.getStrandA(), call.getContigB(),
                 call.getPositionB(), call.getStrandB(), call.getType(), call.getLength(), call.getAlgorithms(), call.getAlleles(),
                 filledGenotypes, call.getAttributes());
