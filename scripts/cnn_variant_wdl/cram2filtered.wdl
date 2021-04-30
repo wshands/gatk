@@ -13,8 +13,8 @@
 import "cnn_variant_common_tasks.wdl" as CNNTasks
 
 workflow Cram2FilteredVcf {
-    File input_file                  # Aligned CRAM file or Aligned BAM files
-    File? input_file_index           # Index for an aligned BAM file if that is the input, unneeded if input is a CRAM
+    File input_bam                  # Aligned CRAM file or Aligned BAM files
+    File? input_bam_index           # Index for an aligned BAM file if that is the input, unneeded if input is a CRAM
     File reference_fasta 
     File reference_dict
     File reference_fasta_index
@@ -32,6 +32,7 @@ workflow Cram2FilteredVcf {
     String snp_tranches              # Filtering threshold(s) for SNPs in terms of sensitivity to overlapping known variants in resources
     String indel_tranches            # Filtering threshold(s) for INDELs in terms of sensitivity to overlapping known variants in resources
     File? gatk_override              # GATK Jar file to over ride the one included in gatk_docker
+    File? gatk_override_hc           # GATK Jar file to over ride the one included in gatk_docker, only used for HaplotypeCaller
     String gatk_docker
     File calling_intervals
     Int scatter_count                # Number of shards for parallelization of HaplotypeCaller and CNNScoreVariants
@@ -47,20 +48,6 @@ workflow Cram2FilteredVcf {
     Int additional_disk = select_first([increase_disk_size, 20])
     Float ref_size = size(reference_fasta, "GB") + size(reference_fasta_index, "GB") + size(reference_dict, "GB")
 
-    # Clunky check to see if the input is a BAM or a CRAM
-    if (basename(input_file) == basename(input_file, ".bam")){
-        call CNNTasks.CramToBam {
-            input:
-              reference_fasta = reference_fasta,
-              reference_dict = reference_dict,
-              reference_fasta_index = reference_fasta_index,
-              cram_file = input_file,
-              output_prefix = output_prefix,
-              disk_space_gb = round(4*size(input_file, "GB") + ref_size + additional_disk),
-              preemptible_attempts = preemptible_attempts
-        }
-    }
-
     call CNNTasks.SplitIntervals {
         input:
             gatk_override = gatk_override,
@@ -73,21 +60,20 @@ workflow Cram2FilteredVcf {
             disk_space = round(additional_disk + ref_size)
     }
 
-    String input_bam = select_first([CramToBam.output_bam, input_file])
     Float bam_size = size(input_bam, "GB")
 
     scatter (calling_interval in SplitIntervals.interval_files) {
         call CNNTasks.RunHC4 {
             input:
                 input_bam = input_bam,
-                input_bam_index = select_first([CramToBam.output_bam_index, input_file_index]),
+                input_bam_index = input_bam_index,
                 reference_fasta = reference_fasta,
                 reference_dict = reference_dict,
                 reference_fasta_index = reference_fasta_index,
                 output_prefix = output_prefix,
                 interval_list = calling_interval,
                 gatk_docker = gatk_docker,
-                gatk_override = gatk_override,
+                gatk_override = gatk_override_hc,
                 preemptible_attempts = preemptible_attempts,
                 extra_args = extra_args,
                 disk_space_gb = round(bam_size + ref_size + additional_disk)
