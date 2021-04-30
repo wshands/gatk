@@ -13,8 +13,8 @@
 import "cnn_variant_common_tasks.wdl" as CNNTasks
 
 workflow Cram2FilteredVcf {
-    File input_bam                  # Aligned CRAM file or Aligned BAM files
-    File? input_bam_index           # Index for an aligned BAM file if that is the input, unneeded if input is a CRAM
+    File input_bam                  # Aligned CRAM file or Aligned BAM/CRAM files
+    File input_bam_index            # Index for an aligned BAM/CRAM file
     File reference_fasta 
     File reference_dict
     File reference_fasta_index
